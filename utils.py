@@ -1,6 +1,5 @@
 import functools
 import logging
-import os
 import requests
 import config
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -13,6 +12,7 @@ _model_cache: Dict[str, Tuple[str, Optional[str]]] = {}
 
 # Color Percentage Calculation
 def get_color_for_percentage(percent: Union[int, float]) -> str:
+    """Returns an ANSI color code based on a percentage value."""
     if not isinstance(percent, (int, float)):
         return config.COLOR_RESET
 
@@ -26,38 +26,43 @@ def get_color_for_percentage(percent: Union[int, float]) -> str:
 # Ollama Model Availability Check
 @functools.lru_cache(maxsize=32)
 def check_ollama_model_availability(model_name: str, fallback_model: Optional[str] = None) -> Tuple[str, Optional[str]]:
+    """
+    Checks if a model is available in Ollama, with fallback options.
+    Caches results to avoid repeated API calls.
+    """
     cache_key = (model_name, fallback_model)
     if cache_key in _model_cache:
         return _model_cache[cache_key]
 
     try:
-        ollama_models_response = requests.get("http://localhost:11434/api/tags", timeout=config.TIMEOUT_SECONDS)
-        ollama_models_response.raise_for_status()
-        available_models = [m['name'] for m in ollama_models_response.json().get('models', [])]
+        response = requests.get("http://localhost:11434/api/tags", timeout=config.TIMEOUT_SECONDS)
+        response.raise_for_status()
+        available_models = {m['name'] for m in response.json().get('models', [])}
 
         if model_name in available_models:
             _model_cache[cache_key] = (model_name, None)
             return model_name, None
-        else:
-            logger.warning(f"Configured Ollama model '{model_name}' not found. Available models: {available_models}")
-            if fallback_model and fallback_model in available_models:
-                logger.warning(f"Attempting to use fallback model '{fallback_model}'.")
-                _model_cache[cache_key] = (fallback_model, None)
-                return fallback_model, None
-            else:
-                if 'llama2:7b-chat' in available_models:
-                    logger.warning("Attempting to use 'llama2:7b-chat' as a generic fallback.")
-                    _model_cache[cache_key] = ('llama2:7b-chat', None)
-                    return 'llama2:7b-chat', None
-                elif 'mistral:instruct' in available_models:
-                    logger.warning("Attempting to use 'mistral:instruct' as a generic fallback.")
-                    _model_cache[cache_key] = ('mistral:instruct', None)
-                    return 'mistral:instruct', None
-                else:
-                    error_msg = f"No suitable Ollama model found. Configured: '{model_name}', Fallback: '{fallback_model}'. Available: {available_models}"
-                    logger.error(error_msg)
-                    _model_cache[cache_key] = ("", error_msg)
-                    return "", error_msg
+
+        logger.warning(f"Configured Ollama model '{model_name}' not found. Available: {list(available_models)}")
+
+        if fallback_model and fallback_model in available_models:
+            logger.warning(f"Using fallback model '{fallback_model}'.")
+            _model_cache[cache_key] = (fallback_model, None)
+            return fallback_model, None
+
+        # Generic fallbacks
+        generic_fallbacks = ['llama2:7b-chat', 'mistral:instruct']
+        for fb in generic_fallbacks:
+            if fb in available_models:
+                logger.warning(f"Using generic fallback model '{fb}'.")
+                _model_cache[cache_key] = (fb, None)
+                return fb, None
+
+        error_msg = f"No suitable Ollama model found. None of the configured, fallback, or default models are available."
+        logger.error(error_msg)
+        _model_cache[cache_key] = ("", error_msg)
+        return "", error_msg
+
     except requests.exceptions.ConnectionError:
         error_msg = "Could not connect to Ollama server. Please ensure Ollama is running."
         logger.error(error_msg)

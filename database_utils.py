@@ -1,25 +1,24 @@
-import os
+import contextlib
 import logging
+import os
 import re
 import string
 import time
-import contextlib
-from typing import List, Dict, Tuple, Any
+from datetime import datetime
+from typing import Any, Dict, List, Tuple
+
+from dotenv import load_dotenv
 from sqlalchemy import (
-    create_engine, Column, Integer, Text, DateTime,
-    MetaData, Table, func, ForeignKey, Index, select, UniqueConstraint
+    Column, DateTime, ForeignKey, Index, Integer, MetaData, Table, Text,
+    UniqueConstraint, create_engine, func, inspect as sqlalchemy_inspect, select
 )
-from sqlalchemy.orm import sessionmaker
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
-from sqlalchemy import inspect as sqlalchemy_inspect
 from sqlalchemy.engine import URL
-from datetime import datetime
-from dotenv import load_dotenv
+from sqlalchemy.orm import sessionmaker
 
 load_dotenv()
 
-# Environment Configuration
 DB_USER = os.getenv('KAIA_DB_USER', 'kaiauser')
 DB_PASS = os.getenv('KAIA_DB_PASS', '')
 DB_HOST = os.getenv('KAIA_DB_HOST', 'localhost')
@@ -34,7 +33,6 @@ DB_URL_OBJECT = URL.create(
 )
 DB_PATH = str(DB_URL_OBJECT)
 
-# Database Initialization
 engine = None
 Session = None
 metadata = MetaData()
@@ -77,59 +75,28 @@ interaction_history_table = Table(
 
 Index("idx_interaction_timestamp", interaction_history_table.c.timestamp)
 
-# Natural Language Processing Helpers
-def normalize_query(query: str) -> Tuple[str, set]:
+def normalize_query(query: str) -> str:
+    """Normalizes a user query by lowercasing and removing punctuation."""
     translator = str.maketrans('', '', string.punctuation)
-    clean_query = query.lower().translate(translator).strip()
-    tokens = set(clean_query.split())
-    stopwords = {"what", "do", "you", "me", "my", "the", "a", "an", "is", "are", "show", "list", "about", "tell"}
-    keywords = tokens - stopwords
-    return clean_query, keywords
+    return query.lower().translate(translator).strip()
 
-def match_query_category(clean_query: str, keywords: set) -> str:
-    category_patterns = [
-        ("about_me", {
-            "phrases": [
-                "about me", "know about me", "remember about me", "tell me about myself",
-                "what know", "what remember", "my information", "my profile", "my data", "what do you know", "list all memories"
-            ],
-            "keywords": {"myself", "profile", "information", "summary", "overview", "data", "memories"}
-        }),
-        ("preferences", {
-            "phrases": [
-                "my preferences", "user preferences", "show preferences", "list preferences",
-                "what preferences", "preferences know", "my settings", "user settings", "what options"
-            ],
-            "keywords": {"preferences", "settings", "options", "theme", "mode", "editor", "favorite"}
-        }),
-        ("facts", {
-            "phrases": [
-                "my facts", "remembered facts", "show facts", "list facts",
-                "what facts", "facts know", "my information", "stored facts", "what remember"
-            ],
-            "keywords": {"facts", "information", "remembered", "stored", "knows", "data"}
-        }),
-        ("history", {
-            "phrases": [
-                "interaction history", "chat history", "show history", "list history",
-                "previous conversations", "past interactions", "our conversations", "my conversations", "list interactions", "what is our interaction history", "what history is known"
-            ],
-            "keywords": {"history", "interactions", "conversations", "past", "previous", "logs"}
-        })
-    ]
+def match_query_category(clean_query: str) -> str:
+    """Categorizes a query using regex for more flexible matching."""
+    patterns = {
+        "about_me": r"\b(about me|know about me|my information|my data|memories|tell me about myself|what do you know)\b",
+        "preferences": r"\b(preferences|settings|options|theme|mode|favorite|my preference)\b",
+        "facts": r"\b(facts|remembered|stored|what have you remembered)\b",
+        "history": r"\b(history|conversations|past|previous|interactions|what have we talked about)\b",
+    }
 
-    for category, pattern in category_patterns:
-        if any(phrase in clean_query for phrase in pattern["phrases"]):
-            return category
-
-    for category, pattern in category_patterns:
-        if keywords & pattern["keywords"]:
+    for category, pattern in patterns.items():
+        if re.search(pattern, clean_query, re.IGNORECASE):
             return category
 
     return "unknown"
 
-# Database Operations
 def initialize_db() -> bool:
+    """Initializes the PostgreSQL database and creates tables if they don't exist."""
     global engine, Session
     logging.info("Initializing PostgreSQL database")
     max_retries = 3
@@ -155,6 +122,7 @@ def initialize_db() -> bool:
 
 @contextlib.contextmanager
 def get_session():
+    """Provides a SQLAlchemy session for database operations."""
     if Session is None or engine is None:
         raise RuntimeError("Database not initialized. Call initialize_db() first.")
     session = Session()
@@ -164,6 +132,7 @@ def get_session():
         session.close()
 
 def ensure_user(user_id: str):
+    """Ensures a user exists in the database, adding them if not present."""
     with get_session() as session:
         try:
             stmt = postgresql.insert(users_table).values(user_id=user_id)
@@ -175,6 +144,7 @@ def ensure_user(user_id: str):
             logging.error(f"Error ensuring user '{user_id}': {e}")
 
 def handle_memory_storage(user_id: str, content: str) -> Tuple[bool, str]:
+    """Stores user preferences or facts in the database."""
     with get_session() as session:
         try:
             pref_match = re.match(r"(?:i prefer|my preference is|my preferred (?:editor|theme|mode) is)\s*(.+)", content, re.I)
@@ -229,10 +199,11 @@ def handle_memory_storage(user_id: str, content: str) -> Tuple[bool, str]:
             return False, f"An unexpected error occurred while trying to remember that: {e}"
 
 def handle_data_retrieval(user_id: str, query: str) -> Dict[str, Any]:
+    """Retrieves user data based on the query category."""
     with get_session() as session:
         try:
-            clean_query, keywords = normalize_query(query)
-            category = match_query_category(clean_query, keywords)
+            clean_query = normalize_query(query)
+            category = match_query_category(clean_query)
 
             if category == "about_me":
                 return get_user_profile(session, user_id)
@@ -264,8 +235,8 @@ def handle_data_retrieval(user_id: str, query: str) -> Dict[str, Any]:
                 'response_type': "retrieval_error"
             }
 
-# Modular Data Retrieval Functions
 def get_user_profile(session, user_id: str) -> Dict[str, Any]:
+    """Retrieves a comprehensive profile of the user."""
     all_data = []
 
     prefs = session.execute(
@@ -299,6 +270,7 @@ def get_user_profile(session, user_id: str) -> Dict[str, Any]:
     }
 
 def get_user_preferences(session, user_id: str) -> Dict[str, Any]:
+    """Retrieves user-defined preferences."""
     prefs = session.execute(
         select(
             user_preferences_table.c.preference_key,
@@ -319,6 +291,7 @@ def get_user_preferences(session, user_id: str) -> Dict[str, Any]:
     }
 
 def get_user_facts(session, user_id: str) -> Dict[str, Any]:
+    """Retrieves facts stored for the user."""
     facts = session.execute(
         select(facts_table.c.fact_text)
         .filter_by(user_id=user_id)
@@ -337,6 +310,7 @@ def get_user_facts(session, user_id: str) -> Dict[str, Any]:
     }
 
 def get_interaction_history(session, user_id: str) -> Dict[str, Any]:
+    """Retrieves recent interaction history for the user."""
     history = session.execute(
         select(
             interaction_history_table.c.timestamp,
@@ -366,6 +340,7 @@ def get_interaction_history(session, user_id: str) -> Dict[str, Any]:
     }
 
 def log_interaction(user_id: str, user_query: str, kaia_response: str, response_type: str):
+    """Logs a user interaction and Kaia's response."""
     with get_session() as session:
         try:
             session.execute(interaction_history_table.insert().values(
@@ -380,8 +355,8 @@ def log_interaction(user_id: str, user_query: str, kaia_response: str, response_
             session.rollback()
             logging.error(f"Error logging interaction for user '{user_id}': {e}", exc_info=True)
 
-# Database Status Check
 def get_database_status() -> Dict:
+    """Checks the connection status and lists tables in the database."""
     if not engine:
         return {'connected': False, 'error': 'Engine not initialized', 'tables': []}
 
@@ -399,9 +374,10 @@ def get_database_status() -> Dict:
             'tables': []
         }
 
-# User Identification
 def get_current_user() -> str:
+    """Retrieves the current system user's login name."""
     try:
         return os.getlogin()
     except (OSError, AttributeError):
-        return "default_user"
+        # Fallback for environments where getlogin() might fail (e.g., cron jobs)
+        return os.environ.get('USER', 'default_user')
