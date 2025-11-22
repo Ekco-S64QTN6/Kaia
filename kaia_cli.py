@@ -36,6 +36,8 @@ class KaiaCLI:
             'uptime': self._get_uptime(),
             'board_info': self._get_board_info(),
             'ollama_status': self._check_ollama_status(),
+            'temperatures': self._get_temperatures(),
+            'network_io': self._get_network_io(),
         }
         return status
 
@@ -53,16 +55,25 @@ class KaiaCLI:
             f"  • Cores: Physical {status_info['cpu_info'].get('physical_cores', 'N/A')}, Logical {status_info['cpu_info'].get('logical_cores', 'N/A')}",
             f"  • Usage: {utils.get_color_for_percentage(status_info['cpu_info']['usage'])} {status_info['cpu_info']['usage']:.1f}%{config.COLOR_RESET}",
             f"  • Freq: {status_info['cpu_info'].get('frequency', 'N/A')} MHz",
-            f"\n{config.COLOR_BLUE}Memory:{config.COLOR_RESET}",
-            f"  • Total: {status_info['memory_info'].get('total', 'N/A')}",
-            f"  • Used: {utils.get_color_for_percentage(status_info['memory_info']['percent'])} {status_info['memory_info'].get('used', 'N/A')} ({status_info['memory_info'].get('percent', 'N/A')}%) {config.COLOR_RESET}",
-            f"  • Available: {status_info['memory_info'].get('available', 'N/A')}",
         ]
+
+        if status_info.get('temperatures'):
+            msg_parts.append(f"  • Temp: {status_info['temperatures']}")
+
+        msg_parts.append(f"\n{config.COLOR_BLUE}Memory:{config.COLOR_RESET}")
+        msg_parts.append(f"  • Total: {status_info['memory_info'].get('total', 'N/A')}")
+        msg_parts.append(f"  • Used: {utils.get_color_for_percentage(status_info['memory_info']['percent'])} {status_info['memory_info'].get('used', 'N/A')} ({status_info['memory_info'].get('percent', 'N/A')}%) {config.COLOR_RESET}")
+        msg_parts.append(f"  • Available: {status_info['memory_info'].get('available', 'N/A')}")
 
         if status_info['all_disk_usage']:
             msg_parts.append(f"\n{config.COLOR_BLUE}Disk Usage:{config.COLOR_RESET}")
             for disk in status_info['all_disk_usage']:
                 msg_parts.append(f"  • {disk['mount_point']} ({disk['label']}): {utils.get_color_for_percentage(disk['percent'])} {disk['used']}/{disk['total']} ({disk['percent']}%) {config.COLOR_RESET}")
+
+        if status_info.get('network_io'):
+            msg_parts.append(f"\n{config.COLOR_BLUE}Network I/O:{config.COLOR_RESET}")
+            net = status_info['network_io']
+            msg_parts.append(f"  • Sent: {net['bytes_sent']} | Recv: {net['bytes_recv']}")
 
         if status_info['gpu_info']:
             msg_parts.append(f"\n{config.COLOR_BLUE}GPU Info:{config.COLOR_RESET}")
@@ -103,6 +114,47 @@ class KaiaCLI:
             msg_parts.append(f"  • Tables: No tables found or database not connected.")
 
         return "\n".join(msg_parts)
+
+    def _get_temperatures(self) -> str:
+        """Retrieves system temperatures if available."""
+        try:
+            temps = psutil.sensors_temperatures()
+            if not temps:
+                return ""
+            
+            # Prioritize CPU/Core temps
+            temp_str = []
+            for name, entries in temps.items():
+                if name in ['coretemp', 'k10temp', 'cpu_thermal']:
+                    for entry in entries:
+                        if entry.current > 0:
+                            temp_str.append(f"{entry.current}°C")
+                            break # Just take the first valid reading per sensor group to avoid clutter
+            
+            if not temp_str:
+                 # Fallback to any sensor
+                 for name, entries in temps.items():
+                    for entry in entries:
+                         if entry.current > 0:
+                            temp_str.append(f"{entry.current}°C ({name})")
+                            break
+            
+            return ", ".join(temp_str)
+        except Exception as e:
+            logger.warning(f"Could not get temperatures: {e}")
+            return ""
+
+    def _get_network_io(self) -> Dict[str, str]:
+        """Retrieves network I/O statistics."""
+        try:
+            net = psutil.net_io_counters()
+            return {
+                'bytes_sent': f"{net.bytes_sent / (1024**2):.2f} MB",
+                'bytes_recv': f"{net.bytes_recv / (1024**2):.2f} MB"
+            }
+        except Exception as e:
+            logger.warning(f"Could not get network I/O: {e}")
+            return {}
 
     def _get_os_info(self) -> Dict[str, str]:
         """Retrieves basic operating system information."""
@@ -162,23 +214,37 @@ class KaiaCLI:
             return {}
 
     def _get_all_disk_usage(self) -> List[Dict[str, Any]]:
-        """Retrieves disk usage for configured mount points."""
+        """Retrieves disk usage for all physical mounted drives."""
         disk_info = []
-        for mount in config.DISK_MOUNTS:
-            path = mount['path']
-            label = mount['label']
-            try:
-                usage = psutil.disk_usage(path)
-                disk_info.append({
-                    'mount_point': path,
-                    'label': label,
-                    'total': f"{usage.total / (1024**3):.2f} GB",
-                    'used': f"{usage.used / (1024**3):.2f} GB",
-                    'free': f"{usage.free / (1024**3):.2f} GB",
-                    'percent': usage.percent
-                })
-            except Exception as e:
-                logger.warning(f"Could not get disk usage for {path}: {e}")
+        try:
+            partitions = psutil.disk_partitions(all=False)
+            for partition in partitions:
+                # Filter for physical devices and interesting mount points
+                if 'cdrom' in partition.opts or partition.fstype == '':
+                    continue
+                
+                # Skip loop devices and snaps usually
+                if '/loop' in partition.device or '/snap/' in partition.mountpoint:
+                    continue
+
+                try:
+                    usage = psutil.disk_usage(partition.mountpoint)
+                    # Only show if total size is > 0
+                    if usage.total > 0:
+                        disk_info.append({
+                            'mount_point': partition.mountpoint,
+                            'label': os.path.basename(partition.mountpoint) if partition.mountpoint != '/' else 'Root',
+                            'device': partition.device,
+                            'total': f"{usage.total / (1024**3):.2f} GB",
+                            'used': f"{usage.used / (1024**3):.2f} GB",
+                            'free': f"{usage.free / (1024**3):.2f} GB",
+                            'percent': usage.percent
+                        })
+                except Exception as e:
+                    logger.warning(f"Could not get usage for {partition.mountpoint}: {e}")
+        except Exception as e:
+            logger.error(f"Error getting disk partitions: {e}")
+            
         return disk_info
 
     def _get_gpu_details(self) -> List[Dict[str, Any]]:
@@ -243,7 +309,9 @@ class KaiaCLI:
                     'device_name': gpu.get('properties', {}).get('deviceName', 'N/A'),
                     'api_version': gpu.get('properties', {}).get('apiVersion', 'N/A')
                 })
-        except (subprocess.CalledProcessError, FileNotFoundError, json.JSONDecodeError, subprocess.TimeoutExpired) as e:
+        except json.JSONDecodeError:
+            logger.debug("Could not parse Vulkan info (likely empty output).")
+        except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired) as e:
             logger.warning(f"Could not get Vulkan info (vulkaninfo not found or error): {e}")
         return vulkan_info
 

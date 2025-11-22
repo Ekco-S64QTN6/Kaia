@@ -67,6 +67,7 @@ Categories:
 - "store_data": For requests to remember information ("Remember that...", "My favorite food is...").
 - "system_status": For requests about system health ("show system status", "how is my computer doing", "status kaia").
 - "get_persona_content": For questions about Kaia's identity ("Tell me about yourself", "What is your persona?").
+- "rebuild_index": For requests to update or rebuild the knowledge base ("rebuild index", "refresh memory", "update knowledge").
 - "chat": For general conversation, greetings, and queries that don't fit other categories.
 
 Respond with: {"action": "action_name", "content": "query_content"}
@@ -126,6 +127,8 @@ ACTION_PLAN_EXAMPLES = [
     {"role": "assistant", "content": json.dumps({"action": "convert_video_to_gif", "content": "video to gif"})},
     {"role": "user", "content": "make a gif from this mp4"},
     {"role": "assistant", "content": json.dumps({"action": "convert_video_to_gif", "content": "mp4 to gif"})},
+    {"role": "user", "content": "refresh your knowledge base"},
+    {"role": "assistant", "content": json.dumps({"action": "rebuild_index", "content": "refresh knowledge"})},
 ]
 
 
@@ -147,15 +150,7 @@ SAFE_COMMAND_ALLOWLIST = [
     "free", "lsblk", "journalctl"
 ]
 
-# Disk Mounts for System Status
-DISK_MOUNTS = [
-    {'path': '/', 'label': '/'},
-    {'path': '/boot', 'label': '/boot'},
-    {'path': '/home', 'label': '/home'},
-    {'path': '/run/media/ekco/KingSpec1', 'label': 'KingSpec1'},
-    {'path': '/run/media/ekco/KingSpec2', 'label': 'KingSpec2'},
-    {'path': '/run/media/ekco/D02B-11D2', 'label': 'Removable'}
-]
+
 
 # Whitelisted Scripts for Direct Execution (from user's home directory)
 SCRIPT_ALLOWLIST = [

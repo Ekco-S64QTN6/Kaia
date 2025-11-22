@@ -1,5 +1,6 @@
 import json
 import logging
+from logging.handlers import RotatingFileHandler
 import os
 import platform
 import subprocess
@@ -38,7 +39,17 @@ from toolbox import video_converter
 
 
 # --- Basic Setup ---
-logging.basicConfig(stream=sys.stdout, level=logging.INFO)
+# Configure logging with rotation
+log_file = Path("kaia.log")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[
+        RotatingFileHandler(log_file, maxBytes=5*1024*1024, backupCount=3),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+
 # Silence noisy loggers
 for noisy in ["httpx", "httpcore", "fsspec", "urllib3", "llama_index.core.storage.kvstore", "chromadb", "llama_index"]:
     logging.getLogger(noisy).setLevel(logging.CRITICAL)
@@ -67,6 +78,7 @@ class AppState:
         self.sql_query_engine = None
         self.current_working_directory = Path.cwd()
         self.user_id = database_utils.get_current_user()
+        self.vector_store = None
 
 # --- Initialization Functions ---
 def initialize_models():
@@ -140,22 +152,53 @@ def initialize_vector_db(embedding_dim: int):
         print(f"{config.COLOR_RED}Fatal: Failed to initialize ChromaDB. Exiting.{config.COLOR_RESET}")
         sys.exit(1)
 
-def build_or_load_index(vector_store: ChromaVectorStore):
-    """Build or load the LlamaIndex from storage."""
+def build_or_load_index(vector_store: ChromaVectorStore, force_rebuild: bool = False):
+    """Build or load the LlamaIndex from storage, checking for staleness."""
     print(f"{config.COLOR_BLUE}Loading/Building LlamaIndex...{config.COLOR_RESET}")
     try:
         storage_context = StorageContext.from_defaults(vector_store=vector_store)
-        if not os.path.exists(config.LLAMA_INDEX_METADATA_PATH):
-             print(f"{config.COLOR_BLUE}No existing index found. Building from documents...{config.COLOR_RESET}")
+        index_exists = os.path.exists(config.LLAMA_INDEX_METADATA_PATH)
+        
+        should_build = force_rebuild or not index_exists
+        
+        if index_exists and not force_rebuild:
+            # Check for staleness
+            try:
+                # Get latest modification time of any file in data directories
+                last_doc_mtime = 0
+                for doc_dir in [config.GENERAL_KNOWLEDGE_DIR, config.PERSONAL_CONTEXT_DIR]:
+                    if doc_dir.exists():
+                        for root, _, files in os.walk(doc_dir):
+                            for f in files:
+                                mtime = os.path.getmtime(os.path.join(root, f))
+                                if mtime > last_doc_mtime:
+                                    last_doc_mtime = mtime
+                
+                # Get index creation/modification time
+                index_mtime = os.path.getmtime(config.LLAMA_INDEX_METADATA_PATH)
+                
+                if last_doc_mtime > index_mtime:
+                    print(f"{config.COLOR_YELLOW}Index is stale (new documents found). Rebuilding...{config.COLOR_RESET}")
+                    should_build = True
+            except Exception as e:
+                logger.warning(f"Could not check index freshness: {e}")
+
+        if should_build:
+             print(f"{config.COLOR_BLUE}{'Rebuilding' if index_exists else 'Building'} index from documents...{config.COLOR_RESET}")
              all_docs = []
              for doc_dir in [config.GENERAL_KNOWLEDGE_DIR, config.PERSONAL_CONTEXT_DIR]:
                  if doc_dir.exists():
+                     print(f"Scanning {doc_dir}...")
                      reader = SimpleDirectoryReader(input_dir=str(doc_dir), recursive=True)
                      all_docs.extend(reader.load_data())
+             
              if not all_docs:
                  print(f"{config.COLOR_YELLOW}Warning: No documents found to build index.{config.COLOR_RESET}")
                  return None
+                 
              with suppress_stdout():
+                # If rebuilding, we might want to clear the vector store to avoid duplicates if not handled by the store
+                # ChromaVectorStore with LlamaIndex usually handles updates but a full rebuild is safer for consistency here
                 index = VectorStoreIndex.from_documents(all_docs, storage_context=storage_context)
                 index.storage_context.persist(persist_dir=config.LLAMA_INDEX_METADATA_PATH)
              print(f"{config.COLOR_GREEN}Index built and saved.{config.COLOR_RESET}")
@@ -414,6 +457,31 @@ def handle_knowledge_query(state: AppState, content: str, start_time: float) -> 
         print(f"{config.COLOR_RED}{response}{config.COLOR_RESET}")
         return response
 
+def handle_rebuild_index(state: AppState, content: str) -> str:
+    print(f"\n{config.COLOR_BLUE}Kaia (Rebuilding Index):{config.COLOR_RESET}")
+    try:
+        # Re-initialize vector store to ensure clean state if needed, or just pass existing
+        # For simplicity, we'll reuse the existing logic but force rebuild
+        # Note: We need the vector store instance. It's not stored in state explicitly in the original code,
+        # but we can re-initialize it or store it in AppState.
+        # Let's modify AppState to store vector_store.
+        
+        if not hasattr(state, 'vector_store'):
+             # Fallback if we didn't update AppState yet (which we should do next)
+             embedding_dim = initialize_models() # This might be redundant but safe
+             state.vector_store = initialize_vector_db(embedding_dim)
+
+        state.index = build_or_load_index(state.vector_store, force_rebuild=True)
+        setup_chat_engines(state) # Re-setup engines with new index
+        
+        response = "Knowledge base index has been successfully rebuilt."
+        print(f"{config.COLOR_GREEN}{response}{config.COLOR_RESET}")
+        return response
+    except Exception as e:
+        response = f"Failed to rebuild index: {e}"
+        print(f"{config.COLOR_RED}{response}{config.COLOR_RESET}")
+        return response
+
 def handle_chat(state: AppState, content: str, start_time: float) -> str:
     print(f"\n{config.COLOR_BLUE}Kaia:{config.COLOR_RESET}", end=" ", flush=True)
     response_stream = state.pure_chat_engine.stream_chat(content)
@@ -427,7 +495,7 @@ def generate_action_plan(user_input: str) -> Dict[str, str]:
     system_prompt_for_action_plan = (
         "You are an AI that determines the user's intent and provides a JSON response. "
         "Your response MUST be a JSON object with two keys: 'action' and 'content'. "
-        "The 'action' must be one of: 'knowledge_query', 'chat', 'command', 'store_data', 'retrieve_data', 'sql', 'run_script', 'system_status', 'convert_video_to_gif', 'get_persona_content', 'text_extraction'. "
+        "The 'action' must be one of: 'knowledge_query', 'chat', 'command', 'store_data', 'retrieve_data', 'sql', 'run_script', 'system_status', 'convert_video_to_gif', 'get_persona_content', 'text_extraction', 'rebuild_index'. "
         "The 'content' should be the relevant text for the chosen action. "
         "Respond ONLY with the JSON object. Do NOT include any other text or explanations."
         "Example: {'action': 'knowledge_query', 'content': 'What is the capital of France?'}"
@@ -488,13 +556,65 @@ def stream_and_print_response(response_stream, start_time: float) -> str:
     return full_response.strip()
 
 # --- Main Application Logic ---
+def process_user_input(state: AppState, query: str, action_handlers: Dict[str, Callable]):
+    """Processes a single user input query."""
+    start_time = time.time()
+    response = ""
+    response_type = "unclassified"
+
+    try:
+        # Fast path for common commands to avoid LLM latency
+        lower_query = query.lower().strip()
+        if lower_query in ['status', 'system status', 'info', 'stats']:
+            plan = {"action": "system_status", "content": ""}
+        elif lower_query in ['exit', 'quit', '/exit', '/quit']:
+             # This is handled in main loop but good to have here for completeness if logic moves
+             plan = {"action": "chat", "content": "Goodbye!"} 
+        else:
+            # Generate plan and execute action
+            plan = generate_action_plan(query)
+        action = plan.get("action", "chat")
+        content = plan.get("content", query)
+        response_type = action
+
+        handler = action_handlers.get(action)
+        if handler:
+            # Pass start_time only to handlers that need it
+            if action in ["knowledge_query", "chat", "text_extraction"]:
+                response = handler(state, content, start_time)
+            else:
+                response = handler(state, content)
+        else:
+            logger.warning(f"No handler for action '{action}'. Defaulting to chat.")
+            response = handle_chat(state, query, start_time)
+            response_type = "chat"
+
+        # Log the interaction
+        database_utils.log_interaction(
+            user_id=state.user_id,
+            user_query=query,
+            kaia_response=response,
+            response_type=response_type
+        )
+
+    except Exception as e:
+        logger.exception("Unexpected error processing input")
+        response = f"System error: {e}"
+        print(f"{config.COLOR_RED}{response}{config.COLOR_RESET}")
+        database_utils.log_interaction(
+            user_id=state.user_id,
+            user_query=query,
+            kaia_response=f"System error: {str(e)[:200]}",
+            response_type="system_error"
+        )
+
 def main():
     # 1. Initialize application state and components
     state = AppState()
     embedding_dim = initialize_models()
     load_persona(state)
-    vector_store = initialize_vector_db(embedding_dim)
-    state.index = build_or_load_index(vector_store)
+    state.vector_store = initialize_vector_db(embedding_dim)
+    state.index = build_or_load_index(state.vector_store)
     initialize_sql_engine(state)
     setup_chat_engines(state)
     database_utils.ensure_user(state.user_id)
@@ -508,10 +628,11 @@ def main():
         "sql": handle_sql_query,
         "retrieve_data": handle_retrieve_data,
         "knowledge_query": lambda s, c, t: handle_knowledge_query(s, c, t),
-        "text_extraction": lambda s, c, t: handle_knowledge_query(s, c, t), # Added to route text_extraction to knowledge_query
+        "text_extraction": lambda s, c, t: handle_knowledge_query(s, c, t),
         "chat": lambda s, c, t: handle_chat(s, c, t),
         "convert_video_to_gif": lambda s, c: video_converter.convert_video_to_gif_interactive(s.cli, s.user_id)['response'],
         "get_persona_content": lambda s, c: state.kaia_persona_content,
+        "rebuild_index": handle_rebuild_index,
     }
 
     # 3. Print welcome message
@@ -535,49 +656,14 @@ Kaia (Personal AI Assistant) - Ready. Type 'exit' or 'quit' to end.
                 print(f"{config.COLOR_BLUE}Kaia: Session ended.{config.COLOR_RESET}")
                 break
 
-            start_time = time.time()
-            response = ""
-            response_type = "unclassified"
-
-            # Generate plan and execute action
-            plan = generate_action_plan(query)
-            action = plan.get("action", "chat")
-            content = plan.get("content", query)
-            response_type = action
-
-            handler = action_handlers.get(action)
-            if handler:
-                # Pass start_time only to handlers that need it
-                if action in ["knowledge_query", "chat", "text_extraction"]: # Added 'text_extraction' here
-                    response = handler(state, content, start_time)
-                else:
-                    response = handler(state, content)
-            else:
-                logger.warning(f"No handler for action '{action}'. Defaulting to chat.")
-                response = handle_chat(state, query, start_time)
-                response_type = "chat"
-
-            # Log the interaction
-            database_utils.log_interaction(
-                user_id=state.user_id,
-                user_query=query,
-                kaia_response=response,
-                response_type=response_type
-            )
+            process_user_input(state, query, action_handlers)
 
         except KeyboardInterrupt:
             print(f"\n{config.COLOR_BLUE}Kaia: Exiting gracefully...{config.COLOR_RESET}")
             break
         except Exception as e:
             logger.exception("Unexpected error in main loop")
-            response = f"System error: {e}"
-            print(f"{config.COLOR_RED}{response}{config.COLOR_RESET}")
-            database_utils.log_interaction(
-                user_id=state.user_id,
-                user_query=query if 'query' in locals() else "N/A",
-                kaia_response=f"System error: {str(e)[:200]}",
-                response_type="system_error"
-            )
+            print(f"{config.COLOR_RED}System error: {e}{config.COLOR_RESET}")
 
 if __name__ == "__main__":
     main()
