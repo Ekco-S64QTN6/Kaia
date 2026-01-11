@@ -5,6 +5,7 @@ import os
 import platform
 import subprocess
 import sys
+import shutil
 import time
 from datetime import datetime
 from pathlib import Path
@@ -524,30 +525,94 @@ def generate_action_plan(user_input: str) -> Dict[str, str]:
         return {"action": "chat", "content": user_input}
 
 def stream_and_print_response(response_stream, start_time: float) -> str:
-    """Streams tokens from the LLM response and prints them with word wrapping and timing."""
+    """Streams tokens from the LLM response and prints them with proper word wrapping and timing."""
     full_response = ""
     first_token_time = None
-    current_line_length = 0
+    
+    # Get dynamic terminal width
+    try:
+        term_width = shutil.get_terminal_size(fallback=(80, 24)).columns
+    except Exception:
+        term_width = 80
+        
+    # Buffer for word assembly
+    buffer = ""
+    current_col = 0
 
     print(f"{config.COLOR_BLUE}", end="", flush=True)
 
     for token in response_stream.response_gen:
         if not first_token_time:
             first_token_time = time.time()
-
         full_response += token
+        buffer += token
+        
+        while True:
+            # Prioritize explicit newlines
+            newline_pos = buffer.find('\n')
+            space_pos = buffer.find(' ')
+            
+            # Handle Newlines
+            if newline_pos != -1 and (space_pos == -1 or newline_pos < space_pos):
+                chunk = buffer[:newline_pos]
+                
+                if current_col > 0:
+                    if current_col + len(chunk) <= term_width:
+                         sys.stdout.write(chunk)
+                    else:
+                         sys.stdout.write(chunk)
+                else:
+                    sys.stdout.write(chunk)
 
-        # Simple word wrapping
-        words = token.split(' ')
-        for i, word in enumerate(words):
-            if current_line_length + len(word) > config.MAX_LINE_WIDTH:
-                sys.stdout.write("\n")
-                current_line_length = 0
-
-            sys.stdout.write(word + (' ' if i < len(words) - 1 else ''))
-            sys.stdout.flush()
-            current_line_length += len(word) + 1
-
+                sys.stdout.write('\n')
+                sys.stdout.flush() # Flush immediately on newline
+                current_col = 0
+                buffer = buffer[newline_pos+1:]
+                continue
+            
+            # Handle Spaces (Word boundaries)
+            if space_pos != -1:
+                word = buffer[:space_pos]
+                word_len = len(word)
+                
+                if current_col == 0:
+                    sys.stdout.write(word)
+                    current_col += word_len
+                else:
+                    if current_col + 1 + word_len > term_width:
+                        sys.stdout.write('\n')
+                        sys.stdout.write(word)
+                        current_col = word_len
+                    else:
+                        sys.stdout.write(' ' + word)
+                        current_col += 1 + word_len
+                
+                sys.stdout.flush() # Flush immediately after a word
+                buffer = buffer[space_pos+1:]
+                continue
+            
+            # No delimiter found, check if buffer is getting too long (safety valve)
+            # If buffer is longer than width, we must print it to avoid holding too much
+            if len(buffer) > term_width:
+                 sys.stdout.write(buffer)
+                 sys.stdout.flush()
+                 current_col += len(buffer)
+                 buffer = ""
+            
+            break
+            
+    # Flush remaining buffer
+    if buffer:
+        if current_col == 0:
+             sys.stdout.write(buffer)
+        else:
+             if current_col + 1 + len(buffer) > term_width:
+                 sys.stdout.write('\n')
+                 sys.stdout.write(buffer)
+             else:
+                 sys.stdout.write(' ' + buffer)
+        sys.stdout.flush()
+    
     print(f"\n\n{config.COLOR_YELLOW}⏱ Total time: {time.time() - start_time:.2f}s", end="")
     if first_token_time:
         print(f" (First token: {first_token_time - start_time:.2f}s)", end="")
@@ -563,16 +628,13 @@ def process_user_input(state: AppState, query: str, action_handlers: Dict[str, C
     response_type = "unclassified"
 
     try:
-        # Fast path for common commands to avoid LLM latency
+        # Fast path for exit commands
         lower_query = query.lower().strip()
-        if lower_query in ['status', 'system status', 'info', 'stats']:
-            plan = {"action": "system_status", "content": ""}
-        elif lower_query in ['exit', 'quit', '/exit', '/quit']:
-             # This is handled in main loop but good to have here for completeness if logic moves
-             plan = {"action": "chat", "content": "Goodbye!"} 
+        if lower_query in ['exit', 'quit', '/exit', '/quit']:
+            plan = {"action": "chat", "content": "Goodbye!"}
         else:
-            # Generate plan and execute action
             plan = generate_action_plan(query)
+        
         action = plan.get("action", "chat")
         content = plan.get("content", query)
         response_type = action
@@ -629,6 +691,7 @@ def main():
         "retrieve_data": handle_retrieve_data,
         "knowledge_query": lambda s, c, t: handle_knowledge_query(s, c, t),
         "text_extraction": lambda s, c, t: handle_knowledge_query(s, c, t),
+        "text_generation": lambda s, c, t: handle_chat(s, c, t), # Map text_generation to chat
         "chat": lambda s, c, t: handle_chat(s, c, t),
         "convert_video_to_gif": lambda s, c: video_converter.convert_video_to_gif_interactive(s.cli, s.user_id)['response'],
         "get_persona_content": lambda s, c: state.kaia_persona_content,
@@ -644,7 +707,6 @@ def main():
 ██║  ██╗██║  ██║██║██║  ██║
 ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝╚═╝  ╚═╝
 {config.COLOR_RESET}
-Kaia (Personal AI Assistant) - Ready. Type 'exit' or 'quit' to end.
 """)
 
     # 4. Main loop

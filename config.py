@@ -9,9 +9,9 @@ TTS_ENABLED = False
 SQL_RAG_ENABLED = True
 
 # Ollama Model Configuration
-LLM_MODEL = "llama2:7b-chat"
+LLM_MODEL = "llama2:7b-chat"  # For chat generation and creative content
 EMBEDDING_MODEL = "nomic-embed-text:latest"
-DEFAULT_COMMAND_MODEL = "mistral:instruct"
+DEFAULT_COMMAND_MODEL = "mistral:instruct"  # For intent understanding and planning
 
 # Directory Paths
 BASE_DIR = Path(__file__).resolve().parent
