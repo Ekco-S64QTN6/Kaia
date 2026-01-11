@@ -3,4 +3,4 @@
 *.log
 __pycache__/
 .env
-VP_VULKANINFO_NVIDIA_GeForce_RTX_3060_575_64_5_0.json
+VP_VULKANINFO_*.json
