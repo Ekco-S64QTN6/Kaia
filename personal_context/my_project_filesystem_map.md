@@ -1,76 +1,70 @@
-# My Project File System Map - Kaia AI Assistant (`ollama_dev`)
+# My Project File System Map - Kaia AI Assistant
 
-This document provides a detailed overview of the directory structure and key files *within the `ollama_dev` project*, which serves as the primary development environment for the Kaia AI assistant. This structure is designed to categorize various types of knowledge and project components for efficient access and retrieval by Kaia.
+This document provides a detailed overview of the directory structure and key files *within the `Kaia` project*, which is the primary environment for the Hardened AI Admin Agent. This structure categorizes various types of knowledge and project components for efficient access and retrieval.
 
-The `ollama_dev` project resides under the user's personal projects directory, specifically at `~/projects/personal/ollama_dev/`.
-
-## Top-Level Directories and Files within `ollama_dev/`
-
-* `data/`: This core directory houses Kaia's general knowledge base, primarily organized into specialized subdirectories.
-    * **Direct File:** `Kaia_Desktop_Persona.md`: Defines the core persona and operational guidelines for the Kaia AI.
-    * **Subdirectories:** `ai_development/`, `books/`, `command_cheatsheets/`, `development_guides/`, `hardware_compatibility/`, `linux_troubleshooting_guides/`, `security/`, `software_definitions/`, `system_knowledge/`. (Detailed contents follow in subsequent sections).
-* `images/`: Stores images related to the project, such as screenshots or diagrams.
-* `kaia_cli.py`: A Python script likely containing command-line interface functionalities for interacting with Kaia.
-* `Kaia_Project_Master_Plan.md`: The central document outlining the project's vision, architecture, features, progress, and roadmap.
-* `llamaindex_ollama_rag.py`: The main Python script responsible for initializing the LLM, loading Kaia's persona, managing the ChromaDB vector store, and handling the RAG (Retrieval-Augmented Generation) process. It builds and loads vector indexes for Kaia's knowledge base.
-* `Personal Context/`: This directory contains personal Markdown documents providing user-specific context to Kaia, including this `my_project_filesystem_map.md` itself. (Detailed contents follow in the "Personal Context Subdirectories" section).
-* `README.md`: The project's main README file, providing installation instructions, configuration details, and usage examples.
-* `requirements.txt`: Lists the Python dependencies required for the project.
-* `storage/`: This directory persists Kaia's operational data, including:
-    * `chroma_db/`: The physical location for the ChromaDB vector store.
-    * `llama_index_metadata/`: Stores LlamaIndex's internal metadata for the indexed documents, facilitating quicker loading on subsequent runs.
+The `Kaia` project resides at `/home/ekco/github/Kaia/` (also referenced as `~/github/Kaia/`).
 
 ---
 
-## Detailed Knowledge Base Subdirectories within `data/`
+## 📂 Top-Level Directories and Files
 
-### `data/ai_development/`
-This directory contains documentation related to AI platforms, frameworks, and setup guides.
-* **Typical contents:** `ollama_llamaindex_langchain_setup.md`, `AI-Development.md`.
-
-### `data/books/`
-This directory is dedicated to storing comprehensive long-form documents such as technical books and extensive guides.
-* **Typical contents:** PDF documents and Markdown files converted from EPUBs (e.g., AI textbooks, Linux guides, programming books).
-
-### `data/command_cheatsheets/`
-Contains quick reference guides and practical examples for common command-line utilities.
-* **Typical contents:** Markdown files for `pacman`, `rsync`, `systemd`, `linux_dev_commands.md`.
-
-### `data/development_guides/`
-Provides guides and workflows for general software development practices.
-* **Typical contents:** `git_workflow_guide.md`.
-
-### `data/hardware_compatibility/`
-Stores information regarding hardware compatibility, particularly for Linux systems.
-* **Typical contents:** Markdown files for `nvidia_gpus.md`, `wifi_cards.md`.
-
-### `data/linux_troubleshooting_guides/`
-Provides structured guides for diagnosing and resolving common Linux system issues.
-* **Typical contents:** Markdown files for `disk_errors.md`, `network_issues.md`, `service_failures.md`.
-
-### `data/security/`
-Contains information security best practices, tool cheat sheets, and related security documentation.
-* **Typical contents:** `infosec_tools_cheat_sheet.md`, `security_best_practices.md`.
-
-### `data/software_definitions/`
-Contains definitions, integration details, and specific information about software components.
-* **Typical contents:** `chromadb_info.md` (details on ChromaDB integration and vector storage).
-
-### `data/system_knowledge/`
-Stores general and in-depth knowledge about Linux systems.
-* **Typical contents:** `linux_knowledge_base.md`.
+* `main.py`: The main Python script responsible for starting the conversational interface, initializing LLMs, loading personas, and managing ChromaDB indexes and database storage.
+* `README.md`: The project's main README file, detailing the Hardened AI Admin Agent architecture, setup, and usage.
+* `LICENSE.md`: MIT License.
+* `NOTICE.md`: Third-party component licenses.
+* `requirements.txt`: Python package dependencies.
+* `.gitignore`: Git exclusion patterns.
+* `.env`: Environment variables containing sensitive credentials (e.g. database password).
 
 ---
 
-## Detailed Personal Context Subdirectories within `Personal Context/`
+## 🗂️ Project Packages & Directories
 
-This directory stores personal and user-specific context that helps Kaia provide tailored assistance.
+### `core/`
+Houses core system settings, states, CLI status monitoring, and PostgreSQL database utils.
+* `__init__.py`: Package indicator.
+* `config.py`: Shared project configuration, prompts, timeouts, and allowlists.
+* `database_utils.py`: PostgreSQL datastore queries and operations for storing preferences, facts, and interaction history.
+* `kaia_cli.py`: Retrieves system status telemetry (CPU, GPU, RAM, systemd) and generates intent payloads.
+* `utils.py`: ANSI color helpers and Ollama model validation checking.
 
-* `archlinux_system_config.md`: Personal Arch Linux system configuration details.
-* `creative_prompts_campaign_notes.md`: Notes and prompts for personal creative projects (e.g., AI image prompts, D&D campaign notes).
-* `my_daily_workflow.md`: Documentation of daily routines and workflows.
-* `my_project_directories.md`: A general overview of the user's Linux system directory conventions and data organization.
-* `my_project_filesystem_map.md`: (This document itself) A detailed map of the `ollama_dev` project's internal structure.
-* `my_software_preferences.md`: User's software preferences and configurations.
-* `my_system_config.md`: General personal system configuration.
-* `system_activity_logs.md`: Logs of system activities specific to the user's environment.
+### `security/`
+The hardened security subsystem, defining safety checks and execution containment.
+* `__init__.py`: Package indicator.
+* `cognitive_wiring.py`: Models the agent's internal emotional/affective state vectors.
+* `db.py`: Security ledger database wrapper for logging incidents to `security_events.db`.
+* `host_executor.py`: Safe subprocess execution layer that runs allowlisted commands, enforces write-protection boundaries, and spawns Bubblewrap sandboxes for custom scripts.
+* `policy_gate.py`: Unix Domain Socket server daemon that intercepts, schema-validates, and evaluates all capability tokens and privileged intents.
+* `schemas.py`: Pydantic data schemas verifying diagnostic, service control, block IP, and file writing request payloads.
+* `telemetry_daemon.py`: Telemetry collector for network sockets, process listings, and systemd units.
+* `telemetry_sanitizer.py`: Filters external system string fields using strict regex allowlists to prevent prompt injections.
+* `threat_intel.py`: Local intelligence lookups via GeoLite2 and vulnerability correlations.
+
+### `toolbox/`
+* `video_converter.py`: Tool for converting MP4 and WebM video files to animated GIFs.
+
+### `tests/`
+The validation suite verifying all imports, command heuristics, output wrapping, and security invariants.
+* `test_database_utils.py`: Database operations tests.
+* `test_kaia_cli.py`: Status CLI command tests.
+* `test_heuristics.py`: Fast-path classification tests.
+* `verify_changes.py`: Basic imports and CLI diagnostics validator.
+* `verify_security.py`: Core socket, capability token signature, fail-closed, write-protection, and sandbox masking integration tests.
+* `verify_status.py`: Console formatting test.
+* `verify_wrap.py`: Word-wrap formatting test.
+
+### `scripts/`
+* `activate_kaia_env.sh`: Activation shell script. Spawns necessary local services (Ollama, PostgreSQL, ChromaDB) and launches the `main.py` entrypoint.
+
+### `data/`
+Houses general knowledge documents and specialized subdirectories:
+* `Kaia_Desktop_Persona.md`: Defines the core persona and operational guidelines for the Kaia AI.
+* `vulkaninfo/`: Dump files containing Vulkan GPU configurations.
+
+### `storage/`
+Persists the agent's operational databases:
+* `chroma_db/`: Local ChromaDB vector collection.
+* `llama_index_metadata/`: Persistent indexes for quick loading.
+* `security_events.db`: SQLite database for security event logs.
+* `audit_ledger.json`: Append-only security audit record.
+* `threat_intel/reputation.db`: SQLite database for local reputation caching.

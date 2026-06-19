@@ -7,9 +7,9 @@ This document details the structure and purpose of my common Linux system direct
 - **Root Project Directory:** `~/projects/`
 - **Work Projects:** `~/projects/work/[project_name]/`
   - Each work project typically contains: `src/` (source code), `docs/` (documentation), `venv/` (Python virtual environment).
-- **Personal Coding Projects:** `~/projects/personal/`
-  - These are often smaller, experimental, or hobby-related coding projects.
-  - **Note:** The `ollama_dev` project (Kaia AI Assistant) is located within this directory at `~/projects/personal/ollama_dev/`. Its detailed internal structure is documented in `~/projects/personal/ollama_dev/personal_context/my_project_filesystem_map.md`.
+- **Personal Coding Projects:** `~/github/`
+  - These are personal repositories and development tools.
+  - **Note:** The `Kaia` project (Hardened AI Admin Agent) is located at `~/github/Kaia/`. Its detailed internal structure is documented in `~/github/Kaia/personal_context/my_project_filesystem_map.md`.
 - **Configuration Files (Dotfiles):** `~/dotfiles/`
   - Managed using Git for version control and synchronization across machines.
 - **Temporary Scratchpad:** `~/tmp/`

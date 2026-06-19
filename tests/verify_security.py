@@ -226,12 +226,12 @@ def test_security_flow():
         gate.stop()
         return False
 
-    # Test writing to core directory (must fail)
-    success, stdout, stderr = HostExecutor.execute_state_modification("core/config.py", "VERSION='hacked'")
+    # Test writing to core directory (must fail by directory check, using a non-python file)
+    success, stdout, stderr = HostExecutor.execute_state_modification("core/notes.txt", "VERSION='hacked'")
     if not success and "violation" in stderr:
-        print("PASS: Writing to core/ package files blocked successfully.")
+        print("PASS: Writing to core/ package files blocked successfully via directory validation.")
     else:
-        print(f"FAIL: Writing to core/config.py was not blocked. Success: {success}, Err: {stderr}")
+        print(f"FAIL: Writing to core/notes.txt was not blocked. Success: {success}, Err: {stderr}")
         gate.stop()
         return False
 
@@ -252,12 +252,14 @@ def test_security_flow():
     # Create a test script that tries to cat .env and list storage
     leak_script_path = os.path.expanduser("~/free-space.sh")
     try:
+        env_path = os.path.join(config.WORKSPACE_DIR, ".env")
+        storage_path = os.path.join(config.WORKSPACE_DIR, "storage")
         with open(leak_script_path, "w") as f:
             f.write("#!/bin/bash\n")
             f.write("echo \"=== ENV CONTENT ===\"\n")
-            f.write("cat .env\n")
+            f.write(f"cat {env_path} 2>/dev/null\n")
             f.write("echo \"=== STORAGE CONTENT ===\"\n")
-            f.write("ls -A storage 2>/dev/null\n")
+            f.write(f"ls -A {storage_path} 2>/dev/null\n")
         os.chmod(leak_script_path, 0o755)
     except Exception as e:
         print(f"FAIL: Could not create leak script: {e}")
@@ -306,6 +308,92 @@ def test_security_flow():
     finally:
         if os.path.exists(leak_script_path):
             os.remove(leak_script_path)
+
+    # 5.7 Testing Ffmpeg Security Policy & Sandboxing
+    print("\n[Test 5.7] Testing Ffmpeg Security Policy & Sandboxing...")
+    downloads_dir = config.DOWNLOADS_DIR
+    os.makedirs(downloads_dir, exist_ok=True)
+    dummy_video_path = os.path.join(downloads_dir, "test_input.mp4")
+    dummy_output_path = os.path.join(downloads_dir, "test_output.gif")
+    
+    try:
+        with open(dummy_video_path, "w") as f:
+            f.write("dummy video content")
+            
+        token_ffmpeg_ok = generate_capability_token("ffmpeg", dummy_video_path)
+        payload_ffmpeg_ok = {
+            "action": "ffmpeg",
+            "args": ["ffmpeg", "-i", dummy_video_path, "-y", dummy_output_path],
+            "justification": "Testing authorized video conversion",
+            "capability_token": token_ffmpeg_ok,
+            "session_id": "sess_test_123"
+        }
+        
+        token_ffmpeg_bad = generate_capability_token("ffmpeg", "other_file.mp4")
+        payload_ffmpeg_bad = {
+            "action": "ffmpeg",
+            "args": ["ffmpeg", "-i", dummy_video_path, "-y", dummy_output_path],
+            "justification": "Testing unauthorized video conversion",
+            "capability_token": token_ffmpeg_bad,
+            "session_id": "sess_test_123"
+        }
+
+        token_escape = generate_capability_token("ffmpeg", os.path.join(config.WORKSPACE_DIR, "unsafe_read.mp4"))
+        payload_escape = {
+            "action": "ffmpeg",
+            "args": ["ffmpeg", "-i", os.path.join(config.WORKSPACE_DIR, "unsafe_read.mp4"), "-y", dummy_output_path],
+            "justification": "Testing escape attempt",
+            "capability_token": token_escape,
+            "session_id": "sess_test_123"
+        }
+
+        # Test 5.7a: Mismatched capability token (should be denied)
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client.connect(gate.socket_path)
+        client.sendall(json.dumps(payload_ffmpeg_bad).encode('utf-8'))
+        resp_bad = json.loads(client.recv(65536).decode('utf-8'))
+        client.close()
+        
+        if resp_bad.get("status") == "denied":
+            print("PASS: Ffmpeg request with mismatched token denied successfully.")
+        else:
+            print(f"FAIL: Ffmpeg request with mismatched token was not denied: {resp_bad}")
+            gate.stop()
+            return False
+
+        # Test 5.7b: Path violation (should be denied before running cmd)
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client.connect(gate.socket_path)
+        client.sendall(json.dumps(payload_escape).encode('utf-8'))
+        resp_escape = json.loads(client.recv(65536).decode('utf-8'))
+        client.close()
+        
+        if resp_escape.get("status") == "denied" or "violation" in resp_escape.get("message", ""):
+            print("PASS: Ffmpeg path violation blocked successfully.")
+        else:
+            print(f"FAIL: Ffmpeg path violation was not blocked: {resp_escape}")
+            gate.stop()
+            return False
+
+        # Test 5.7c: Authorized ffmpeg execution (should execute, even if ffmpeg fails on dummy input)
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client.connect(gate.socket_path)
+        client.sendall(json.dumps(payload_ffmpeg_ok).encode('utf-8'))
+        resp_ok = json.loads(client.recv(65536).decode('utf-8'))
+        client.close()
+        
+        if resp_ok.get("status") in ["success", "error"]:
+            print(f"PASS: Authorized ffmpeg request was executed (status: {resp_ok.get('status')}).")
+        else:
+            print(f"FAIL: Authorized ffmpeg request was blocked: {resp_ok}")
+            gate.stop()
+            return False
+            
+    finally:
+        if os.path.exists(dummy_video_path):
+            os.remove(dummy_video_path)
+        if os.path.exists(dummy_output_path):
+            os.remove(dummy_output_path)
 
     # 6. Fail-Closed Test
     print("\n[Test 6] Testing Fail-Closed Socket Behavior...")

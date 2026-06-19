@@ -10,7 +10,7 @@ from datetime import datetime
 from pydantic import ValidationError
 
 import config
-from security.schemas import DiagnosticsRequest, MitigationRequest, ServiceControlRequest, StateModificationRequest, ScriptExecutionRequest, AuditRecord
+from security.schemas import DiagnosticsRequest, MitigationRequest, ServiceControlRequest, StateModificationRequest, ScriptExecutionRequest, AuditRecord, FfmpegRequest
 from security.host_executor import HostExecutor
 from security.db import log_security_event
 
@@ -285,6 +285,29 @@ class PolicyGate:
 
                 success, stdout, stderr = HostExecutor.execute_script(req.script_name)
                 self._log_audit(req, "approved" if success else "denied", executor="HostExecutor.execute_script")
+                return {"status": "success" if success else "error", "stdout": stdout, "stderr": stderr}
+
+            elif action == "ffmpeg":
+                req = FfmpegRequest(**payload)
+                # Extract the input filename from the arguments (following the -i flag)
+                input_file = ""
+                try:
+                    if "-i" in req.args:
+                        idx = req.args.index("-i")
+                        if idx + 1 < len(req.args):
+                            input_file = req.args[idx + 1]
+                except Exception:
+                    pass
+
+                # Validate capability token
+                ok_tok, err_tok = verify_capability_token(req.capability_token, "ffmpeg", input_file)
+                if not ok_tok:
+                    self._log_audit(req, "denied", reason=f"Token verification failed: {err_tok}")
+                    log_security_event("unauthorized_ffmpeg_attempt", "policy_gate", "kaiacord", hashlib.sha256(str(payload).encode()).hexdigest(), "blocked", session_id)
+                    return {"status": "denied", "message": f"Token verification failed: {err_tok}"}
+
+                success, stdout, stderr = HostExecutor.execute_ffmpeg(req.args)
+                self._log_audit(req, "approved" if success else "denied", executor="HostExecutor.execute_ffmpeg")
                 return {"status": "success" if success else "error", "stdout": stdout, "stderr": stderr}
 
             else:

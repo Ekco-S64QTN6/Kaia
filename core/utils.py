@@ -78,3 +78,27 @@ def check_ollama_model_availability(model_name: str, fallback_model: Optional[st
         logger.error(error_msg, exc_info=True)
         _model_cache[cache_key] = ("", error_msg)
         return "", error_msg
+
+
+def send_to_policy_gate(payload: dict) -> dict:
+    """Connects to the Policy Gate Unix socket and executes the secure transaction."""
+    import socket
+    import json
+
+    sockets_to_try = [config.POLICY_GATE_SOCKET, config.POLICY_GATE_SOCKET_FALLBACK]
+    last_err = None
+
+    for sock_path in sockets_to_try:
+        try:
+            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            client.settimeout(5.0)
+            client.connect(sock_path)
+            client.sendall(json.dumps(payload).encode('utf-8'))
+            response = client.recv(65536).decode('utf-8')
+            client.close()
+            return json.loads(response)
+        except Exception as e:
+            last_err = e
+            continue
+
+    raise RuntimeError(f"Policy gate socket connection failed: {last_err}")

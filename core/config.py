@@ -1,5 +1,7 @@
 import json
+import os
 from pathlib import Path
+from dotenv import load_dotenv
 
 # General Configuration
 VERSION = "1.0.0"
@@ -14,7 +16,11 @@ EMBEDDING_MODEL = "nomic-embed-text:latest"
 DEFAULT_COMMAND_MODEL = "gemma3:12b"  # For intent understanding and planning
 
 # Directory Paths
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Load environment variables from .env in repo root
+load_dotenv(BASE_DIR / ".env")
+
 GENERAL_KNOWLEDGE_DIR = BASE_DIR / "data"
 PERSONAL_CONTEXT_DIR = BASE_DIR / "personal_context"
 PERSONA_DIR = BASE_DIR / "data"
@@ -172,6 +178,8 @@ SECURITY_DB_PATH = str(PERSIST_DIR / "security_events.db")
 AUDIT_LOG_PATH = str(PERSIST_DIR / "audit_ledger.json")
 POLICY_GATE_SOCKET = "/run/kaiacord/policy_gate.sock"
 POLICY_GATE_SOCKET_FALLBACK = "/tmp/policy_gate.sock"
-CAPABILITY_TOKEN_SECRET = "kaia_secure_signing_secret_key_2026"  # In production, load from secure environment
+CAPABILITY_TOKEN_SECRET = os.environ.get("KAIA_CAPABILITY_SECRET")
+if not CAPABILITY_TOKEN_SECRET:
+    raise RuntimeError("Critical Security Configuration Error: KAIA_CAPABILITY_SECRET environment variable is not set.")
 WORKSPACE_DIR = str(BASE_DIR)
 

@@ -42,6 +42,9 @@ def convert_video_to_gif_interactive(cli: KaiaCLI, user_id: str) -> Dict[str, An
                 output_file = os.path.join(config.DOWNLOADS_DIR, f"{filename_no_ext}.gif")
                 temp_mp4_file = None
 
+                from utils import send_to_policy_gate
+                from security.policy_gate import generate_capability_token
+
                 if selected_file_path.endswith(".webm"):
                     print(f"{config.COLOR_YELLOW}Detected WebM file. Converting to temporary MP4 first...{config.COLOR_RESET}")
                     temp_mp4_file = os.path.join(config.DOWNLOADS_DIR, f"{filename_no_ext}.temp.mp4")
@@ -51,7 +54,27 @@ def convert_video_to_gif_interactive(cli: KaiaCLI, user_id: str) -> Dict[str, An
                         "-c:v", "libx264", "-preset", "medium", "-crf", "23",
                         "-c:a", "aac", "-b:a", "128k", "-y", temp_mp4_file
                     ]
-                    success, stdout, stderr = cli.execute_command(" ".join(ffmpeg_webm_to_mp4_cmd))
+                    
+                    token = generate_capability_token("ffmpeg", selected_file_path)
+                    payload = {
+                        "action": "ffmpeg",
+                        "args": ffmpeg_webm_to_mp4_cmd,
+                        "justification": "Converting WebM to temporary MP4",
+                        "capability_token": token,
+                        "session_id": "video_conversion_session"
+                    }
+                    try:
+                        res = send_to_policy_gate(payload)
+                        success = res.get("status") == "success"
+                        stdout = res.get("stdout", "")
+                        stderr = res.get("stderr", "")
+                        if not success:
+                            stderr = res.get("message", stderr)
+                    except Exception as e:
+                        success = False
+                        stdout = ""
+                        stderr = f"Policy gate execution error: {e}"
+
                     if not success:
                         response = f"Error converting WebM to MP4. Stderr:\n{stderr}\nStdout:\n{stdout}"
                         print(f"{config.COLOR_RED}{response}{config.COLOR_RESET}")
@@ -66,7 +89,25 @@ def convert_video_to_gif_interactive(cli: KaiaCLI, user_id: str) -> Dict[str, An
                     "-vf", "fps=30,split[s0][s1];[s0]palettegen=max_colors=256:stats_mode=diff[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle",
                     "-loop", "0", output_file
                 ]
-                success, stdout, stderr = cli.execute_command(" ".join(ffmpeg_to_gif_cmd))
+                token = generate_capability_token("ffmpeg", input_for_gif)
+                payload = {
+                    "action": "ffmpeg",
+                    "args": ffmpeg_to_gif_cmd,
+                    "justification": "Converting video to GIF output",
+                    "capability_token": token,
+                    "session_id": "video_conversion_session"
+                }
+                try:
+                    res = send_to_policy_gate(payload)
+                    success = res.get("status") == "success"
+                    stdout = res.get("stdout", "")
+                    stderr = res.get("stderr", "")
+                    if not success:
+                        stderr = res.get("message", stderr)
+                except Exception as e:
+                    success = False
+                    stdout = ""
+                    stderr = f"Policy gate execution error: {e}"
 
                 if temp_mp4_file and os.path.exists(temp_mp4_file):
                     os.remove(temp_mp4_file)

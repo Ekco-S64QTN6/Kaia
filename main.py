@@ -38,6 +38,7 @@ from sqlalchemy import make_url
 import config
 import database_utils
 import utils
+from utils import send_to_policy_gate
 from kaia_cli import KaiaCLI
 from toolbox import video_converter
 
@@ -273,29 +274,7 @@ def handle_store_data(state: AppState, content: str) -> str:
     print(f"\n{config.COLOR_BLUE}Kaia: {response}{config.COLOR_RESET}")
     return response
 
-def send_to_policy_gate(payload: dict) -> dict:
-    """Connects to the Policy Gate Unix socket and executes the secure transaction."""
-    import socket
-    import json
-    import config
-    
-    sockets_to_try = [config.POLICY_GATE_SOCKET, config.POLICY_GATE_SOCKET_FALLBACK]
-    last_err = None
-    
-    for sock_path in sockets_to_try:
-        try:
-            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            client.settimeout(5.0)
-            client.connect(sock_path)
-            client.sendall(json.dumps(payload).encode('utf-8'))
-            response = client.recv(65536).decode('utf-8')
-            client.close()
-            return json.loads(response)
-        except Exception as e:
-            last_err = e
-            continue
-            
-    raise RuntimeError(f"Policy gate socket connection failed: {last_err}")
+
 
 def handle_command(state: AppState, content: str) -> str:
     import json

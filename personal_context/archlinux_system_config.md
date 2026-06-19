@@ -8,9 +8,9 @@ This document provides a comprehensive guide to your system's hardware, software
 
 | Component | Model |
 | :----------- | :-------------------------------------------------------- |
-| CPU | AMD Ryzen 7 7700X (AM5) |
+| CPU | AMD Ryzen 5 9600X 6-Core Processor |
 | Motherboard | ASUS ROG Strix B650-A Gaming WiFi 6E AM5 (LGA1718) Ryzen 7000 Motherboard(12+2 Power Stages,DDR5,3xM.2 Slots,PCIe® 4.0, 2.5G LAN,WiFi 6E,USB 3.2 Gen 2x2 Type-C® Port) |
-| RAM | CORSAIR VENGEANCE RGB DDR5 64GB (4x16GB) 6000MHz CL36 |
+| RAM | CORSAIR VENGEANCE RGB DDR5 32GB (2x16GB) 6000MHz |
 | Storage | WD_BLACK 1TB SN850X NVMe SSD (Operating System) & 2x KingSpec 1TB 2.5 SSD (Storage) |
 | CPU Cooler | Thermalright Peerless Assassin 120 SE ARGB White CPU Air Cooler, 6 Heat Pipes CPU Cooler, Dual 120mm TL-C12CW-S PWM Fan, AGHP Technology |
 | GPU | NVIDIA GeForce RTX 3060 |

@@ -123,6 +123,49 @@ class HostExecutor:
         return HostExecutor._run_cmd(cmd)
 
     @staticmethod
+    def execute_ffmpeg(args: list) -> tuple:
+        """Runs ffmpeg inside an isolated Bubblewrap sandbox mounting only the Downloads directory."""
+        ffmpeg_args = list(args)
+        if ffmpeg_args and ffmpeg_args[0] == "ffmpeg":
+            ffmpeg_args = ffmpeg_args[1:]
+
+        downloads_abs = os.path.abspath(config.DOWNLOADS_DIR)
+        for arg in ffmpeg_args:
+            if arg.startswith("-"):
+                continue
+            is_path = False
+            if arg.startswith("/") or arg.startswith("~") or ".." in arg:
+                is_path = True
+            elif any(arg.lower().endswith(ext) for ext in [".mp4", ".webm", ".gif", ".temp"]):
+                is_path = True
+
+            if is_path:
+                abs_path = os.path.abspath(os.path.expanduser(arg))
+                if not abs_path.startswith(downloads_abs):
+                    return False, "", f"Path violation: argument {arg} is outside downloads directory {downloads_abs}."
+
+        cmd = [
+            "bwrap",
+            "--ro-bind", "/usr", "/usr",
+            "--symlink", "usr/bin", "/bin",
+            "--symlink", "usr/lib", "/lib",
+            "--symlink", "usr/lib64", "/lib64",
+            "--symlink", "usr/sbin", "/sbin",
+            "--dir", "/tmp",
+            "--dir", "/run",
+            "--proc", "/proc",
+            "--dev", "/dev",
+            "--unshare-all",
+            "--new-session",
+            "--die-with-parent",
+            "--bind", downloads_abs, downloads_abs,
+            "--",
+            "ffmpeg"
+        ] + ffmpeg_args
+
+        return HostExecutor._run_cmd(cmd)
+
+    @staticmethod
     def _run_cmd(cmd: list) -> tuple:
         try:
             logger.info(f"HostExecutor running: {' '.join(cmd)}")
