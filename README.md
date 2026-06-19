@@ -1,165 +1,167 @@
-# Kaia: **K**aia **A**rtificial **I**ntelligence **A**ssistant
+# Kaia: Hardened AI Admin Agent & Security Subsystem
 
-![Kaia CLI Screenshot](images/kaia_cli_screenshot.png)
+Kaia is a strategic, local AI administrative agent designed for Linux environments. Departing from standard conversational assistants, Kaia is structured as a **hardened system administration and security operations layer** with strict security invariants, sandboxing containment, and a deterministic policy gate.
 
-## Overview
+## 🛡️ Core Design Principles
 
-Kaia is an advanced local AI assistant combining:
-- **Mistral-Instruct:** For natural language understanding and conversational AI
-- **ChromaDB + LlamaIndex:** For powerful contextual Retrieval-Augmented Generation (RAG)
-- **Intelligent Command Execution:** Understands natural language requests to propose and execute Linux shell commands
-- **Text-to-Speech (Optional):** Provides spoken responses via Piper/speech-dispatcher
-- **Long-Term Memory:** Stores user preferences, facts, and interaction history in PostgreSQL
-- **Enhanced System Monitoring:** Provides real-time system diagnostics.
+Every decision in Kaia's architecture derives from four non-negotiable axioms:
+1. **LLM outputs are untrusted.** All proposed privileges and commands are treated as raw inputs.
+2. **All actions are schema-validated.** A deterministic host process validates structured intents.
+3. **The host — not the model — makes security decisions.** No LLM is involved in direct execution authorization.
+4. **Security policy and personality are decoupled.** Permissions never depend on relationship standing, affinity, or the emotional state of the agent.
 
-## Key Features
+---
 
-### Core Capabilities
-- Natural language conversations with persona consistency
-- Context-aware responses using personal/general knowledge
-- Safe Linux command generation & execution with user confirmation
-- Real-time system monitoring (`/status` command)
-- Streaming responses with first-token latency metrics
-- Persistent memory for user preferences and facts
-- Unified data retrieval for persona details, facts, and preferences, and interaction history.
+## 🏗️ Architecture and Isolation Layout
 
-### Technical Highlights
-- Persistent ChromaDB vector storage
-- PostgreSQL database for long-term memory
-- Ollama API with strict JSON response enforcement
-- Configurable TTS backend (Piper recommended)
-- GPU awareness (NVIDIA monitoring)
-- Pre-warmed LLM for reduced cold-start latency
-- Robust natural language processing for data retrieval.
+```
+                        [ User Input / Shell Query ]
+                                     │
+                                     ▼
+                        [ Heuristic Intent Classifier ]
+                                     │
+                                     ▼
+                        [ LLM Action Plan Planner ]
+                                     │
+                                     ▼
+                        [ Structured Intent Payload ]
+                         (JSON: action, args, justification)
+                                     │
+                                     ▼
+                       [ EXPIRING CAPABILITY TOKEN ]
+                     (HMAC-SHA256 Signed by Operator)
+                                     │
+                                     ▼
+             /================================================\
+            ||      UNIX DOMAIN SOCKET IPC POLICY GATE        ||
+            ||         (Fails Closed / Root Owned)            ||
+            ||                                                ||
+            ||  1. Pydantic Schema Validator                  ||
+            ||  2. Token Signature & Expiry Verifier          ||
+            ||  3. Deterministic Target Allowlist             ||
+             \================================================/
+                                     │
+                                     ▼
+                       [ DETERMINISTIC HOST EXECUTOR ]
+                       (No Shell Interpolation / Args Only)
+                                     │
+                 ┌───────────────────┴───────────────────┐
+                 ▼                                       ▼
+       [ Mitigations & Services ]              [ Script Execution ]
+       (nftables, systemctl, ss)            (Bubblewrap Sandboxing Tier)
+```
 
-## Installation
+### 1. Sandboxing & Isolation (Bubblewrap / systemd-nspawn)
+Nested processes are confined via `bwrap` with `--unshare-all --new-session --die-with-parent`. Key directories (SSH credentials, database paths, user histories) are completely excluded from bind-mount targets. Resources are constrained using cgroup ceilings (CPU quota, memory limits, task quotas).
 
-### Prerequisites
-- Ollama server running (`mistral:instruct` and `nomic-embed-text` models)
-- Python 3.10+
-- PostgreSQL database
-- speech-dispatcher + Piper TTS (optional)
+### 2. Typed Policy Gate (Unix Domain Socket)
+The agent never runs raw shell commands. Privileged actions flow through the policy gate daemon listening on `/run/kaiacord/policy_gate.sock`.
+* **Diagnostics (Green Tier):** Reads `ss`, `ip route`, `nftables list` via direct subprocess calls.
+* **Mitigation (Yellow Tier):** Configures direct firewall blocks (`nftables drop`).
+* **Service Control (Yellow Tier):** Restarts system units within a static allowlist (e.g. `nginx`, `postgresql`, `ollama`, `chroma`).
+* **State Modification (Red Tier):** File modifications restricted to the workspace directory.
+* **Script Execution (Red Tier):** Runs scripts confined within Bubblewrap.
+
+### 3. High-Fidelity Local Telemetry Pipeline
+Observations are separated from execution. A telemetry daemon streams system metrics, process lifecycles via eBPF probes (`execve`, `tcp_connect`), and systemd D-Bus states. A **Telemetry Sanitizer** filters fields using static character allowlists to prevent prompt injections via attacker-controlled network strings.
+
+### 4. Separated Memory
+* **`beliefs.json` (Cognitive Store):** Manages social and personality memory (social preferences, conversation history). Subject to decay.
+* **`security_events.db` (Security Ledger):** Append-only database tracking security incidents (violations, failed validation, fail-closed events). Immutable and protected from agent modifications.
+
+---
+
+## 📂 Project Structure
+
+```
+Kaia/
+├── main.py                     # Entry point (starts CLI conversational session)
+├── README.md                   # Project documentation
+├── LICENSE.md                  # MIT License
+├── NOTICE.md                   # Third-party licensing notices
+├── requirements.txt            # Python dependencies
+├── .env                        # Environment configurations (database login credentials)
+│
+├── core/                       # Core system files
+│   ├── config.py               # Shared settings, prompt configurations, & allowlists
+│   ├── database_utils.py       # PostgreSQL structured memory utilities
+│   ├── kaia_cli.py             # System status gatherer & command generator
+│   └── utils.py                # ANSI coloring & Ollama model helper functions
+│
+├── security/                   # Hardened security subsystem
+│   ├── cognitive_wiring.py     # Affective state vectors (arousal, valence, energy)
+│   ├── db.py                   # Security audit database controller
+│   ├── host_executor.py        # Safe subprocess execution layer
+│   ├── policy_gate.py          # Unix domain socket validation daemon
+│   ├── schemas.py              # Pydantic validation schemas
+│   ├── telemetry_daemon.py     # eBPF monitoring hooks
+│   ├── telemetry_sanitizer.py  # Input sanitization against injection attacks
+│   └── threat_intel.py         # GeoLite2 & local reputation intelligence
+│
+├── toolbox/                    # Utility tools
+│   └── video_converter.py      # Video-to-GIF converter utility
+│
+├── tests/                      # Suite of verification tests
+│   ├── test_database_utils.py  # DB logic unit tests
+│   ├── test_heuristics.py      # Prompt classification tests
+│   ├── test_kaia_cli.py        # System status mock tests
+│   ├── verify_changes.py       # General imports & status verification
+│   ├── verify_security.py      # Socket, signing, and fail-closed logic validation
+│   ├── verify_status.py        # Console diagnostics validation
+│   └── verify_wrap.py          # Word wrap formatting tests
+│
+├── scripts/                    # Activation scripts
+│   └── activate_kaia_env.sh    # Main service launcher & virtual env activator
+│
+├── data/                       # general knowledge and persona markdown configuration
+└── storage/                    # ChromaDB, LlamaIndex, & PostgreSQL cache directory
+```
+
+---
+
+## 🚀 Getting Started
+
+### 1. Prerequisites (Arch Linux)
 ```bash
-# On Arch Linux:
-sudo pacman -S python python-pip postgresql
-yay -S piper-tts-bin speech-dispatcher piper-voices-en-us
+sudo pacman -S python python-pip postgresql bubblewrap
 sudo systemctl enable --now postgresql
-sudo systemctl enable --now speech-dispatcher.service
-```
-### Setup
-```bash
-git clone https://github.com/Ekco-S64QTN6/ollama_rag_agent.git
-cd kaia-assistant
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-### Prepare knowledge bases
-```bash
-mkdir -p data personal_context storage
 ```
 
-## Configuration
-
-Edit llamaindex_ollama_rag.py to customize:
-
-```python
-LLM_MODEL = "mistral:instruct"          # Primary chat model
-TTS_ENABLED = True                      # Auto-detect if unset
-CHROMA_DB_PATH = "./storage/chroma_db"  # Vector store location
-```
-
-## Secure Database Setup
-
-### 1. Create PostgreSQL User and Database**
-
+### 2. Database Configuration
+Create the PostgreSQL database and user:
 ```bash
 sudo -u postgres createuser --pwprompt kaiauser
 sudo -u postgres createdb -O kaiauser kaiadb
 ```
-
-### 2. Set Environment Variables:
-
-    Add to your shell profile (~/.bashrc, ~/.zshrc, or ~/.profile):
-
+Add credentials to your `.env` file in the root directory:
 ```bash
-echo 'export KAIA_DB_USER="kaiauser"' >> ~/.bashrc
-echo 'export KAIA_DB_PASS="your_secure_password"' >> ~/.bashrc
-echo 'export KAIA_DB_HOST="localhost"' >> ~/.bashrc
-echo 'export KAIA_DB_NAME="kaiadb"' >> ~/.bashrc
+export KAIA_DB_USER="kaiauser"
+export KAIA_DB_PASS="your_secure_password"
+export KAIA_DB_HOST="localhost"
+export KAIA_DB_NAME="kaiadb"
 ```
-Then reload:
+
+### 3. Virtual Environment & Dependencies
 ```bash
-source ~/.bashrc  # or source ~/.zshrc
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 ```
 
-### 3. Initialize Database Schema:
-The database schema will be automatically initialized when you start Kaia.
-
-Usage
-
-Start Kaia:
-```python
-python llamaindex_ollama_rag.py
-```
-First Run
-
-    Will build vector indexes from your knowledge files
-
-    Subsequent runs will load persisted indexes
-    
-## Interaction Examples
+### 4. Running Verification Suite
+Confirm the security boundaries and IPC communications are functioning correctly:
 ```bash
-# Execute system commands
-Query: check disk space
-Kaia (Command): df -h
-
-# Get explanations
-Query: explain ChromaDB
-Kaia: ChromaDB is an open-source vector database...
-
-# Check system status
-Query: /status
-[Displays real-time system metrics]
-
-# Store preferences
-Query: remember I prefer dark mode
-Kaia: Preference stored: 'dark_mode'
-
-# Recall preferences
-Query: what are my accessibility preferences?
-Kaia: Your preferences: dark_mode
-
-# Store personal facts
-Query: remember my partner's birthday is June 15
-Kaia: Fact stored: "My partner's birthday is June 15"
-
-# Exit session
-Query: exit
-Kaia: Session ended. Until next time!
+python tests/verify_security.py
+python tests/test_heuristics.py
 ```
-Troubleshooting
 
-    TTS not working: Verify spd-say "test" works first
+### 5. Launching Kaia
+Initialize all local dependencies (Ollama, ChromaDB, Postgres) and launch the CLI session:
+```bash
+./scripts/activate_kaia_env.sh
+```
 
-    Ollama timeouts: Increase request_timeout in config
+---
 
-    Missing persona: Ensure Kaia_Desktop_Persona.md exists in ./data
-
-    Database connection issues: Verify PostgreSQL is running and environment variables are set
-
-Contributing
-
-This project welcomes contributions for:
-
-    Documentation improvements
-
-    Additional TTS backend integrations
-
-    Enhanced safety checks for command execution
-
-    New features and bug fixes
-
-License
-
-MIT License - See LICENSE.md
+## ⚖️ License
+Licensed under the [MIT License](LICENSE.md). Third-party dependencies are detailed in [NOTICE.md](NOTICE.md).

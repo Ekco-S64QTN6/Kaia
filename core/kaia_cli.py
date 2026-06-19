@@ -415,16 +415,56 @@ class KaiaCLI:
             logger.error(f"Error listing directory contents for '{path}': {e}")
             return [f"Error: Failed to list directory contents. Reason: {e}"]
 
-    # Command Generation
+    # Command Generation (Structured Security Intent)
     def generate_command(self, user_query: str) -> Tuple[str, Optional[str]]:
-        """Generates a shell command based on user query using LLM."""
+        """Generates a structured security intent JSON payload based on user query using LLM."""
+        system_prompt = (
+            "You are a specialized AI assistant that translates a user's system request into a structured security intent JSON payload to be processed by a host validation gate.\n"
+            "You must respond ONLY with a valid JSON object. Do not include any formatting, markdown backticks, or conversational text.\n\n"
+            "The JSON object must have one of these formats:\n\n"
+            "1. System Diagnostics:\n"
+            "{\n"
+            "  \"action\": \"diagnostics\",\n"
+            "  \"query_type\": \"ss\" | \"ip_route\" | \"nft_list\",\n"
+            "  \"args\": [\"arg1\", \"arg2\", ...],\n"
+            "  \"justification\": \"Detailed explanation of why this action is safe and necessary\",\n"
+            "  \"session_id\": \"sess_default\"\n"
+            "}\n\n"
+            "2. Mitigation (Block IP):\n"
+            "{\n"
+            "  \"action\": \"block_ip\",\n"
+            "  \"target_ip\": \"IP_address\",\n"
+            "  \"protocol\": \"tcp\" | \"udp\" | \"all\",\n"
+            "  \"port\": integer_port_or_null,\n"
+            "  \"justification\": \"Detailed justification explaining anomaly/alert details\",\n"
+            "  \"session_id\": \"sess_default\"\n"
+            "}\n\n"
+            "3. Service Control:\n"
+            "{\n"
+            "  \"action\": \"restart_service\",\n"
+            "  \"service_name\": \"nginx\" | \"postgresql\" | \"ollama\" | \"chroma\",\n"
+            "  \"justification\": \"Detailed justification explaining unit health degradation\",\n"
+            "  \"session_id\": \"sess_default\"\n"
+            "}\n\n"
+            "4. State Modification:\n"
+            "{\n"
+            "  \"action\": \"write_file\",\n"
+            "  \"filepath\": \"relative_or_absolute_path_in_workspace\",\n"
+            "  \"content\": \"Full contents to write to the file\",\n"
+            "  \"justification\": \"Detailed justification of why file edit is needed\",\n"
+            "  \"session_id\": \"sess_default\"\n"
+            "}\n\n"
+            "Ensure your response is valid JSON and maps strictly to one of these formats."
+        )
+
         payload = {
             "model": config.DEFAULT_COMMAND_MODEL,
             "messages": [
-                {"role": "system", "content": config.COMMAND_GENERATION_SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": str(user_query)}
             ],
-            "stream": False
+            "stream": False,
+            "format": "json"
         }
         try:
             model_to_use, error_msg = utils.check_ollama_model_availability(config.DEFAULT_COMMAND_MODEL, config.LLM_MODEL)
@@ -435,37 +475,17 @@ class KaiaCLI:
 
             response = requests.post("http://localhost:11434/api/chat", json=payload, timeout=config.TIMEOUT_SECONDS)
             response.raise_for_status()
-            raw_command = response.json()["message"]["content"].strip()
-            logger.debug(f"Raw command from LLM: '{raw_command}'")
-
-            clean_command = raw_command.strip()
-            clean_command = re.sub(r'^\s*Assistant:\s*', '', clean_command)
-            clean_command = re.sub(r'^\s*`+bash\s*|\s*`+$', '', clean_command)
-            clean_command = clean_command.strip()
-            logger.debug(f"Cleaned command: '{clean_command}'")
-
-            unsafe_operators = [';', '&&', '||', '`', '$(']
-            if any(op in clean_command for op in unsafe_operators):
-                logger.warning(f"Unsafe command filtered: {clean_command}")
-                return "", "ERROR: Generated command contained unsafe operators."
-
-            is_safe = False
-            # Check if the command starts with any of the allowed commands
-            for safe_cmd in config.SAFE_COMMAND_ALLOWLIST:
-                if clean_command.startswith(safe_cmd) or clean_command.startswith(f"sudo {safe_cmd}"):
-                    is_safe = True
-                    break
-
-            if not is_safe:
-                logger.warning(f"Command not in allowlist: '{clean_command}'")
-                return "", "ERROR: Command not in allowlist."
-
-            if not clean_command:
-                return "", "ERROR: Empty command generated"
-
-            return clean_command, None
+            raw_response = response.json()["message"]["content"].strip()
+            
+            clean_json = raw_response.strip()
+            clean_json = re.sub(r'^```json\s*', '', clean_json)
+            clean_json = re.sub(r'\s*```$', '', clean_json)
+            
+            # Verify json validity
+            json.loads(clean_json)
+            return clean_json, None
         except Exception as e:
-            return "", f"Failed to generate command: {e}"
+            return "", f"Failed to generate structured intent: {e}"
 
     # Command Execution
     def execute_command(self, command: str, cwd: Optional[str] = None) -> Tuple[bool, str, str]:

@@ -9,8 +9,11 @@ from unittest.mock import MagicMock, patch
 def mock_get_terminal_size(fallback=None):
     return os.terminal_size((40, 24)) # Small width to force wrapping
 
-# Add current directory to sys.path
-sys.path.append(os.getcwd())
+# Add project directories to sys.path
+import pathlib
+root_dir = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(root_dir))
+sys.path.insert(0, str(root_dir / "core"))
 
 # Mock config and other dependencies
 sys.modules['config'] = MagicMock()
@@ -21,7 +24,7 @@ sys.modules['config'].COLOR_RESET = ""
 # Import the function to test, mocking logging to avoid file access
 with patch('logging.handlers.RotatingFileHandler', MagicMock()):
     with patch('shutil.get_terminal_size', side_effect=mock_get_terminal_size):
-        from llamaindex_ollama_rag import stream_and_print_response
+        from main import stream_and_print_response
 
 class MockStream:
     def __init__(self, tokens, delay=0.0):

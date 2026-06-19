@@ -2,13 +2,18 @@ import sys
 import os
 import logging
 from unittest.mock import patch, MagicMock
+import pathlib
+
+# Set up paths relative to this script's directory
+root_dir = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(root_dir))
+sys.path.insert(0, str(root_dir / "core"))
+
 import config
 
 # Mock RotatingFileHandler to prevent it from opening the file
 with patch('logging.handlers.RotatingFileHandler', MagicMock()):
-    # Add current directory to sys.path so we can import from llamaindex_ollama_rag
-    sys.path.append(os.getcwd())
-    from llamaindex_ollama_rag import classify_intent_heuristically
+    from main import classify_intent_heuristically
 
 def test_heuristics():
     test_cases = [

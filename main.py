@@ -12,6 +12,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union, Callable
 import re
 
+# Add core directory to sys.path so we can import config, utils, database_utils, and kaia_cli
+sys.path.insert(0, str(Path(__file__).resolve().parent / "core"))
+
 import chromadb
 import requests
 from contextlib import redirect_stdout, contextmanager
@@ -270,78 +273,176 @@ def handle_store_data(state: AppState, content: str) -> str:
     print(f"\n{config.COLOR_BLUE}Kaia: {response}{config.COLOR_RESET}")
     return response
 
+def send_to_policy_gate(payload: dict) -> dict:
+    """Connects to the Policy Gate Unix socket and executes the secure transaction."""
+    import socket
+    import json
+    import config
+    
+    sockets_to_try = [config.POLICY_GATE_SOCKET, config.POLICY_GATE_SOCKET_FALLBACK]
+    last_err = None
+    
+    for sock_path in sockets_to_try:
+        try:
+            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            client.settimeout(5.0)
+            client.connect(sock_path)
+            client.sendall(json.dumps(payload).encode('utf-8'))
+            response = client.recv(65536).decode('utf-8')
+            client.close()
+            return json.loads(response)
+        except Exception as e:
+            last_err = e
+            continue
+            
+    raise RuntimeError(f"Policy gate socket connection failed: {last_err}")
+
 def handle_command(state: AppState, content: str) -> str:
-    print(f"\n{config.COLOR_BLUE}Kaia (Command Mode):{config.COLOR_RESET}")
-    command, error = state.cli.generate_command(str(content))
+    import json
+    import hashlib
+    print(f"\n{config.COLOR_BLUE}Kaia (Secure Command Gate):{config.COLOR_RESET}")
+    
+    # 1. Generate structured intent from query
+    intent_json, error = state.cli.generate_command(str(content))
     if error:
-        response = f"Command generation failed: {error}"
+        response = f"Secure intent generation failed: {error}"
         print(f"{config.COLOR_RED}{response}{config.COLOR_RESET}")
         return response
 
-    print(f"\n{config.COLOR_YELLOW}┌── Proposed Command ──┐{config.COLOR_RESET}")
-    print(f"{config.COLOR_BLUE}{command}{config.COLOR_RESET}")
-    print(f"{config.COLOR_YELLOW}└──────────────────────┘{config.COLOR_RESET}")
-    confirm = input(f"{config.COLOR_YELLOW}Execute? (y/N): {config.COLOR_RESET}").lower().strip()
+    try:
+        payload = json.loads(intent_json)
+    except json.JSONDecodeError as e:
+        response = f"Failed to parse generated intent JSON: {e}"
+        print(f"{config.COLOR_RED}{response}{config.COLOR_RESET}")
+        return response
 
+    # Force correct session ID
+    session_id = f"sess_{int(time.time())}"
+    payload["session_id"] = session_id
+
+    # 2. Present proposed structured intent to user
+    print(f"\n{config.COLOR_YELLOW}┌── Proposed Security Policy Intent ──┐{config.COLOR_RESET}")
+    print(json.dumps(payload, indent=2))
+    print(f"{config.COLOR_YELLOW}└─────────────────────────────────────┘{config.COLOR_RESET}")
+    
+    confirm = input(f"{config.COLOR_YELLOW}Approve intent and issue capability token? (y/N): {config.COLOR_RESET}").lower().strip()
     if confirm != 'y':
-        response = f"Command cancelled: {command}"
+        response = "Action cancelled by operator."
         print(f"{config.COLOR_BLUE}{response}{config.COLOR_RESET}")
         return response
 
-    if command.strip().startswith("cd "):
-        target_dir = command.strip()[3:].strip()
-        try:
-            new_path = (state.current_working_directory / os.path.expanduser(target_dir)).resolve()
-            if new_path.is_dir():
-                state.current_working_directory = new_path
-                response = f"Changed directory to: {state.current_working_directory}"
-                print(f"{config.COLOR_GREEN}{response}{config.COLOR_RESET}")
-            else:
-                response = f"Error: Directory not found: {target_dir}"
-                print(f"{config.COLOR_RED}{response}{config.COLOR_RESET}")
-        except Exception as e:
-            response = f"Error changing directory: {e}"
-            print(f"{config.COLOR_RED}{response}{config.COLOR_RESET}")
+    # 3. Generate signed capability token (Human-in-the-loop operator approval)
+    from security.policy_gate import generate_capability_token
+    action = payload.get("action")
+    if action == "diagnostics":
+        target = payload.get("query_type", "*")
+    elif action == "block_ip":
+        target = payload.get("target_ip", "*")
+    elif action == "restart_service":
+        target = payload.get("service_name", "*")
+    elif action == "write_file":
+        target = payload.get("filepath", "*")
+    elif action == "run_script":
+        target = payload.get("script_name", "*")
     else:
-        success, stdout, stderr = state.cli.execute_command(command, cwd=str(state.current_working_directory))
-        if success:
-            response = f"Command executed successfully.\n{stdout}"
-            print(f"{config.COLOR_GREEN}{response}{config.COLOR_RESET}")
-            if stderr: print(f"{config.COLOR_YELLOW}Stderr:\n{stderr}{config.COLOR_RESET}")
-        else:
-            response = f"Command failed.\nStderr: {stderr}\nStdout: {stdout}"
-            print(f"{config.COLOR_RED}{response}{config.COLOR_RESET}")
+        target = "*"
+        
+    token = generate_capability_token(action, target)
+    payload["capability_token"] = token
+
+    # 4. Transmit payload to Unix socket server (Fail-closed execution)
+    from security.db import log_security_event
+    try:
+        response_dict = send_to_policy_gate(payload)
+    except Exception as e:
+        # Fail closed
+        log_security_event(
+            event_type="policy_gate_unavailable",
+            source="client",
+            actor="kaiacord",
+            payload_hash=hashlib.sha256(intent_json.encode()).hexdigest(),
+            disposition="blocked",
+            session_id=session_id
+        )
+        print(f"{config.COLOR_RED}CRITICAL SECURITY FAULT: Policy gate unavailable. Request blocked.{config.COLOR_RESET}")
+        return "ERROR: Policy gate connection failed (Fail-Closed triggered)."
+
+    # 5. Display execution result
+    status = response_dict.get("status")
+    if status == "success" or response_dict.get("stdout") or response_dict.get("stderr"):
+        stdout = response_dict.get("stdout", "")
+        stderr = response_dict.get("stderr", "")
+        response = f"Action executed successfully.\nStdout: {stdout}"
+        print(f"{config.COLOR_GREEN}Action completed.{config.COLOR_RESET}")
+        if stdout: print(f"Stdout:\n{stdout}")
+        if stderr: print(f"{config.COLOR_YELLOW}Stderr:\n{stderr}{config.COLOR_RESET}")
+    else:
+        msg = response_dict.get("message", "Unknown denial reason")
+        response = f"Action denied by Policy Gate: {msg}"
+        print(f"{config.COLOR_RED}{response}{config.COLOR_RESET}")
+
     return response
 
 def handle_run_script(state: AppState, content: str) -> str:
     script_name = content
-    script_path = os.path.expanduser(os.path.join("~", script_name))
-
-    if script_name not in config.SCRIPT_ALLOWLIST:
-        response = f"Error: Script '{script_name}' is not in the allowlist."
-        print(f"{config.COLOR_RED}{response}{config.COLOR_RESET}")
-        return response
-
-    if not (os.path.exists(script_path) and os.path.isfile(script_path) and os.access(script_path, os.X_OK)):
-        response = f"Error: Script '{script_name}' not found, not a file, or not executable."
-        print(f"{config.COLOR_RED}{response}{config.COLOR_RESET}")
-        return response
-
-    print(f"\n{config.COLOR_BLUE}Kaia (Running Script): {script_path}{config.COLOR_RESET}")
-    confirm = input(f"{config.COLOR_YELLOW}Execute script? (y/N): {config.COLOR_RESET}").lower().strip()
+    session_id = f"sess_{int(time.time())}"
+    
+    # 1. Build request payload
+    payload = {
+        "action": "run_script",
+        "script_name": script_name,
+        "justification": f"Operator requested script execution for: {script_name}",
+        "session_id": session_id
+    }
+    
+    print(f"\n{config.COLOR_BLUE}Kaia (Secure Script Sandboxing):{config.COLOR_RESET}")
+    print(f"\n{config.COLOR_YELLOW}┌── Proposed Security Policy Intent ──┐{config.COLOR_RESET}")
+    print(json.dumps(payload, indent=2))
+    print(f"{config.COLOR_YELLOW}└─────────────────────────────────────┘{config.COLOR_RESET}")
+    
+    confirm = input(f"{config.COLOR_YELLOW}Approve execution and issue capability token? (y/N): {config.COLOR_RESET}").lower().strip()
     if confirm != 'y':
         response = f"Script execution cancelled: {script_name}"
         print(f"{config.COLOR_BLUE}{response}{config.COLOR_RESET}")
         return response
 
-    success, stdout, stderr = state.cli.execute_command(script_path)
-    if success:
-        response = f"Script executed successfully.\n{stdout}"
-        print(f"{config.COLOR_GREEN}{response}{config.COLOR_RESET}")
+    # 2. Generate signed capability token
+    from security.policy_gate import generate_capability_token
+    token = generate_capability_token("run_script", script_name)
+    payload["capability_token"] = token
+
+    # 3. Transmit to Unix socket policy gate (Fail-closed execution)
+    from security.db import log_security_event
+    import hashlib
+    try:
+        response_dict = send_to_policy_gate(payload)
+    except Exception as e:
+        # Fail closed
+        log_security_event(
+            event_type="policy_gate_unavailable",
+            source="client",
+            actor="kaiacord",
+            payload_hash=hashlib.sha256(json.dumps(payload).encode()).hexdigest(),
+            disposition="blocked",
+            session_id=session_id
+        )
+        print(f"{config.COLOR_RED}CRITICAL SECURITY FAULT: Policy gate unavailable. Request blocked.{config.COLOR_RESET}")
+        return "ERROR: Policy gate connection failed (Fail-Closed triggered)."
+
+    # 4. Display result
+    status = response_dict.get("status")
+    if status == "success" or response_dict.get("stdout") or response_dict.get("stderr"):
+        stdout = response_dict.get("stdout", "")
+        stderr = response_dict.get("stderr", "")
+        response = f"Script executed successfully.\nStdout: {stdout}"
+        print(f"{config.COLOR_GREEN}Script completed inside Bubblewrap sandbox.{config.COLOR_RESET}")
+        if stdout: print(f"Stdout:\n{stdout}")
         if stderr: print(f"{config.COLOR_YELLOW}Stderr:\n{stderr}{config.COLOR_RESET}")
     else:
-        response = f"Script failed.\nStderr: {stderr}\nStdout: {stdout}"
+        msg = response_dict.get("message", "Unknown denial reason")
+        response = f"Script execution denied by Policy Gate: {msg}"
         print(f"{config.COLOR_RED}{response}{config.COLOR_RESET}")
+
     return response
 
 def handle_system_status(state: AppState, content: str) -> str:
@@ -488,6 +589,20 @@ def handle_chat(state: AppState, content: str, start_time: float) -> str:
     response_stream = state.pure_chat_engine.stream_chat(content)
     return stream_and_print_response(response_stream, start_time)
 
+def classify_intent_heuristically(query: str) -> Optional[Dict[str, str]]:
+    """Heuristically classifies common intents to avoid unnecessary LLM calls."""
+    query_lower = query.lower().strip()
+    if query_lower in ["status", "system status", "system_status", "kaia status"]:
+        return {"action": "system_status", "content": query}
+    if any(keyword in query_lower for keyword in ["write a story", "compose a poem", "tell me a story"]):
+        return {"action": "text_generation", "content": query}
+    
+    # Check for direct command pattern (e.g. ls, df, ps, etc.)
+    words = query_lower.split()
+    if words and words[0] in config.SAFE_COMMAND_ALLOWLIST:
+        return {"action": "command", "content": query}
+    return None
+
 # --- Core Utilities ---
 def generate_action_plan(user_input: str) -> Dict[str, str]:
     """Generates an action plan (e.g., command, knowledge query) based on user input."""
@@ -633,7 +748,9 @@ def process_user_input(state: AppState, query: str, action_handlers: Dict[str, C
         if lower_query in ['exit', 'quit', '/exit', '/quit']:
             plan = {"action": "chat", "content": "Goodbye!"}
         else:
-            plan = generate_action_plan(query)
+            plan = classify_intent_heuristically(query)
+            if not plan:
+                plan = generate_action_plan(query)
         
         action = plan.get("action", "chat")
         content = plan.get("content", query)
@@ -673,6 +790,16 @@ def process_user_input(state: AppState, query: str, action_handlers: Dict[str, C
 def main():
     # 1. Initialize application state and components
     state = AppState()
+    
+    # Initialize security DB
+    import security.db
+    security.db.initialize_db()
+
+    # Start policy gate Unix Domain Socket Server Daemon
+    from security.policy_gate import PolicyGate
+    policy_gate = PolicyGate()
+    policy_gate.start()
+
     embedding_dim = initialize_models()
     load_persona(state)
     state.vector_store = initialize_vector_db(embedding_dim)
@@ -710,22 +837,25 @@ def main():
 """)
 
     # 4. Main loop
-    while True:
-        try:
-            query = input("\nYou: ").strip()
-            if not query: continue
-            if query.lower() in ['exit', 'quit', '/exit', '/quit']:
-                print(f"{config.COLOR_BLUE}Kaia: Session ended.{config.COLOR_RESET}")
+    try:
+        while True:
+            try:
+                query = input("\nYou: ").strip()
+                if not query: continue
+                if query.lower() in ['exit', 'quit', '/exit', '/quit']:
+                    print(f"{config.COLOR_BLUE}Kaia: Session ended.{config.COLOR_RESET}")
+                    break
+
+                process_user_input(state, query, action_handlers)
+
+            except KeyboardInterrupt:
+                print(f"\n{config.COLOR_BLUE}Kaia: Exiting gracefully...{config.COLOR_RESET}")
                 break
-
-            process_user_input(state, query, action_handlers)
-
-        except KeyboardInterrupt:
-            print(f"\n{config.COLOR_BLUE}Kaia: Exiting gracefully...{config.COLOR_RESET}")
-            break
-        except Exception as e:
-            logger.exception("Unexpected error in main loop")
-            print(f"{config.COLOR_RED}System error: {e}{config.COLOR_RESET}")
+            except Exception as e:
+                logger.exception("Unexpected error in main loop")
+                print(f"{config.COLOR_RED}System error: {e}{config.COLOR_RESET}")
+    finally:
+        policy_gate.stop()
 
 if __name__ == "__main__":
     main()

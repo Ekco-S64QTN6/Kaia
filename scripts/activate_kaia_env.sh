@@ -6,7 +6,7 @@ COLOR_YELLOW="\033[93m"
 COLOR_RED="\033[91m"
 COLOR_RESET="\033[0m"
 
-KAIA_PROJECT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+KAIA_PROJECT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." &> /dev/null && pwd )"
 
 cd "$KAIA_PROJECT_DIR" || { echo -e "${COLOR_RED}Error: Could not navigate to project directory: $KAIA_PROJECT_DIR. Exiting.${COLOR_RESET}"; exit 1; }
 
@@ -75,6 +75,6 @@ fi
 
 echo -e "${COLOR_BLUE}All services checked. Starting Kaia CLI application...${COLOR_RESET}"
 
-"$KAIA_PROJECT_DIR/.venv/bin/python" llamaindex_ollama_rag.py
+"$KAIA_PROJECT_DIR/.venv/bin/python" "$KAIA_PROJECT_DIR/main.py"
 
 echo -e "${COLOR_BLUE}Kaia CLI application session ended.${COLOR_RESET}"

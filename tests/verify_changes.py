@@ -1,9 +1,12 @@
 import sys
 import os
 import logging
+import pathlib
 
-# Add the project directory to sys.path
-sys.path.append('/home/ekco/github/ollama_rag_agent')
+# Add the project directories to sys.path
+root_dir = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(root_dir))
+sys.path.insert(0, str(root_dir / "core"))
 
 try:
     from kaia_cli import KaiaCLI
@@ -25,10 +28,10 @@ try:
     
     print("\nTesting RAG Module Import...")
     try:
-        import llamaindex_ollama_rag
-        print("Successfully imported llamaindex_ollama_rag")
+        import main
+        print("Successfully imported main")
     except ImportError as e:
-        print(f"Failed to import llamaindex_ollama_rag: {e}")
+        print(f"Failed to import main: {e}")
     except Exception as e:
         print(f"Error during import: {e}")
 

@@ -9,9 +9,9 @@ TTS_ENABLED = False
 SQL_RAG_ENABLED = True
 
 # Ollama Model Configuration
-LLM_MODEL = "llama2:7b-chat"  # For chat generation and creative content
+LLM_MODEL = "gemma3:12b"  # For chat generation and creative content
 EMBEDDING_MODEL = "nomic-embed-text:latest"
-DEFAULT_COMMAND_MODEL = "mistral:instruct"  # For intent understanding and planning
+DEFAULT_COMMAND_MODEL = "gemma3:12b"  # For intent understanding and planning
 
 # Directory Paths
 BASE_DIR = Path(__file__).resolve().parent
@@ -166,3 +166,12 @@ SCRIPT_ALLOWLIST = [
     "find-file.sh",
     "update-system.sh"
 ]
+
+# Security Subsystem Configuration
+SECURITY_DB_PATH = str(PERSIST_DIR / "security_events.db")
+AUDIT_LOG_PATH = str(PERSIST_DIR / "audit_ledger.json")
+POLICY_GATE_SOCKET = "/run/kaiacord/policy_gate.sock"
+POLICY_GATE_SOCKET_FALLBACK = "/tmp/policy_gate.sock"
+CAPABILITY_TOKEN_SECRET = "kaia_secure_signing_secret_key_2026"  # In production, load from secure environment
+WORKSPACE_DIR = str(BASE_DIR)
+
