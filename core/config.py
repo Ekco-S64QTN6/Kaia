@@ -194,8 +194,8 @@ LATTICE_LEVELS = ["none", "namespace", "sandbox-exec", "bwrap", "gvisor", "firec
 GLOBAL_LATTICE_LEVEL = "bwrap"
 WORKSPACE_LATTICE_LEVEL = "none"
 
-GLOBAL_PERMISSIONS = {"diagnostics", "block_ip", "restart_service", "write_file", "run_script", "ffmpeg"}
-WORKSPACE_PERMISSIONS = {"diagnostics", "block_ip", "restart_service", "write_file", "run_script", "ffmpeg"}
+GLOBAL_PERMISSIONS = {"diagnostics", "block_ip", "restart_service", "write_file", "run_script"}
+WORKSPACE_PERMISSIONS = {"diagnostics", "block_ip", "restart_service", "write_file", "run_script"}
 
 # cgroup resource ceilings
 CGROUP_CPU_QUOTA = "25%"

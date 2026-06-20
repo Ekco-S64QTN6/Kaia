@@ -58,16 +58,23 @@ Nested processes are confined via `bwrap` with `--unshare-all --new-session --di
 The agent never runs raw shell commands. Privileged actions flow through the policy gate daemon listening on `/run/kaiacord/policy_gate.sock`.
 * **Diagnostics (Green Tier):** Reads `ss`, `ip route`, `nftables list` via direct subprocess calls.
 * **Mitigation (Yellow Tier):** Configures direct firewall blocks (`nftables drop`).
-* **Service Control (Yellow Tier):** Restarts system units within a static allowlist (e.g. `nginx`, `postgresql`, `ollama`, `chroma`).
+* **Service Control (Yellow Tier):** Restarts system units within a static allowlist (e.g. `nginx`, `postgresql`, `ollama`).
 * **State Modification (Red Tier):** File modifications restricted to the workspace directory.
 * **Script Execution (Red Tier):** Runs scripts confined within Bubblewrap.
 
-### 3. High-Fidelity Local Telemetry Pipeline
-Observations are separated from execution. A telemetry daemon streams system metrics, process lifecycles via eBPF probes (`execve`, `tcp_connect`), and systemd D-Bus states. A **Telemetry Sanitizer** filters fields using static character allowlists to prevent prompt injections via attacker-controlled network strings.
+### 3. Telemetry & Host Integrity Monitoring (FIM / Guardian Matrix)
+Observations are separated from execution. The system runs an active telemetry daemon implementing:
+* **Integrity Auditing (FIM)**: Intercepts kernel file transactions via `fanotify` and deep eBPF syscall hooks (`sys_enter_openat2`, `sys_enter_unlinkat`, `sys_enter_write`). If workspace binaries or critical system paths are altered, the daemon executes YARA header checks and halts execution (Fail-Closed) before process context initialization.
+* **Network & Device Tracking**: Passive raw socket listeners capture local broadcasts (ARP, mDNS, LLMNR, NetBIOS) to profile LAN assets and detect unmanaged network interfaces.
+* **Proactive Honeypots**: Leaves decoy file tokens and spawns decoy network ports. Scanner connections to these traps trigger instant, automated Policy Gate rules to drop the source IP connection using `nftables`.
+* **Input Sanitization**: A **Telemetry Sanitizer** filters incoming metrics using character allowlists to block prompt injection attacks.
 
-### 4. Separated Memory
-* **`beliefs.json` (Cognitive Store):** Manages social and personality memory (social preferences, conversation history). Subject to decay.
-* **`security_events.db` (Security Ledger):** Append-only database tracking security incidents (violations, failed validation, fail-closed events). Immutable and protected from agent modifications.
+### 4. Offline Threat Intelligence & Rule Compiler
+To evaluate network alerts privately, the threat intel module utilizes MaxMind GeoLite2 databases and versioned Shodan SQLite caches (InternetDB, DNSDB, CVEDB) stored locally under `storage/threat_intel/`. A dynamic DuckDB Parquet pipeline calculates scan-over-scan changes ($\Delta S = S_t \setminus S_{t-1}$) to isolate emerging host exposures, which are programmatically compiled into valid YARA/SIGMA rules via an AST generator.
+
+### 5. Memory Separation & State Modulation
+* **`beliefs.json` (Cognitive working memory):** Capped at 50 slots under `storage/beliefs.json`. Real-time event triggers update Kaia's assertions on alert capture, dynamically updating her `AffectiveState` (valence, arousal, energy) and chat prompts.
+* **`security_events.db` (Security Ledger):** Uncapped, indexed, append-only SQLite ledger tracking security audits, violations, and fail-closed incidents.
 
 ---
 
@@ -112,7 +119,11 @@ Kaia/
 ├── scripts/                    # Activation scripts
 │   └── activate_kaia_env.sh    # Main service launcher & virtual env activator
 │
-└── storage/                    # ChromaDB, LlamaIndex, & PostgreSQL cache directory
+└── storage/                    # Databases, logs, and threat intelligence cache directory
+    ├── beliefs.json            # 50-cap revisable cognitive belief store
+    ├── security_events.db      # Append-only security audit ledger
+    ├── audit_ledger.json       # Policy Gate audit ledger
+    └── threat_intel/           # Offline threat intelligence databases (SQLite, MMDB, Parquet)
 ```
 
 ---

@@ -55,6 +55,13 @@ class TestKaiaCLI(unittest.TestCase):
             parsed = json.loads(command_json)
             self.assertEqual(parsed["action"], "diagnostics")
             self.assertEqual(parsed["query_type"], "ss")
+            
+            # Stricter Pydantic schema validation as required by coding spec #4
+            from security.schemas import DiagnosticsRequest
+            try:
+                req = DiagnosticsRequest(**parsed)
+            except Exception as e:
+                self.fail(f"Pydantic validation failed for generated command schema: {e}")
 
     @patch('requests.post')
     def test_generate_command_invalid_json(self, mock_post):

@@ -50,14 +50,6 @@ class ScriptExecutionRequest(BaseModel):
     session_id: str
 
 
-class FfmpegRequest(BaseModel):
-    action: Literal["ffmpeg"] = "ffmpeg"
-    args: List[str] = Field(default_factory=list)
-    justification: str
-    capability_token: str
-    session_id: str
-
-
 class AuditRecord(BaseModel):
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     actor: str = "kaiacord"

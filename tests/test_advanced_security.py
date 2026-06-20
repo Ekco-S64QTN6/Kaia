@@ -33,7 +33,7 @@ class TestAdvancedSecurity(unittest.TestCase):
         # Override config settings for testing lattice
         config.GLOBAL_LATTICE_LEVEL = "bwrap"
         config.WORKSPACE_LATTICE_LEVEL = "none"
-        config.GLOBAL_PERMISSIONS = {"diagnostics", "block_ip", "restart_service", "write_file", "run_script", "ffmpeg"}
+        config.GLOBAL_PERMISSIONS = {"diagnostics", "block_ip", "restart_service", "write_file", "run_script"}
         config.WORKSPACE_PERMISSIONS = {"diagnostics", "write_file", "run_script"} # restart_service is excluded in workspace
 
     def test_lattice_intersection_denial(self):
