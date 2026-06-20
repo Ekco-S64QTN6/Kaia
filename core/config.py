@@ -21,16 +21,19 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Load environment variables from .env in repo root
 load_dotenv(BASE_DIR / ".env")
 
-GENERAL_KNOWLEDGE_DIR = BASE_DIR / "data"
-PERSONAL_CONTEXT_DIR = BASE_DIR / "personal_context"
-PERSONA_DIR = BASE_DIR / "data"
+GENERAL_KNOWLEDGE_DIR = BASE_DIR / "core" / "data"
+PERSONAL_CONTEXT_DIR = BASE_DIR / "core" / "personal_context"
+PERSONA_DIR = BASE_DIR / "core" / "data"
 PERSIST_DIR = BASE_DIR / "storage"
 DOWNLOADS_DIR = Path.home() / "Downloads"
+LOG_DIR = BASE_DIR / "logs"
+LOG_FILE_PATH = LOG_DIR / "kaia.log"
 
 # Ensure directories exist
 GENERAL_KNOWLEDGE_DIR.mkdir(exist_ok=True)
 PERSONAL_CONTEXT_DIR.mkdir(exist_ok=True)
 PERSIST_DIR.mkdir(exist_ok=True)
+LOG_DIR.mkdir(exist_ok=True)
 
 # ChromaDB Configuration
 CHROMA_DB_PATH = str(PERSIST_DIR / "chroma_db")
@@ -178,8 +181,30 @@ SECURITY_DB_PATH = str(PERSIST_DIR / "security_events.db")
 AUDIT_LOG_PATH = str(PERSIST_DIR / "audit_ledger.json")
 POLICY_GATE_SOCKET = "/run/kaiacord/policy_gate.sock"
 POLICY_GATE_SOCKET_FALLBACK = "/tmp/policy_gate.sock"
-CAPABILITY_TOKEN_SECRET = os.environ.get("KAIA_CAPABILITY_SECRET")
-if not CAPABILITY_TOKEN_SECRET:
-    raise RuntimeError("Critical Security Configuration Error: KAIA_CAPABILITY_SECRET environment variable is not set.")
+try:
+    CAPABILITY_TOKEN_SECRET = os.environ["KAIA_CAPABILITY_TOKEN_SECRET"]
+except KeyError:
+    import sys
+    print("FATAL: KAIA_CAPABILITY_TOKEN_SECRET environment variable not set.", file=sys.stderr)
+    sys.exit(1)
 WORKSPACE_DIR = str(BASE_DIR)
+
+# Restrictiveness Lattice Configuration
+LATTICE_LEVELS = ["none", "namespace", "sandbox-exec", "bwrap", "gvisor", "firecracker", "auto"]
+GLOBAL_LATTICE_LEVEL = "bwrap"
+WORKSPACE_LATTICE_LEVEL = "none"
+
+GLOBAL_PERMISSIONS = {"diagnostics", "block_ip", "restart_service", "write_file", "run_script", "ffmpeg"}
+WORKSPACE_PERMISSIONS = {"diagnostics", "block_ip", "restart_service", "write_file", "run_script", "ffmpeg"}
+
+# cgroup resource ceilings
+CGROUP_CPU_QUOTA = "25%"
+CGROUP_MEMORY_MAX = "2G"
+CGROUP_TASKS_MAX = 128
+CGROUP_IO_WEIGHT = 50
+
+# Service restart frequency threshold policies
+RESTART_MAX_FREQUENCY_COUNT = 3
+RESTART_MAX_FREQUENCY_WINDOW_SECONDS = 300
+
 

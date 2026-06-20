@@ -9,6 +9,8 @@ root_dir = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(root_dir))
 sys.path.insert(0, str(root_dir / "core"))
 
+import os
+os.environ.setdefault("KAIA_CAPABILITY_TOKEN_SECRET", "test_signing_secret_key_2026")
 import config
 
 # Mock RotatingFileHandler to prevent it from opening the file

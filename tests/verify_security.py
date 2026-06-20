@@ -4,6 +4,7 @@ import socket
 import sys
 import hashlib
 import os
+os.environ.setdefault("KAIA_CAPABILITY_TOKEN_SECRET", "test_signing_secret_key_2026")
 
 # Set relative directory paths
 import pathlib
@@ -14,6 +15,51 @@ sys.path.insert(0, str(root_dir / "core"))
 import config
 from security.policy_gate import PolicyGate, generate_capability_token, verify_capability_token
 import security.db
+
+def send_framed_request(socket_path, flat_payload):
+    import uuid
+    # Nest the flat request payload into the required IPC Request Schema
+    request_id = str(uuid.uuid4())
+    nested_payload = {
+        "request_id": request_id,
+        "action": flat_payload.get("action"),
+        "payload": {k: v for k, v in flat_payload.items() if k not in ["action", "capability_token"]},
+        "capability_token": flat_payload.get("capability_token")
+    }
+
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    client.connect(socket_path)
+    
+    # Send length-prefixed frame
+    payload_bytes = json.dumps(nested_payload).encode('utf-8')
+    header = len(payload_bytes).to_bytes(4, byteorder='big')
+    client.sendall(header + payload_bytes)
+    
+    # Receive length-prefixed response
+    header_resp = bytearray()
+    while len(header_resp) < 4:
+        packet = client.recv(4 - len(header_resp))
+        if not packet:
+            raise RuntimeError("Connection closed while reading header")
+        header_resp.extend(packet)
+    length = int.from_bytes(header_resp, byteorder='big')
+    
+    payload_resp = bytearray()
+    while len(payload_resp) < length:
+        packet = client.recv(length - len(payload_resp))
+        if not packet:
+            raise RuntimeError("Connection closed while reading payload")
+        payload_resp.extend(packet)
+    client.close()
+    nested_response = json.loads(payload_resp.decode('utf-8'))
+    
+    # Unwrap nested response
+    if not nested_response.get("approved", False):
+        exec_resp = nested_response.get("executor_response", {})
+        msg = exec_resp.get("message") or "Action denied by Policy Gate."
+        return {"status": "denied", "message": msg}
+    else:
+        return nested_response["executor_response"]
 
 def test_security_flow():
     print("=== Running Security Subsystem Tests ===")
@@ -78,13 +124,7 @@ def test_security_flow():
     }
     
     try:
-        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        client.connect(gate.socket_path)
-        client.sendall(json.dumps(payload).encode('utf-8'))
-        response_raw = client.recv(65536).decode('utf-8')
-        client.close()
-        
-        response = json.loads(response_raw)
+        response = send_framed_request(gate.socket_path, payload)
         if response.get("status") == "success":
             print("PASS: Diagnostics request executed successfully via HostExecutor.")
             print(f"Diagnostics stdout snippet: {response.get('stdout', '')[:100]}...")
@@ -122,11 +162,7 @@ def test_security_flow():
 
     try:
         # Send Nginx restart (allowed in validator schema but we verify execution attempt)
-        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        client.connect(gate.socket_path)
-        client.sendall(json.dumps(payload_nginx).encode('utf-8'))
-        resp_nginx = json.loads(client.recv(65536).decode('utf-8'))
-        client.close()
+        resp_nginx = send_framed_request(gate.socket_path, payload_nginx)
         
         print(f"Nginx response: {resp_nginx}")
         # Note: if running as non-root on a system where sudo systemctl requires password,
@@ -140,11 +176,7 @@ def test_security_flow():
             return False
 
         # Send Apache2 restart (denied)
-        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        client.connect(gate.socket_path)
-        client.sendall(json.dumps(payload_apache).encode('utf-8'))
-        resp_apache = json.loads(client.recv(65536).decode('utf-8'))
-        client.close()
+        resp_apache = send_framed_request(gate.socket_path, payload_apache)
         
         print(f"Apache2 response: {resp_apache}")
         if resp_apache.get("status") == "denied":
@@ -183,11 +215,7 @@ def test_security_flow():
     }
 
     try:
-        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        client.connect(gate.socket_path)
-        client.sendall(json.dumps(payload_script).encode('utf-8'))
-        resp_script = json.loads(client.recv(65536).decode('utf-8'))
-        client.close()
+        resp_script = send_framed_request(gate.socket_path, payload_script)
         
         print(f"Script response: {resp_script}")
         if resp_script.get("status") == "success" and "SANDBOX_OK" in resp_script.get("stdout", ""):
@@ -276,11 +304,7 @@ def test_security_flow():
     }
 
     try:
-        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        client.connect(gate.socket_path)
-        client.sendall(json.dumps(payload_leak).encode('utf-8'))
-        resp_leak = json.loads(client.recv(65536).decode('utf-8'))
-        client.close()
+        resp_leak = send_framed_request(gate.socket_path, payload_leak)
         
         stdout = resp_leak.get("stdout", "")
         # Verify .env was empty (due to /dev/null binding) and storage is empty (due to tmpfs)
@@ -348,11 +372,7 @@ def test_security_flow():
         }
 
         # Test 5.7a: Mismatched capability token (should be denied)
-        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        client.connect(gate.socket_path)
-        client.sendall(json.dumps(payload_ffmpeg_bad).encode('utf-8'))
-        resp_bad = json.loads(client.recv(65536).decode('utf-8'))
-        client.close()
+        resp_bad = send_framed_request(gate.socket_path, payload_ffmpeg_bad)
         
         if resp_bad.get("status") == "denied":
             print("PASS: Ffmpeg request with mismatched token denied successfully.")
@@ -362,13 +382,9 @@ def test_security_flow():
             return False
 
         # Test 5.7b: Path violation (should be denied before running cmd)
-        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        client.connect(gate.socket_path)
-        client.sendall(json.dumps(payload_escape).encode('utf-8'))
-        resp_escape = json.loads(client.recv(65536).decode('utf-8'))
-        client.close()
+        resp_escape = send_framed_request(gate.socket_path, payload_escape)
         
-        if resp_escape.get("status") == "denied" or "violation" in resp_escape.get("message", ""):
+        if resp_escape.get("status") == "denied" or "violation" in resp_escape.get("message", "") or "violation" in resp_escape.get("stderr", ""):
             print("PASS: Ffmpeg path violation blocked successfully.")
         else:
             print(f"FAIL: Ffmpeg path violation was not blocked: {resp_escape}")
@@ -376,11 +392,7 @@ def test_security_flow():
             return False
 
         # Test 5.7c: Authorized ffmpeg execution (should execute, even if ffmpeg fails on dummy input)
-        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        client.connect(gate.socket_path)
-        client.sendall(json.dumps(payload_ffmpeg_ok).encode('utf-8'))
-        resp_ok = json.loads(client.recv(65536).decode('utf-8'))
-        client.close()
+        resp_ok = send_framed_request(gate.socket_path, payload_ffmpeg_ok)
         
         if resp_ok.get("status") in ["success", "error"]:
             print(f"PASS: Authorized ffmpeg request was executed (status: {resp_ok.get('status')}).")

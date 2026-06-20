@@ -86,7 +86,9 @@ Kaia/
 │   ├── config.py               # Shared settings, prompt configurations, & allowlists
 │   ├── database_utils.py       # PostgreSQL structured memory utilities
 │   ├── kaia_cli.py             # System status gatherer & command generator
-│   └── utils.py                # ANSI coloring & Ollama model helper functions
+│   ├── utils.py                # ANSI coloring & Ollama model helper functions
+│   ├── data/                   # General knowledge and persona markdown configuration
+│   └── personal_context/       # Personal memory/context files
 │
 ├── security/                   # Hardened security subsystem
 │   ├── cognitive_wiring.py     # Affective state vectors (arousal, valence, energy)
@@ -97,9 +99,6 @@ Kaia/
 │   ├── telemetry_daemon.py     # eBPF monitoring hooks
 │   ├── telemetry_sanitizer.py  # Input sanitization against injection attacks
 │   └── threat_intel.py         # GeoLite2 & local reputation intelligence
-│
-├── toolbox/                    # Utility tools
-│   └── video_converter.py      # Video-to-GIF converter utility
 │
 ├── tests/                      # Suite of verification tests
 │   ├── test_database_utils.py  # DB logic unit tests
@@ -113,7 +112,6 @@ Kaia/
 ├── scripts/                    # Activation scripts
 │   └── activate_kaia_env.sh    # Main service launcher & virtual env activator
 │
-├── data/                       # general knowledge and persona markdown configuration
 └── storage/                    # ChromaDB, LlamaIndex, & PostgreSQL cache directory
 ```
 
@@ -139,6 +137,7 @@ export KAIA_DB_USER="kaiauser"
 export KAIA_DB_PASS="your_secure_password"
 export KAIA_DB_HOST="localhost"
 export KAIA_DB_NAME="kaiadb"
+export KAIA_CAPABILITY_TOKEN_SECRET="your_signing_secret_key"
 ```
 
 ### 3. Virtual Environment & Dependencies

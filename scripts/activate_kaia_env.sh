@@ -9,6 +9,7 @@ COLOR_RESET="\033[0m"
 KAIA_PROJECT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." &> /dev/null && pwd )"
 
 cd "$KAIA_PROJECT_DIR" || { echo -e "${COLOR_RED}Error: Could not navigate to project directory: $KAIA_PROJECT_DIR. Exiting.${COLOR_RESET}"; exit 1; }
+mkdir -p logs
 
 source .venv/bin/activate || { echo -e "${COLOR_RED}Error: Could not activate virtual environment at $KAIA_PROJECT_DIR/.venv. Ensure it exists and is valid. Exiting.${COLOR_RESET}"; exit 1; }
 
@@ -32,24 +33,31 @@ else
     echo -e "${COLOR_GREEN}PostgreSQL is already running.${COLOR_RESET}"
 fi
 
-echo -e "${COLOR_BLUE}Checking ChromaDB server status...${COLOR_RESET}"
-check_port 127.0.0.1 8000
-CHROMA_NC_STATUS=$?
-if [ $CHROMA_NC_STATUS -ne 0 ]; then
-    echo -e "${COLOR_YELLOW}ChromaDB server not running on port 8000. Attempting to start...${COLOR_RESET}"
-    nohup "$KAIA_PROJECT_DIR/.venv/bin/chroma" run --host 127.0.0.1 --port 8000 --path "$KAIA_PROJECT_DIR/storage/chroma_db" > "$KAIA_PROJECT_DIR/chroma.log" 2>&1 &
-    CHROMA_PID=$!
-    echo -e "${COLOR_BLUE}ChromaDB server started with PID $CHROMA_PID. Log: $KAIA_PROJECT_DIR/chroma.log${COLOR_RESET}"
-    sleep 5
-    check_port 127.0.0.1 8000
-    CHROMA_NC_STATUS=$?
-    if [ $CHROMA_NC_STATUS -eq 0 ]; then
-        echo -e "${COLOR_GREEN}ChromaDB server is now running.${COLOR_RESET}"
+if [ -f .env ]; then
+    export $(grep -v '^#' .env | xargs)
+fi
+
+echo -e "${COLOR_BLUE}Checking Policy Gate Daemon status...${COLOR_RESET}"
+if ! pgrep -f "security/policy_gate.py" > /dev/null; then
+    echo -e "${COLOR_YELLOW}Policy Gate Daemon is not running. Starting...${COLOR_RESET}"
+    if [ -z "$KAIA_CAPABILITY_TOKEN_SECRET" ]; then
+        echo -e "${COLOR_RED}Error: KAIA_CAPABILITY_TOKEN_SECRET environment variable is not set. Cannot start Policy Gate Daemon.${COLOR_RESET}"
+        exit 1
+    fi
+    sudo mkdir -p /run/kaiacord 2>/dev/null || true
+    sudo chown -R $USER:kaiacord /run/kaiacord 2>/dev/null || true
+    sudo chmod 0770 /run/kaiacord 2>/dev/null || true
+    
+    nohup "$KAIA_PROJECT_DIR/.venv/bin/python" "$KAIA_PROJECT_DIR/security/policy_gate.py" > "$KAIA_PROJECT_DIR/logs/policy_gate.log" 2>&1 &
+    sleep 2
+    if pgrep -f "security/policy_gate.py" > /dev/null; then
+        echo -e "${COLOR_GREEN}Policy Gate Daemon started successfully.${COLOR_RESET}"
     else
-        echo -e "${COLOR_RED}Error: ChromaDB server failed to start. Check $KAIA_PROJECT_DIR/chroma.log for details.${COLOR_RESET}"
+        echo -e "${COLOR_RED}Error: Policy Gate Daemon failed to start. Check $KAIA_PROJECT_DIR/logs/policy_gate.log for details.${COLOR_RESET}"
+        exit 1
     fi
 else
-    echo -e "${COLOR_GREEN}ChromaDB server is already running.${COLOR_RESET}"
+    echo -e "${COLOR_GREEN}Policy Gate Daemon is already running.${COLOR_RESET}"
 fi
 
 echo -e "${COLOR_BLUE}Checking Ollama status...${COLOR_RESET}"
@@ -57,16 +65,16 @@ check_port 127.0.0.1 11434
 OLLAMA_NC_STATUS=$?
 if [ $OLLAMA_NC_STATUS -ne 0 ]; then
     echo -e "${COLOR_YELLOW}Ollama server not running on port 11434. Attempting to start...${COLOR_RESET}"
-    nohup ollama serve > "$KAIA_PROJECT_DIR/ollama.log" 2>&1 &
+    nohup ollama serve > "$KAIA_PROJECT_DIR/logs/ollama.log" 2>&1 &
     OLLAMA_PID=$!
-    echo -e "${COLOR_BLUE}Ollama server started with PID $OLLAMA_PID. Log: $KAIA_PROJECT_DIR/ollama.log${COLOR_RESET}"
+    echo -e "${COLOR_BLUE}Ollama server started with PID $OLLAMA_PID. Log: $KAIA_PROJECT_DIR/logs/ollama.log${COLOR_RESET}"
     sleep 10
     check_port 127.0.0.1 11434
     OLLAMA_NC_STATUS=$?
     if [ $OLLAMA_NC_STATUS -eq 0 ]; then
         echo -e "${COLOR_GREEN}Ollama server is now running.${COLOR_RESET}"
     else
-        echo -e "${COLOR_RED}Error: Ollama server failed to start. Check $KAIA_PROJECT_DIR/ollama.log for details.${COLOR_RESET}"
+        echo -e "${COLOR_RED}Error: Ollama server failed to start. Check $KAIA_PROJECT_DIR/logs/ollama.log for details.${COLOR_RESET}"
         exit 1
     fi
 else

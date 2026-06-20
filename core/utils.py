@@ -84,6 +84,16 @@ def send_to_policy_gate(payload: dict) -> dict:
     """Connects to the Policy Gate Unix socket and executes the secure transaction."""
     import socket
     import json
+    import uuid
+
+    # Nest the flat request payload into the required IPC Request Schema
+    request_id = str(uuid.uuid4())
+    nested_payload = {
+        "request_id": request_id,
+        "action": payload.get("action"),
+        "payload": {k: v for k, v in payload.items() if k not in ["action", "capability_token"]},
+        "capability_token": payload.get("capability_token")
+    }
 
     sockets_to_try = [config.POLICY_GATE_SOCKET, config.POLICY_GATE_SOCKET_FALLBACK]
     last_err = None
@@ -93,10 +103,39 @@ def send_to_policy_gate(payload: dict) -> dict:
             client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             client.settimeout(5.0)
             client.connect(sock_path)
-            client.sendall(json.dumps(payload).encode('utf-8'))
-            response = client.recv(65536).decode('utf-8')
+            
+            # Send length-prefixed frame
+            payload_bytes = json.dumps(nested_payload).encode('utf-8')
+            header = len(payload_bytes).to_bytes(4, byteorder='big')
+            client.sendall(header + payload_bytes)
+            
+            # Receive length-prefixed response
+            header_resp = bytearray()
+            while len(header_resp) < 4:
+                packet = client.recv(4 - len(header_resp))
+                if not packet:
+                    raise RuntimeError("Connection closed while reading header")
+                header_resp.extend(packet)
+            length = int.from_bytes(header_resp, byteorder='big')
+            
+            payload_resp = bytearray()
+            while len(payload_resp) < length:
+                packet = client.recv(length - len(payload_resp))
+                if not packet:
+                    raise RuntimeError("Connection closed while reading payload")
+                payload_resp.extend(packet)
+                
             client.close()
-            return json.loads(response)
+            nested_response = json.loads(payload_resp.decode('utf-8'))
+            
+            # Unwrap nested response back to the format expected by the caller
+            if not nested_response.get("approved", False):
+                exec_resp = nested_response.get("executor_response", {})
+                msg = exec_resp.get("message") or "Action denied by Policy Gate."
+                return {"status": "denied", "message": msg}
+            else:
+                return nested_response["executor_response"]
+                
         except Exception as e:
             last_err = e
             continue

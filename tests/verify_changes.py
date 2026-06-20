@@ -1,5 +1,6 @@
 import sys
 import os
+os.environ.setdefault("KAIA_CAPABILITY_TOKEN_SECRET", "test_signing_secret_key_2026")
 import logging
 import pathlib
 

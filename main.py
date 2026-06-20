@@ -40,12 +40,11 @@ import database_utils
 import utils
 from utils import send_to_policy_gate
 from kaia_cli import KaiaCLI
-from toolbox import video_converter
 
 
 # --- Basic Setup ---
 # Configure logging with rotation
-log_file = Path("kaia.log")
+log_file = config.LOG_FILE_PATH
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -84,6 +83,10 @@ class AppState:
         self.current_working_directory = Path.cwd()
         self.user_id = database_utils.get_current_user()
         self.vector_store = None
+        
+        # Initialize cognitive affective state
+        from security.cognitive_wiring import AffectiveState
+        self.affective_state = AffectiveState()
 
 # --- Initialization Functions ---
 def initialize_models():
@@ -715,6 +718,177 @@ def stream_and_print_response(response_stream, start_time: float) -> str:
     return full_response.strip()
 
 # --- Main Application Logic ---
+def update_system_prompts(state: AppState):
+    """
+    Queries telemetry metrics (CPU percent, blocked connections) to update
+    the affective state, then dynamically adjusts chat engine system prompts.
+    """
+    import psutil
+    import sqlite3
+    from datetime import datetime, timedelta
+    from security.telemetry_sanitizer import sanitize_telemetry
+
+    # 1. Fetch raw telemetry
+    cpu_load = psutil.cpu_percent()
+    
+    # Query blocked connections in the last 1 minute
+    time_threshold = (datetime.utcnow() - timedelta(seconds=60)).isoformat() + "Z"
+    blocked_count = 0
+    try:
+        conn = sqlite3.connect(config.SECURITY_DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT COUNT(*) FROM security_events
+            WHERE disposition = 'blocked' AND timestamp >= ?
+        """, (time_threshold,))
+        blocked_count = cursor.fetchone()[0]
+        conn.close()
+    except Exception as e:
+        logger.error(f"Failed to query security events for telemetry: {e}")
+
+    # 2. Sanitize raw telemetry inputs before processing
+    raw_telemetry = {
+        "bytes": str(blocked_count),
+        "state": "active",
+        "comm": "system_telemetry",
+        "timestamp": datetime.utcnow().isoformat() + "Z"
+    }
+    sanitized = sanitize_telemetry(raw_telemetry)
+
+    # 3. Update AffectiveState
+    state.affective_state.handle_telemetry_metrics(cpu_load, blocked_count)
+    
+    # 4. Get dynamic prompt directives
+    mood, mood_status = state.affective_state.get_discord_status_mood()
+    
+    mood_directive = ""
+    if mood == "alarmed":
+        mood_directive = (
+            "\n\n[COGNITIVE SECURITY ALERT]: A security threat or unauthorized privilege access attempt "
+            "has spiked system arousal. Adopt an alarmed, vigilant, and highly direct tone. Be terse. "
+            "Focus only on absolute core facts. Provide warning information immediately where applicable."
+        )
+    elif mood == "fatigued":
+        mood_directive = (
+            "\n\n[COGNITIVE METRIC ALERT]: System resources or processing energy is low. "
+            "Keep replies extremely short and condensed. Provide minimal explanations. conciseness is key."
+        )
+    elif mood == "active":
+        mood_directive = (
+            "\n\n[COGNITIVE METRIC ALERT]: System workload is high. Responses must be extremely efficient, "
+            "logical, and structured."
+        )
+    
+    # 5. Dynamically inject prompt directives into chat engines
+    base_prompt = config.KAIA_SYSTEM_PROMPT + "\n\n" + state.kaia_persona_content
+    dynamic_prompt = base_prompt + mood_directive
+    
+    if state.pure_chat_engine:
+        state.pure_chat_engine.system_prompt = dynamic_prompt
+        
+    if state.index and state.rag_chat_engine:
+        combined_rag_prompt = (
+            "You are Kaia, a helpful AI assistant. Use the provided context to answer questions. "
+            "If the answer is not in the context, state that clearly. Do not invent information. "
+            "Maintain your core persona: strategic, precise, and intellectual. "
+            "Persona details: " + state.kaia_persona_content + mood_directive
+        )
+        state.rag_chat_engine.system_prompt = combined_rag_prompt
+
+def handle_dream_cycle(state: AppState, content: str = None) -> str:
+    """
+    Executes the nightly Dream Cycle security memory consolidation.
+    Reads recent security_events.db rows, resolves threat intelligence,
+    summarizes findings, and appends a consolidated memory to beliefs.json.
+    """
+    print(f"\n{config.COLOR_BLUE}Kaia: Executing Dream Cycle security consolidation...{config.COLOR_RESET}")
+    import sqlite3
+    from datetime import datetime, timedelta
+    from security.threat_intel import get_ip_reputation, lookup_internetdb
+
+    time_limit = (datetime.utcnow() - timedelta(hours=24)).isoformat() + "Z"
+    events = []
+    try:
+        conn = sqlite3.connect(config.SECURITY_DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT event_id, timestamp, type, actor, disposition, payload_hash
+            FROM security_events
+            WHERE timestamp >= ?
+        """, (time_limit,))
+        for row in cursor.fetchall():
+            events.append({
+                "id": row[0],
+                "time": row[1],
+                "type": row[2],
+                "actor": row[3],
+                "disposition": row[4],
+                "hash": row[5]
+            })
+        conn.close()
+    except Exception as e:
+        logger.error(f"Failed to query security events for dream cycle: {e}")
+
+    # Process IPs or actors mentioned in events
+    summary_parts = []
+    blocked_count = sum(1 for e in events if e["disposition"] == "blocked")
+    summary_parts.append(f"Dream Cycle consolidated {len(events)} security events from the last 24 hours ({blocked_count} blocked).")
+    
+    ips_scanned = set()
+    for e in events:
+        actor = e["actor"]
+        if actor.startswith("user:") and len(actor.split(":")) > 1:
+            ip_candidate = actor.split(":")[1]
+            if any(c.isdigit() or c == '.' or c == ':' for c in ip_candidate):
+                ips_scanned.add(ip_candidate)
+
+    for ip in ips_scanned:
+        rep = get_ip_reputation(ip)
+        shodan = lookup_internetdb(ip)
+        summary_parts.append(f"Resolved IP {ip}: reputation score {rep['score']}, Shodan open ports: {shodan.get('ports', [])}.")
+
+    consolidated_summary = "\n".join(summary_parts)
+    print(f"{config.COLOR_GREEN}Security Analysis Consolidated:{config.COLOR_RESET}\n{consolidated_summary}")
+
+    # Log to interaction or database
+    try:
+        database_utils.log_interaction(
+            user_id=state.user_id,
+            user_query="Run Dream Cycle",
+            kaia_response=f"Dream Cycle complete. Summary:\n{consolidated_summary}",
+            response_type="dream_cycle"
+        )
+    except Exception as e:
+        logger.error(f"Failed to record dream cycle in postgres: {e}")
+
+    beliefs_path = config.PERSIST_DIR / "beliefs.json"
+    import json
+    beliefs = []
+    if beliefs_path.exists():
+        try:
+            with open(beliefs_path, "r") as f:
+                beliefs = json.load(f)
+        except Exception:
+            pass
+            
+    beliefs.append({
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "type": "security_dream_consolidation",
+        "content": consolidated_summary
+    })
+    
+    if len(beliefs) > 50:
+        beliefs = beliefs[-50:]
+        
+    try:
+        with open(beliefs_path, "w") as f:
+            json.dump(beliefs, f, indent=2)
+        print(f"{config.COLOR_GREEN}Consolidated security beliefs committed to beliefs.json.{config.COLOR_RESET}")
+    except Exception as e:
+        logger.error(f"Failed to write beliefs.json: {e}")
+
+    return f"Dream Cycle completed. {consolidated_summary}"
+
 def process_user_input(state: AppState, query: str, action_handlers: Dict[str, Callable]):
     """Processes a single user input query."""
     start_time = time.time()
@@ -722,6 +896,7 @@ def process_user_input(state: AppState, query: str, action_handlers: Dict[str, C
     response_type = "unclassified"
 
     try:
+        update_system_prompts(state)
         # Fast path for exit commands
         lower_query = query.lower().strip()
         if lower_query in ['exit', 'quit', '/exit', '/quit']:
@@ -774,11 +949,6 @@ def main():
     import security.db
     security.db.initialize_db()
 
-    # Start policy gate Unix Domain Socket Server Daemon
-    from security.policy_gate import PolicyGate
-    policy_gate = PolicyGate()
-    policy_gate.start()
-
     embedding_dim = initialize_models()
     load_persona(state)
     state.vector_store = initialize_vector_db(embedding_dim)
@@ -799,9 +969,9 @@ def main():
         "text_extraction": lambda s, c, t: handle_knowledge_query(s, c, t),
         "text_generation": lambda s, c, t: handle_chat(s, c, t), # Map text_generation to chat
         "chat": lambda s, c, t: handle_chat(s, c, t),
-        "convert_video_to_gif": lambda s, c: video_converter.convert_video_to_gif_interactive(s.cli, s.user_id)['response'],
         "get_persona_content": lambda s, c: state.kaia_persona_content,
         "rebuild_index": handle_rebuild_index,
+        "dream_cycle": handle_dream_cycle,
     }
 
     # 3. Print welcome message
@@ -816,25 +986,22 @@ def main():
 """)
 
     # 4. Main loop
-    try:
-        while True:
-            try:
-                query = input("\nYou: ").strip()
-                if not query: continue
-                if query.lower() in ['exit', 'quit', '/exit', '/quit']:
-                    print(f"{config.COLOR_BLUE}Kaia: Session ended.{config.COLOR_RESET}")
-                    break
-
-                process_user_input(state, query, action_handlers)
-
-            except KeyboardInterrupt:
-                print(f"\n{config.COLOR_BLUE}Kaia: Exiting gracefully...{config.COLOR_RESET}")
+    while True:
+        try:
+            query = input("\nYou: ").strip()
+            if not query: continue
+            if query.lower() in ['exit', 'quit', '/exit', '/quit']:
+                print(f"{config.COLOR_BLUE}Kaia: Session ended.{config.COLOR_RESET}")
                 break
-            except Exception as e:
-                logger.exception("Unexpected error in main loop")
-                print(f"{config.COLOR_RED}System error: {e}{config.COLOR_RESET}")
-    finally:
-        policy_gate.stop()
+
+            process_user_input(state, query, action_handlers)
+
+        except KeyboardInterrupt:
+            print(f"\n{config.COLOR_BLUE}Kaia: Exiting gracefully...{config.COLOR_RESET}")
+            break
+        except Exception as e:
+            logger.exception("Unexpected error in main loop")
+            print(f"{config.COLOR_RED}System error: {e}{config.COLOR_RESET}")
 
 if __name__ == "__main__":
     main()

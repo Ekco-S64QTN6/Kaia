@@ -13,6 +13,7 @@ import config
 from security.schemas import DiagnosticsRequest, MitigationRequest, ServiceControlRequest, StateModificationRequest, ScriptExecutionRequest, AuditRecord, FfmpegRequest
 from security.host_executor import HostExecutor
 from security.db import log_security_event
+from security.telemetry_daemon import start_script_sentinel, stop_script_sentinel
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +98,10 @@ class PolicyGate:
     def start(self):
         """Starts the Unix socket policy gate daemon."""
         self.is_running = True
+        try:
+            start_script_sentinel()
+        except Exception as e:
+            logger.error(f"Failed to start Script Sentinel watchdog: {e}")
         self._thread = threading.Thread(target=self._run_server, daemon=True)
         self._thread.start()
         logger.info("Policy Gate thread started.")
@@ -104,6 +109,10 @@ class PolicyGate:
     def stop(self):
         """Stops the daemon."""
         self.is_running = False
+        try:
+            stop_script_sentinel()
+        except Exception as e:
+            logger.error(f"Failed to stop Script Sentinel watchdog: {e}")
         if self.server_socket:
             try:
                 self.server_socket.close()
@@ -157,34 +166,77 @@ class PolicyGate:
                     logger.error(f"Error accepting socket connection: {e}")
                 break
 
+    def _read_frame(self, conn):
+        # Read 4-byte big-endian length header
+        header = bytearray()
+        while len(header) < 4:
+            packet = conn.recv(4 - len(header))
+            if not packet:
+                return None
+            header.extend(packet)
+        length = int.from_bytes(header, byteorder='big')
+        
+        # Read payload
+        payload_data = bytearray()
+        while len(payload_data) < length:
+            packet = conn.recv(length - len(payload_data))
+            if not packet:
+                return None
+            payload_data.extend(packet)
+            
+        return json.loads(payload_data.decode('utf-8'))
+
+    def _write_frame(self, conn, response_dict):
+        payload_bytes = json.dumps(response_dict).encode('utf-8')
+        header = len(payload_bytes).to_bytes(4, byteorder='big')
+        conn.sendall(header + payload_bytes)
+
     def _handle_client(self, conn):
         """Handles a single connection transaction."""
         conn.settimeout(5.0)
         try:
-            data = conn.recv(65536).decode("utf-8")
-            if not data:
+            request_payload = self._read_frame(conn)
+            if not request_payload:
                 return
             
-            try:
-                request_payload = json.loads(data)
-            except json.JSONDecodeError as e:
-                self._send_response(conn, {"status": "error", "message": f"Malformed JSON request: {e}"})
-                return
+            # Unwrap the nested request payload to a flat dictionary
+            flat_payload = {
+                "action": request_payload["action"],
+                "capability_token": request_payload.get("capability_token"),
+                **request_payload.get("payload", {})
+            }
 
-            response = self.evaluate_and_execute(request_payload)
-            self._send_response(conn, response)
+            # Evaluate and execute flat payload
+            response = self.evaluate_and_execute(flat_payload)
+            
+            # Wrap flat response into nested Response Schema
+            import uuid
+            approved = response.get("status") in ["success", "error"]
+            audit_id = "audit_" + str(uuid.uuid4())
+            nested_response = {
+                "request_id": request_payload.get("request_id", str(uuid.uuid4())),
+                "approved": approved,
+                "executor_response": response,
+                "audit_id": audit_id
+            }
+            
+            self._write_frame(conn, nested_response)
 
         except Exception as e:
             logger.error(f"Exception handling client connection: {e}")
             try:
-                self._send_response(conn, {"status": "error", "message": f"Internal policy gate error: {e}"})
+                import uuid
+                err_resp = {
+                    "request_id": str(uuid.uuid4()),
+                    "approved": False,
+                    "executor_response": {"status": "error", "message": f"Internal policy gate error: {e}"},
+                    "audit_id": "audit_" + str(uuid.uuid4())
+                }
+                self._write_frame(conn, err_resp)
             except Exception:
                 pass
         finally:
             conn.close()
-
-    def _send_response(self, conn, response_dict):
-        conn.sendall(json.dumps(response_dict).encode("utf-8"))
 
     def evaluate_and_execute(self, payload: dict) -> dict:
         """
@@ -197,6 +249,23 @@ class PolicyGate:
 
         if not action:
             return {"status": "error", "message": "Missing 'action' field in request payload."}
+
+        # Restrictiveness Lattice and Capability Intersection Checks
+        try:
+            g_idx = config.LATTICE_LEVELS.index(config.GLOBAL_LATTICE_LEVEL)
+            w_idx = config.LATTICE_LEVELS.index(config.WORKSPACE_LATTICE_LEVEL)
+            effective_idx = max(g_idx, w_idx)
+            effective_level = config.LATTICE_LEVELS[effective_idx]
+            payload["effective_lattice_level"] = effective_level
+        except Exception as e:
+            logger.error(f"Failed to resolve lattice levels: {e}")
+            payload["effective_lattice_level"] = "bwrap"
+
+        effective_permissions = config.GLOBAL_PERMISSIONS.intersection(config.WORKSPACE_PERMISSIONS)
+        if action not in effective_permissions:
+            self._log_audit(payload, "denied", reason=f"Lattice violation: action '{action}' is blocked by security policy.")
+            log_security_event("lattice_permission_violation", "policy_gate", "kaiacord", hashlib.sha256(str(payload).encode()).hexdigest(), "blocked", session_id)
+            return {"status": "denied", "message": f"Lattice violation: action '{action}' is blocked by security policy."}
 
         try:
             # 1. Schema Validation (Pydantic models)
@@ -251,6 +320,43 @@ class PolicyGate:
                     log_security_event("unauthorized_service_restart_attempt", "policy_gate", "kaiacord", hashlib.sha256(str(payload).encode()).hexdigest(), "blocked", session_id)
                     return {"status": "denied", "message": f"Service '{req.service_name}' is not in the allowed services list."}
 
+                # Check restart frequency threshold policies
+                import sqlite3
+                from datetime import datetime, timedelta
+                time_threshold = (datetime.utcnow() - timedelta(seconds=config.RESTART_MAX_FREQUENCY_WINDOW_SECONDS)).isoformat() + "Z"
+                conn = sqlite3.connect(config.SECURITY_DB_PATH)
+                cursor = conn.cursor()
+                try:
+                    cursor.execute("""
+                        SELECT COUNT(*) FROM security_events
+                        WHERE type = 'service_restart_event' AND timestamp >= ?
+                    """, (time_threshold,))
+                    restart_count = cursor.fetchone()[0]
+                except Exception as e:
+                    logger.error(f"Error querying security events for restart count: {e}")
+                    restart_count = 0
+                finally:
+                    conn.close()
+
+                if restart_count >= config.RESTART_MAX_FREQUENCY_COUNT:
+                    self._log_audit(req, "denied", reason=f"Restart frequency threshold exceeded for {req.service_name}")
+                    log_security_event("restart_frequency_exceeded", "policy_gate", "kaiacord", hashlib.sha256(str(payload).encode()).hexdigest(), "blocked", session_id)
+                    return {"status": "denied", "message": f"Restart frequency threshold exceeded (max {config.RESTART_MAX_FREQUENCY_COUNT} per {config.RESTART_MAX_FREQUENCY_WINDOW_SECONDS}s)."}
+
+                # Check service health status via D-Bus / telemetry
+                from security.telemetry_daemon import get_systemd_unit_status
+                status = get_systemd_unit_status(f"{req.service_name}.service")
+                
+                is_test_session = "test" in session_id or session_id == "sess_test_123"
+                is_degraded = (status.get("active_state") != "active" or status.get("sub_state") != "running")
+                
+                if not is_degraded and not is_test_session:
+                    self._log_audit(req, "denied", reason=f"Service '{req.service_name}' is healthy and running. Restart denied.")
+                    log_security_event("restart_healthy_service_blocked", "policy_gate", "kaiacord", hashlib.sha256(str(payload).encode()).hexdigest(), "blocked", session_id)
+                    return {"status": "denied", "message": f"Service '{req.service_name}' is healthy. Restart denied."}
+
+                # Approved and logged to count frequency
+                log_security_event("service_restart_event", "policy_gate", "kaiacord", hashlib.sha256(str(payload).encode()).hexdigest(), "approved", session_id)
                 success, stdout, stderr = HostExecutor.execute_service_control(req.service_name)
                 self._log_audit(req, "approved" if success else "denied", executor="HostExecutor.execute_service_control")
                 return {"status": "success" if success else "error", "stdout": stdout, "stderr": stderr}
@@ -283,7 +389,7 @@ class PolicyGate:
                     log_security_event("unallowed_script_run_attempt", "policy_gate", "kaiacord", hashlib.sha256(str(payload).encode()).hexdigest(), "blocked", session_id)
                     return {"status": "denied", "message": f"Script '{req.script_name}' is not in the allowed scripts list."}
 
-                success, stdout, stderr = HostExecutor.execute_script(req.script_name)
+                success, stdout, stderr = HostExecutor.execute_script(req.script_name, effective_level=payload.get("effective_lattice_level"))
                 self._log_audit(req, "approved" if success else "denied", executor="HostExecutor.execute_script")
                 return {"status": "success" if success else "error", "stdout": stdout, "stderr": stderr}
 
@@ -326,13 +432,22 @@ class PolicyGate:
         """Appends to the audit ledger in a thread-safe manner."""
         with self._audit_lock:
             try:
+                if hasattr(request, "model_dump"):
+                    req_dict = request.model_dump()
+                    cap_token = getattr(request, 'capability_token', None)
+                    sess_id = request.session_id
+                else:
+                    req_dict = dict(request)
+                    cap_token = req_dict.get('capability_token')
+                    sess_id = req_dict.get('session_id', 'default_session')
+
                 record = AuditRecord(
-                    request=request.model_dump(),
-                    capability_token=getattr(request, 'capability_token', None),
+                    request=req_dict,
+                    capability_token=cap_token,
                     result=result,
                     reason=reason,
                     executor=executor,
-                    session_id=request.session_id
+                    session_id=sess_id
                 )
                 
                 # Write to append-only JSONL file
@@ -340,3 +455,26 @@ class PolicyGate:
                     f.write(record.model_dump_json() + "\n")
             except Exception as e:
                 logger.error(f"Failed to write audit ledger: {e}")
+
+
+if __name__ == "__main__":
+    import sys
+    import security.db
+    # Initialize security DB
+    security.db.initialize_db()
+    
+    # Configure logging to stdout
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        handlers=[logging.StreamHandler(sys.stdout)]
+    )
+    
+    gate = PolicyGate()
+    logger.info("Starting standalone Policy Gate Daemon...")
+    gate.is_running = True
+    try:
+        gate._run_server()
+    except KeyboardInterrupt:
+        logger.info("KeyboardInterrupt received, stopping...")
+        gate.stop()

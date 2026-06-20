@@ -1,5 +1,7 @@
 /storage/
-/data/books/
+/logs/
+/core/data/books/
+/core/personal_context/
 *.log
 __pycache__/
 .env

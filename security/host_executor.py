@@ -88,38 +88,139 @@ class HostExecutor:
             return False, "", f"Failed to write file: {e}"
 
     @staticmethod
-    def execute_script(script_name: str) -> tuple:
-        """Runs an allowlisted script inside an isolated Bubblewrap sandbox with database and environment masking."""
+    def execute_script(script_name: str, effective_level: str = None) -> tuple:
+        """Runs an allowlisted script inside an isolated sandbox matching the effective lattice level."""
         script_path = os.path.abspath(os.path.expanduser(os.path.join("~", script_name)))
         if not os.path.exists(script_path):
             return False, "", f"Script not found at: {script_path}"
         
         workspace_abs = os.path.abspath(config.WORKSPACE_DIR)
-        
-        # Build Arch Linux compatible bwrap command
-        cmd = [
-            "bwrap",
-            "--ro-bind", "/usr", "/usr",
-            "--symlink", "usr/bin", "/bin",
-            "--symlink", "usr/lib", "/lib",
-            "--symlink", "usr/lib64", "/lib64",
-            "--symlink", "usr/sbin", "/sbin",
-            "--dir", "/tmp",
-            "--dir", "/run",
-            "--proc", "/proc",
-            "--dev", "/dev",
-            "--unshare-all",
-            "--new-session",
-            "--die-with-parent",
-            "--bind", workspace_abs, workspace_abs,
-            # Mask sensitive files: .env containing database credentials, security events DB, and logs
-            "--bind", "/dev/null", os.path.join(workspace_abs, ".env"),
-            "--bind", "/dev/null", os.path.join(workspace_abs, "kaia.log"),
-            "--tmpfs", os.path.join(workspace_abs, "storage"),
-            "--ro-bind", script_path, "/tmp/run_script.sh",
-            "--",
-            "/tmp/run_script.sh"
+
+        # Resolve level if not explicitly provided
+        if not effective_level:
+            try:
+                g_idx = config.LATTICE_LEVELS.index(config.GLOBAL_LATTICE_LEVEL)
+                w_idx = config.LATTICE_LEVELS.index(config.WORKSPACE_LATTICE_LEVEL)
+                effective_idx = max(g_idx, w_idx)
+                effective_level = config.LATTICE_LEVELS[effective_idx]
+            except Exception:
+                effective_level = "bwrap"
+
+        # Construct basic command according to the selected tier
+        if effective_level == "none":
+            cmd = [script_path]
+            
+        elif effective_level == "namespace":
+            cmd = ["unshare", "--user", "--map-root-user", "--fork", "--pid", "--mount-proc", "--uts", "--ipc", "--net", script_path]
+            
+        elif effective_level == "sandbox-exec":
+            cmd = [
+                "bwrap",
+                "--ro-bind", "/usr", "/usr",
+                "--symlink", "usr/bin", "/bin",
+                "--symlink", "usr/lib", "/lib",
+                "--symlink", "usr/lib64", "/lib64",
+                "--symlink", "usr/sbin", "/sbin",
+                "--dir", "/tmp",
+                "--proc", "/proc",
+                "--dev", "/dev",
+                "--unshare-all",
+                "--bind", workspace_abs, workspace_abs,
+                "--ro-bind", script_path, "/tmp/run_script.sh",
+                "--",
+                "/tmp/run_script.sh"
+            ]
+            
+        elif effective_level in ["bwrap", "auto"]:
+            cmd = [
+                "bwrap",
+                "--ro-bind", "/usr", "/usr",
+                "--symlink", "usr/bin", "/bin",
+                "--symlink", "usr/lib", "/lib",
+                "--symlink", "usr/lib64", "/lib64",
+                "--symlink", "usr/sbin", "/sbin",
+                "--dir", "/tmp",
+                "--dir", "/run",
+                "--proc", "/proc",
+                "--dev", "/dev",
+                "--unshare-all",
+                "--new-session",
+                "--die-with-parent",
+                "--bind", workspace_abs, workspace_abs,
+                "--bind", "/dev/null", os.path.join(workspace_abs, ".env"),
+                "--bind", "/dev/null", os.path.join(workspace_abs, "logs", "kaia.log"),
+                "--tmpfs", os.path.join(workspace_abs, "storage"),
+                "--ro-bind", script_path, "/tmp/run_script.sh",
+                "--",
+                "/tmp/run_script.sh"
+            ]
+            
+        elif effective_level == "systemd-nspawn":
+            machine_dir = "/var/lib/machines/kaia"
+            if os.path.exists(machine_dir):
+                cmd = ["sudo", "systemd-nspawn", "-D", machine_dir, "--private-users=pick", "/bin/bash", "-c", script_path]
+            else:
+                logger.warning("systemd-nspawn machine directory not found at /var/lib/machines/kaia. Falling back to bwrap.")
+                cmd = [
+                    "bwrap",
+                    "--ro-bind", "/usr", "/usr",
+                    "--symlink", "usr/bin", "/bin",
+                    "--symlink", "usr/lib", "/lib",
+                    "--symlink", "usr/lib64", "/lib64",
+                    "--symlink", "usr/sbin", "/sbin",
+                    "--dir", "/tmp",
+                    "--dir", "/run",
+                    "--proc", "/proc",
+                    "--dev", "/dev",
+                    "--unshare-all",
+                    "--new-session",
+                    "--die-with-parent",
+                    "--bind", workspace_abs, workspace_abs,
+                    "--bind", "/dev/null", os.path.join(workspace_abs, ".env"),
+                    "--bind", "/dev/null", os.path.join(workspace_abs, "logs", "kaia.log"),
+                    "--tmpfs", os.path.join(workspace_abs, "storage"),
+                    "--ro-bind", script_path, "/tmp/run_script.sh",
+                    "--",
+                    "/tmp/run_script.sh"
+                ]
+                
+        else: # gvisor, firecracker fallbacks
+            logger.warning(f"Containment primitive '{effective_level}' not fully installed on host. Falling back to bwrap.")
+            cmd = [
+                "bwrap",
+                "--ro-bind", "/usr", "/usr",
+                "--symlink", "usr/bin", "/bin",
+                "--symlink", "usr/lib", "/lib",
+                "--symlink", "usr/lib64", "/lib64",
+                "--symlink", "usr/sbin", "/sbin",
+                "--dir", "/tmp",
+                "--dir", "/run",
+                "--proc", "/proc",
+                "--dev", "/dev",
+                "--unshare-all",
+                "--new-session",
+                "--die-with-parent",
+                "--bind", workspace_abs, workspace_abs,
+                "--bind", "/dev/null", os.path.join(workspace_abs, ".env"),
+                "--bind", "/dev/null", os.path.join(workspace_abs, "logs", "kaia.log"),
+                "--tmpfs", os.path.join(workspace_abs, "storage"),
+                "--ro-bind", script_path, "/tmp/run_script.sh",
+                "--",
+                "/tmp/run_script.sh"
+            ]
+
+        # Apply cgroup resource ceilings via systemd-run scope wrapper
+        cgroup_wrapper = [
+            "systemd-run",
+            "--user",
+            "--scope",
+            "-p", f"CPUQuota={config.CGROUP_CPU_QUOTA}",
+            "-p", f"MemoryMax={config.CGROUP_MEMORY_MAX}",
+            "-p", f"TasksMax={config.CGROUP_TASKS_MAX}",
+            "-p", f"IOWeight={config.CGROUP_IO_WEIGHT}"
         ]
+        cmd = cgroup_wrapper + cmd
+
         return HostExecutor._run_cmd(cmd)
 
     @staticmethod
