@@ -1,7 +1,11 @@
 import sqlite3
 import os
 import logging
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
+
+import requests
+
 import config
 
 logger = logging.getLogger(__name__)
@@ -11,6 +15,11 @@ THREAT_INTEL_DIR = os.path.join(os.path.dirname(config.SECURITY_DB_PATH), "threa
 REPUTATION_DB_PATH = os.path.join(THREAT_INTEL_DIR, "reputation.db")
 INTERNETDB_PATH = os.path.join(THREAT_INTEL_DIR, "internetdb", "internetdb.db")
 CVE_DB_PATH = os.path.join(THREAT_INTEL_DIR, "cvedb", "cve.db")
+
+# InternetDB API configuration
+INTERNETDB_API_URL = "https://internetdb.shodan.io"
+INTERNETDB_CACHE_TTL_DAYS = 7
+_last_api_call_time = 0.0  # Module-level rate limiter state
 
 def initialize_intel():
     """Initializes local threat intelligence directories and SQLite databases with mock values for testing."""
@@ -32,7 +41,7 @@ def initialize_intel():
     conn.commit()
     conn.close()
 
-    # 2. InternetDB mock database
+    # 2. InternetDB cache database
     conn = sqlite3.connect(INTERNETDB_PATH)
     cursor = conn.cursor()
     cursor.execute("""
@@ -42,18 +51,15 @@ def initialize_intel():
             hostnames TEXT, -- comma-separated list
             tags TEXT, -- comma-separated list
             vulns TEXT, -- comma-separated list of CVEs
-            cpes TEXT -- comma-separated list
+            cpes TEXT, -- comma-separated list
+            last_updated TEXT NOT NULL DEFAULT ''
         )
     """)
-    # Insert some mock values for testing
-    cursor.executemany("""
-        INSERT OR IGNORE INTO data (ip, ports, hostnames, tags, vulns, cpes)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, [
-        ("8.8.8.8", "53", "dns.google", "dns,safe", "", "cpe:/a:google:dns"),
-        ("127.0.0.1", "22,80,443", "localhost", "local", "", ""),
-        ("203.0.113.42", "22,8080", "compromised.host", "malicious,scanner", "CVE-2026-1234", "cpe:/o:linux:kernel")
-    ])
+    # Migration: add last_updated column if missing from an older schema
+    try:
+        cursor.execute("SELECT last_updated FROM data LIMIT 1")
+    except sqlite3.OperationalError:
+        cursor.execute("ALTER TABLE data ADD COLUMN last_updated TEXT NOT NULL DEFAULT ''")
     conn.commit()
     conn.close()
 
@@ -179,36 +185,144 @@ def lookup_cve_details(cve_id: str) -> dict:
         "details": "Details not available locally."
     }
 
-def lookup_internetdb(ip: str) -> dict:
-    """Queries Shodan InternetDB SQLite database for open ports, hostnames, tags, vulns, and cpes."""
-    initialize_intel()
+def _is_cache_stale(last_updated_str: str) -> bool:
+    """Returns True if the cached entry is older than INTERNETDB_CACHE_TTL_DAYS or has no timestamp."""
+    if not last_updated_str:
+        return True
+    try:
+        cached_at = datetime.fromisoformat(last_updated_str.replace("Z", "+00:00").replace("+00:00", ""))
+        return (datetime.utcnow() - cached_at) > timedelta(days=INTERNETDB_CACHE_TTL_DAYS)
+    except (ValueError, TypeError):
+        return True
+
+
+def _fetch_internetdb_api(ip: str) -> dict:
+    """
+    Fetches IP enrichment data from the free Shodan InternetDB API.
+    https://internetdb.shodan.io/{ip} — no API key required, free for non-commercial use.
+    Rate-limited to ~1 request/second.
+    Returns parsed dict on success, empty dict on failure.
+    """
+    global _last_api_call_time
+
+    # Enforce ~1 req/sec rate limit
+    elapsed = time.monotonic() - _last_api_call_time
+    if elapsed < 1.0:
+        time.sleep(1.0 - elapsed)
+
+    url = f"{INTERNETDB_API_URL}/{ip}"
+    try:
+        resp = requests.get(url, timeout=10)
+        _last_api_call_time = time.monotonic()
+
+        if resp.status_code == 404:
+            # Shodan returns 404 for IPs with no data — this is expected, not an error
+            logger.debug(f"InternetDB: No data for IP {ip} (404)")
+            return {}
+        resp.raise_for_status()
+        return resp.json()
+    except requests.RequestException as e:
+        _last_api_call_time = time.monotonic()
+        logger.warning(f"InternetDB API request failed for {ip}: {e}")
+        return {}
+
+
+def _cache_internetdb_result(ip: str, api_data: dict):
+    """Writes an InternetDB API response into the local SQLite cache."""
     try:
         conn = sqlite3.connect(INTERNETDB_PATH)
         cursor = conn.cursor()
-        cursor.execute("SELECT ports, hostnames, tags, vulns, cpes FROM data WHERE ip = ?", (ip,))
-        row = cursor.fetchone()
-        if row:
-            return {
-                "ip": ip,
-                "ports": [int(p) for p in row[0].split(",") if p.strip().isdigit()] if row[0] else [],
-                "hostnames": row[1].split(",") if row[1] else [],
-                "tags": row[2].split(",") if row[2] else [],
-                "vulns": row[3].split(",") if row[3] else [],
-                "cpes": row[4].split(",") if row[4] else [],
-                "found": True
-            }
+        cursor.execute("""
+            INSERT OR REPLACE INTO data (ip, ports, hostnames, tags, vulns, cpes, last_updated)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            ip,
+            ",".join(str(p) for p in api_data.get("ports", [])),
+            ",".join(api_data.get("hostnames", [])),
+            ",".join(api_data.get("tags", [])),
+            ",".join(api_data.get("vulns", [])),
+            ",".join(api_data.get("cpes", [])),
+            datetime.utcnow().isoformat() + "Z"
+        ))
+        conn.commit()
     except Exception as e:
-        logger.error(f"Failed to query Shodan InternetDB: {e}")
+        logger.error(f"Failed to cache InternetDB result for {ip}: {e}")
     finally:
         if 'conn' in locals():
             conn.close()
 
+
+def _parse_internetdb_row(ip: str, row: tuple, source: str = "cache") -> dict:
+    """Parses a raw SQLite row into the standard InternetDB result dict."""
     return {
         "ip": ip,
-        "ports": [],
-        "hostnames": [],
-        "tags": [],
-        "vulns": [],
-        "cpes": [],
-        "found": False
+        "ports": [int(p) for p in row[0].split(",") if p.strip().isdigit()] if row[0] else [],
+        "hostnames": [h for h in row[1].split(",") if h] if row[1] else [],
+        "tags": [t for t in row[2].split(",") if t] if row[2] else [],
+        "vulns": [v for v in row[3].split(",") if v] if row[3] else [],
+        "cpes": [c for c in row[4].split(",") if c] if row[4] else [],
+        "found": True,
+        "source": source
     }
+
+
+def lookup_internetdb(ip: str) -> dict:
+    """
+    Queries Shodan InternetDB for open ports, hostnames, tags, vulns, and CPEs.
+
+    Strategy: cache-first with lazy on-demand API fallback.
+    1. Check local SQLite cache.
+    2. On cache miss or stale entry (>7 days), call the free InternetDB API.
+    3. Cache the API result locally for future lookups.
+    4. On API error, return the stale cache if available, otherwise empty result.
+    """
+    initialize_intel()
+    _NOT_FOUND = {
+        "ip": ip, "ports": [], "hostnames": [], "tags": [],
+        "vulns": [], "cpes": [], "found": False, "source": "none"
+    }
+
+    # Step 1: Check local cache
+    cached_row = None
+    cached_timestamp = ""
+    try:
+        conn = sqlite3.connect(INTERNETDB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT ports, hostnames, tags, vulns, cpes, last_updated FROM data WHERE ip = ?", (ip,))
+        row = cursor.fetchone()
+        if row:
+            cached_row = row[:5]
+            cached_timestamp = row[5] if row[5] else ""
+    except Exception as e:
+        logger.error(f"Failed to query InternetDB cache: {e}")
+    finally:
+        if 'conn' in locals():
+            conn.close()
+
+    # Step 2: Return fresh cache hit immediately
+    if cached_row and not _is_cache_stale(cached_timestamp):
+        return _parse_internetdb_row(ip, cached_row, source="cache")
+
+    # Step 3: Cache miss or stale — call the API
+    api_data = _fetch_internetdb_api(ip)
+
+    if api_data:
+        # Cache the fresh result
+        _cache_internetdb_result(ip, api_data)
+        return {
+            "ip": ip,
+            "ports": api_data.get("ports", []),
+            "hostnames": api_data.get("hostnames", []),
+            "tags": api_data.get("tags", []),
+            "vulns": api_data.get("vulns", []),
+            "cpes": api_data.get("cpes", []),
+            "found": True,
+            "source": "api"
+        }
+
+    # Step 4: API failed — return stale cache if available
+    if cached_row:
+        logger.info(f"InternetDB API unavailable for {ip}, returning stale cache")
+        return _parse_internetdb_row(ip, cached_row, source="stale_cache")
+
+    return _NOT_FOUND

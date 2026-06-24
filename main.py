@@ -593,7 +593,7 @@ def generate_action_plan(user_input: str) -> Dict[str, str]:
     system_prompt_for_action_plan = (
         "You are an AI that determines the user's intent and provides a JSON response. "
         "Your response MUST be a JSON object with two keys: 'action' and 'content'. "
-        "The 'action' must be one of: 'knowledge_query', 'chat', 'command', 'store_data', 'retrieve_data', 'sql', 'run_script', 'system_status', 'convert_video_to_gif', 'get_persona_content', 'text_extraction', 'rebuild_index'. "
+        "The 'action' must be one of: 'knowledge_query', 'chat', 'command', 'store_data', 'retrieve_data', 'sql', 'run_script', 'system_status', 'get_persona_content', 'text_extraction', 'rebuild_index'. "
         "The 'content' should be the relevant text for the chosen action. "
         "Respond ONLY with the JSON object. Do NOT include any other text or explanations."
         "Example: {'action': 'knowledge_query', 'content': 'What is the capital of France?'}"

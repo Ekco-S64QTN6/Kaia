@@ -442,7 +442,7 @@ class KaiaCLI:
             "3. Service Control:\n"
             "{\n"
             "  \"action\": \"restart_service\",\n"
-            "  \"service_name\": \"nginx\" | \"postgresql\" | \"ollama\" | \"chroma\",\n"
+            "  \"service_name\": \"nginx\" | \"postgresql\" | \"ollama\",\n"
             "  \"justification\": \"Detailed justification explaining unit health degradation\",\n"
             "  \"session_id\": \"sess_default\"\n"
             "}\n\n"

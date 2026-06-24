@@ -321,7 +321,7 @@ class PolicyGate:
                     return {"status": "denied", "message": f"Token verification failed: {err_tok}"}
 
                 # Deterministic Evaluator checks service allowlist before execution
-                ALLOWED_SERVICES = ["nginx", "postgresql", "ollama", "chroma"]
+                ALLOWED_SERVICES = ["nginx", "postgresql", "ollama"]
                 if req.service_name not in ALLOWED_SERVICES:
                     self._log_audit(req, "denied", reason=f"Service '{req.service_name}' is not in the allowed services list.")
                     log_security_event("unauthorized_service_restart_attempt", "policy_gate", "kaiacord", hashlib.sha256(str(payload).encode()).hexdigest(), "blocked", session_id)

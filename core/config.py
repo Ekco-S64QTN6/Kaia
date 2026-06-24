@@ -69,7 +69,6 @@ ACTION_PLAN_SYSTEM_PROMPT = """You are an AI assistant that classifies user inte
 Categories:
 - "command": For requests to run terminal commands (e.g., "list files", "check running processes", "change directory").
 - "run_script": For explicit requests to execute a specific script file (e.g., "run my_script.sh", "execute cleanup.py").
-- "convert_video_to_gif": For requests to convert video files (mp4, webm) to GIF (e.g., "convert video to gif", "make a gif from this mp4").
 - "knowledge_query": For questions that require information retrieval from a knowledge base (e.g., "What is...", "Explain...", "According to...", "Summarize...", "List all books...", "Can you pull text from X.pdf?").
 - "sql": For complex database queries requiring SQL joins/aggregations on `facts`, `interaction_history`, `user_preferences` tables.
 - "retrieve_data": For simple retrieval of stored personal data ("What are my preferences?", "List my facts", "What do you know about me?", "List history?").
@@ -132,10 +131,7 @@ ACTION_PLAN_EXAMPLES = [
     {"role": "assistant", "content": json.dumps({"action": "run_script", "content": "mp4-to-gif.sh"})},
     {"role": "user", "content": "execute cleanup.py"},
     {"role": "assistant", "content": json.dumps({"action": "run_script", "content": "cleanup.py"})},
-    {"role": "user", "content": "convert video to gif"},
-    {"role": "assistant", "content": json.dumps({"action": "convert_video_to_gif", "content": "video to gif"})},
-    {"role": "user", "content": "make a gif from this mp4"},
-    {"role": "assistant", "content": json.dumps({"action": "convert_video_to_gif", "content": "mp4 to gif"})},
+
     {"role": "user", "content": "refresh your knowledge base"},
     {"role": "assistant", "content": json.dumps({"action": "rebuild_index", "content": "refresh knowledge"})},
 ]

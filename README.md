@@ -58,7 +58,7 @@ Nested processes are confined via `bwrap` with `--unshare-all --new-session --di
 The agent never runs raw shell commands. Privileged actions flow through the policy gate daemon listening on `/run/kaiacord/policy_gate.sock`.
 * **Diagnostics (Green Tier):** Reads `ss`, `ip route`, `nftables list` via direct subprocess calls.
 * **Mitigation (Yellow Tier):** Configures direct firewall blocks (`nftables drop`).
-* **Service Control (Yellow Tier):** Restarts system units within a static allowlist (e.g. `nginx`, `postgresql`, `ollama`).
+* **Service Control (Yellow Tier):** Restarts system units within a static allowlist (`nginx`, `postgresql`, `ollama`).
 * **State Modification (Red Tier):** File modifications restricted to the workspace directory.
 * **Script Execution (Red Tier):** Runs scripts confined within Bubblewrap.
 
@@ -108,6 +108,7 @@ Kaia/
 │   └── threat_intel.py         # GeoLite2 & local reputation intelligence
 │
 ├── tests/                      # Suite of verification tests
+│   ├── test_advanced_security.py # Lattice intersection & sandbox tier tests
 │   ├── test_database_utils.py  # DB logic unit tests
 │   ├── test_heuristics.py      # Prompt classification tests
 │   ├── test_kaia_cli.py        # System status mock tests
@@ -166,7 +167,7 @@ python tests/test_heuristics.py
 ```
 
 ### 5. Launching Kaia
-Initialize all local dependencies (Ollama, ChromaDB, Postgres) and launch the CLI session:
+Initialize all local dependencies (Ollama, Postgres) and launch the CLI session:
 ```bash
 ./scripts/activate_kaia_env.sh
 ```

@@ -46,7 +46,7 @@ class HostExecutor:
     @staticmethod
     def execute_service_control(service_name: str) -> tuple:
         """Restarts a systemd unit."""
-        ALLOWED_SERVICES = ["nginx", "postgresql", "ollama", "chroma"]
+        ALLOWED_SERVICES = ["nginx", "postgresql", "ollama"]
         if service_name not in ALLOWED_SERVICES:
             return False, "", f"Service {service_name} is not in the allowlist for restarts."
 
