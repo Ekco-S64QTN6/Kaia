@@ -3,21 +3,8 @@
 Kaia Dashboard: System & Security Monitoring TUI
 =================================================
 
-Production-quality curses dashboard for the Kaia hardened AI admin agent.
-Adapted from kaiamon.py's snapshot-based rendering architecture with
-strict thread-ownership boundaries.
-
-Displays four read-only panes:
-  1. PINGS — Latency to Ollama, DNS, Policy Gate socket
-  2. SERVICES — Health of ollama, postgresql, Policy Gate daemon
-  3. THERMALS — CPU/GPU temps, power, throttling (unchanged from kaiamon)
-  4. AUDIT LOG — Security events from security_events.db & audit_ledger.json
-
-Designed to run as a standalone companion process in a tiled terminal,
-sitting next to the main Kaia CLI session.
-
-Dependencies: stdlib, psutil, optional pynvml
-Target: Arch Linux workstation running Kaia
+curses dashboard for the Kaia hardened AI admin agent.
+snapshot-based rendering architecture with strict thread-ownership boundaries.
 """
 
 import curses
