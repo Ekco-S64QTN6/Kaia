@@ -67,12 +67,19 @@ class HostExecutor:
         if filename.endswith(".py") or filename.endswith(".sh"):
             return False, "", "Path modification violation: writing to script or code files (.py, .sh) is blocked."
 
+        BLOCKED_HIDDEN = {".env", ".git"}
         if filename.startswith("."):
+            if filename in BLOCKED_HIDDEN:
+                return False, "", f"Path modification violation: writing to protected file '{filename}' is blocked."
             return False, "", f"Path modification violation: writing to hidden files ({filename}) is blocked."
 
         # Prevent modifying folders inside protected directory tree
         rel_path = os.path.relpath(abs_path, workspace_abs)
         parts = rel_path.split(os.sep)
+
+        # Block any path containing .git as a directory component
+        if ".git" in parts:
+            return False, "", "Path modification violation: writing into .git directory tree is blocked."
 
         # Block modifying files in system directories
         BLOCKED_DIRS = {"core", "security", "tests", "scripts", "toolbox", "storage"}

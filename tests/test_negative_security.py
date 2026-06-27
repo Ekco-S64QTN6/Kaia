@@ -269,3 +269,72 @@ def test_unauthorized_service(gate_server):
     row = check_db_blocked()
     assert row is not None
     assert row[1] == "blocked"
+
+def test_blocklisted_git(gate_server):
+    path = os.path.join(config.WORKSPACE_DIR, ".git", "config")
+    token = generate_capability_token("write_file", path)
+    payload = {
+        "action": "write_file",
+        "filepath": path,
+        "content": "malicious",
+        "justification": "Testing .git blocklist",
+        "capability_token": token,
+        "session_id": "test_neg_git"
+    }
+    resp = send_framed_request(gate_server.socket_path, payload)
+    assert resp.get("approved") is False
+    row = check_db_blocked()
+    assert row is not None and row[1] == "blocked"
+
+def test_protected_dir_storage(gate_server):
+    path = os.path.join(config.WORKSPACE_DIR, "storage", "anything.txt")
+    token = generate_capability_token("write_file", path)
+    payload = {
+        "action": "write_file",
+        "filepath": path,
+        "content": "text",
+        "justification": "Testing storage dir blocklist",
+        "capability_token": token,
+        "session_id": "test_neg_storage"
+    }
+    resp = send_framed_request(gate_server.socket_path, payload)
+    assert resp.get("approved") is False
+    row = check_db_blocked()
+    assert row is not None and row[1] == "blocked"
+
+def test_sandbox_env_masked(gate_server):
+    """Verify .env is masked to /dev/null inside the Bubblewrap sandbox (INV-011)."""
+    script_path = os.path.expanduser("~/free-space.sh")
+    env_path = os.path.join(config.WORKSPACE_DIR, ".env")
+    try:
+        with open(script_path, "w") as f:
+            f.write(f"#!/bin/bash\ncat {env_path} 2>/dev/null\necho EXIT_CODE_$?\n")
+        os.chmod(script_path, 0o755)
+    except Exception as e:
+        pytest.skip(f"Cannot create test script: {e}")
+
+    token = generate_capability_token("run_script", "free-space.sh")
+    payload = {
+        "action": "run_script",
+        "script_name": "free-space.sh",
+        "justification": "Sandbox masking test",
+        "capability_token": token,
+        "session_id": "test_sandbox_mask"
+    }
+    try:
+        resp = send_framed_request(gate_server.socket_path, payload)
+        stdout = resp.get("executor_response", {}).get("stdout", "")
+        # .env content must not appear — output should only be EXIT_CODE_0 (cat succeeded but file is empty)
+        # Check that no key=value patterns appear (would indicate .env leaked)
+        import re
+        assert not re.search(r"[A-Z_]+=\S+", stdout), f".env content leaked into sandbox stdout: {stdout}"
+    finally:
+        if os.path.exists(script_path):
+            os.remove(script_path)
+
+def test_executor_allowlist_enforced_directly():
+    """HostExecutor must enforce its own allowlist even when called without PolicyGate."""
+    from security.host_executor import HostExecutor
+    success, stdout, stderr = HostExecutor.execute_service_control("apache2")
+    assert not success
+    assert "allowlist" in stderr.lower() or "not in" in stderr.lower()

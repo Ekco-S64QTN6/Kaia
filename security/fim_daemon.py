@@ -23,6 +23,8 @@ FAN_MARK_MOUNT = 0x00000010
 FAN_MODIFY = 0x00000002
 FAN_CLOSE_WRITE = 0x00000008
 FAN_ONDIR = 0x40000000
+FAN_CREATE = 0x00000100
+FAN_ATTRIB = 0x00000004
 
 O_RDONLY = 0x00000000
 O_LARGEFILE = 0x00008000
@@ -110,7 +112,7 @@ class FIMDaemon:
 
         # Mark mount containing WORKSPACE_DIR
         workspace_path = config.WORKSPACE_DIR.encode("utf-8")
-        mask = FAN_MODIFY | FAN_CLOSE_WRITE | FAN_ONDIR
+        mask = FAN_MODIFY | FAN_CLOSE_WRITE | FAN_CREATE | FAN_ATTRIB | FAN_ONDIR
         res = self.libc.fanotify_mark(self.fan_fd, FAN_MARK_ADD | FAN_MARK_MOUNT, mask, -1, workspace_path)
         if res < 0:
             errno = ctypes.get_errno()
@@ -238,7 +240,14 @@ class FIMDaemon:
             pass
 
         # Check mask type
-        event_type = "modify" if (mask & FAN_MODIFY) else "close_write"
+        if mask & FAN_CREATE:
+            event_type = "create"
+        elif mask & FAN_ATTRIB:
+            event_type = "attrib"
+        elif mask & FAN_MODIFY:
+            event_type = "modify"
+        else:
+            event_type = "close_write"
         
         # Check ELF or shebang
         is_executable = False
