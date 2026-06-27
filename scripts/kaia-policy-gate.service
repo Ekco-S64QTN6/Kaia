@@ -1,16 +1,14 @@
-# Systemd service unit for Kaia Policy Gate
-# Installation instructions:
-#   sudo cp scripts/kaia-policy-gate.service /etc/systemd/system/
-#   sudo systemctl daemon-reload
-#   sudo systemctl enable --now kaia-policy-gate.service
-
+# IMPORTANT: Set KAIA_PROJECT_DIR to the absolute path of your Kaia repo.
+# Edit the Environment= line below before running: systemctl enable --now <service>
 [Unit]
 Description=Kaia Out-of-Process Policy Gate Daemon
 After=network.target postgresql.service
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 /home/ekco/github/Kaia/security/policy_gate.py
+Environment=KAIA_PROJECT_DIR=/home/ekco/github/Kaia
+ExecStart=/usr/bin/python3 ${KAIA_PROJECT_DIR}/security/policy_gate.py
+WorkingDirectory=${KAIA_PROJECT_DIR}
 Restart=always
 RestartSec=1
 RuntimeDirectory=kaiacord

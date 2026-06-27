@@ -52,6 +52,7 @@ if systemctl list-unit-files kaia-policy-gate.service &>/dev/null; then
         exit 1
     fi
 else
+    # To run as a systemd service instead of nohup, run: sudo scripts/install_services.sh
     # Fallback to nohup launch
     if ! pgrep -f "security/policy_gate.py" > /dev/null; then
         echo -e "${COLOR_YELLOW}Policy Gate Daemon is not running. Starting via fallback nohup...${COLOR_RESET}"

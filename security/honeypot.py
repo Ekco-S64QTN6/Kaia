@@ -10,6 +10,8 @@ import logging
 import threading
 import subprocess
 import config
+from security.db import log_security_event
+
 
 logger = logging.getLogger(__name__)
 

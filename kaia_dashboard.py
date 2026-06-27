@@ -28,6 +28,7 @@ from typing import Dict, List, Optional, Set, Tuple
 from collections import deque
 from datetime import datetime, timedelta
 import queue
+import logging
 
 import psutil
 
@@ -44,6 +45,9 @@ try:
     HAS_PYNVML = True
 except ImportError:
     HAS_PYNVML = False
+
+logger = logging.getLogger(__name__)
+
 
 
 # ==================== CONSTANTS ====================
@@ -324,9 +328,10 @@ class ThreatIntelCollector(threading.Thread):
                     for ip in unique_ips:
                         rep = threat_intel.get_ip_reputation(ip)
                         shodan = threat_intel.lookup_internetdb(ip)
+                        geo = threat_intel.lookup_geoip(ip)
                         recent_blocks.append({
                             "ip": ip,
-                            "geo": rep.get("tags", ["US"]) if rep.get("tags") else ["US"],
+                            "geo": geo.get("country", "Unknown"),
                             "tags": shodan.get("tags", []),
                             "ports": shodan.get("ports", [])
                         })
@@ -408,7 +413,7 @@ class ContainmentCollector(threading.Thread):
             w_lvl = config.WORKSPACE_LATTICE_LEVEL
             g_idx = config.LATTICE_LEVELS.index(g_lvl) if g_lvl in config.LATTICE_LEVELS else 0
             w_idx = config.LATTICE_LEVELS.index(w_lvl) if w_lvl in config.LATTICE_LEVELS else 0
-            eff_idx = min(g_idx, w_idx)
+            eff_idx = max(g_idx, w_idx)
             eff_lvl = config.LATTICE_LEVELS[eff_idx]
             
             lattice_str = f"GLOBAL({g_idx}) ∩ WORKSPACE({w_idx}) → EFFECTIVE({eff_idx})"
@@ -446,12 +451,24 @@ class ContainmentCollector(threading.Thread):
                     pass
             
             fim_alerts = []
-            try:
-                from security.fim_daemon import FIMDaemon
-                fim_daemon = FIMDaemon()
-                fim_alerts = fim_daemon.get_recent_alerts(5)
-            except Exception as e:
-                logger.error(f"Failed to fetch FIM alerts: {e}")
+            fim_db_path = "/var/lib/secdaemon/fim_audit.db"
+            if os.path.exists(fim_db_path):
+                try:
+                    conn = sqlite3.connect(fim_db_path, timeout=1.0)
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        SELECT timestamp, event_type, pid, comm, path, yara_matches, sha256
+                        FROM fim_events ORDER BY rowid DESC LIMIT 5
+                    """)
+                    rows = cursor.fetchall()
+                    for row in rows:
+                        fim_alerts.append({
+                            "timestamp": row[0], "event_type": row[1], "pid": row[2],
+                            "comm": row[3], "path": row[4], "yara_matches": row[5], "sha256": row[6]
+                        })
+                    conn.close()
+                except Exception as e:
+                    logger.error(f"Failed to query FIM audit DB: {e}")
 
             privilege_alerts = []
             if os.path.exists(config.SECURITY_DB_PATH):
@@ -602,17 +619,10 @@ class SystemSecurityCollector(threading.Thread):
             # Yara rules count
             yara_rules_count = 0
             try:
-                from security.rule_engine import RuleEngine
-                engine = RuleEngine.get_instance()
-                if engine.scanner:
-                    yara_rules_count = len(engine.scanner)
-                else:
+                if os.path.exists(config.YARA_RULES_DIR):
                     yara_rules_count = len([f for f in os.listdir(config.YARA_RULES_DIR) if f.endswith(".yar")])
             except Exception:
-                try:
-                    yara_rules_count = len([f for f in os.listdir(config.YARA_RULES_DIR) if f.endswith(".yar")])
-                except Exception:
-                    pass
+                pass
 
             # Lockdown active
             lockdown_active = False
@@ -1398,6 +1408,7 @@ class KaiamonUI:
         self._history_idx = -1
         self._responses = []
         self._lockdown_pending = False
+        self._cmd_stop = threading.Event()
         threading.Thread(target=self._command_worker, daemon=True, name="cmd-worker").start()
 
     def _add_response(self, text: str) -> None:
@@ -1448,7 +1459,7 @@ class KaiamonUI:
             except Exception as e:
                 return False, f"Socket error: {e}"
 
-        while self._running or not self._cmd_queue.empty():
+        while not self._cmd_stop.is_set():
             try:
                 cmd_line = self._cmd_queue.get(timeout=0.5)
             except queue.Empty:
@@ -1622,20 +1633,29 @@ class KaiamonUI:
 
                 elif cmd == "show" and len(args) >= 3 and args[0] == "fim" and args[1] == "alerts":
                     self._add_response("Querying recent FIM alerts...")
-                    try:
-                        from security.fim_daemon import FIMDaemon
-                        fim = FIMDaemon()
-                        alerts = fim.get_recent_alerts(10)
-                        if alerts:
-                            for a in alerts:
-                                lbl = f" [{a['timestamp'][:19]}] {a['event_type'].upper()} │ {os.path.basename(a['path'])} │ {a['comm']} (PID {a['pid']})"
-                                if a['yara_matches']:
-                                    lbl += f" │ YARA:{a['yara_matches']}"
-                                self._add_response(lbl)
-                        else:
-                            self._add_response("No FIM alerts recorded.")
-                    except Exception as e:
-                        self._add_response(f"Error querying FIM: {e}")
+                    fim_db_path = "/var/lib/secdaemon/fim_audit.db"
+                    if os.path.exists(fim_db_path):
+                        try:
+                            conn = sqlite3.connect(fim_db_path, timeout=1.0)
+                            cursor = conn.cursor()
+                            cursor.execute("""
+                                SELECT timestamp, event_type, pid, comm, path, yara_matches, sha256
+                                FROM fim_events ORDER BY rowid DESC LIMIT 10
+                            """)
+                            rows = cursor.fetchall()
+                            if rows:
+                                for row in rows:
+                                    lbl = f" [{row[0][:19]}] {row[1].upper()} │ {os.path.basename(row[4])} │ {row[3]} (PID {row[2]})"
+                                    if row[5]:
+                                        lbl += f" │ YARA:{row[5]}"
+                                    self._add_response(lbl)
+                            else:
+                                self._add_response("No FIM alerts recorded.")
+                            conn.close()
+                        except Exception as e:
+                            self._add_response(f"Error querying FIM DB: {e}")
+                    else:
+                        self._add_response("FIM audit database not found.")
                 else:
                     self._add_response(f"Unknown command or arguments: {cmd_line}")
             except Exception as e:
@@ -1660,6 +1680,7 @@ class KaiamonUI:
             pass
         finally:
             self._running = False
+            self._cmd_stop.set()
             self._collector_mgr.stop_all()
             self._restore_terminal()
             signal.signal(signal.SIGINT, original_sigint)
@@ -1931,7 +1952,7 @@ class KaiamonUI:
             if ty >= pane.y + pane.height - 1:
                 break
             ip = item.get("ip")
-            geo = ",".join(item.get("geo", []))
+            geo = item.get("geo", "Unknown")
             tags = ",".join(item.get("tags", []))
             ports = ",".join(str(p) for p in item.get("ports", []))
             

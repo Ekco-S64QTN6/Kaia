@@ -146,7 +146,7 @@ class RuleEngine:
                 for entry in os.listdir(self.benign_corpus_dir):
                     filepath = os.path.join(self.benign_corpus_dir, entry)
                     if os.path.isfile(filepath):
-                        matches = rules.match(filepath)
+                        matches = rules.match(filepath=filepath)
                         if matches:
                             return False, "False positive detected locally on benign corpus."
                 try:

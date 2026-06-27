@@ -180,7 +180,16 @@ python tests/verify_security.py
 python tests/test_heuristics.py
 ```
 
-### 5. Launching Kaia
+### 5. (Optional) GeoIP Database
+To enable country annotations on blocked IPs, obtain a free MaxMind license key
+from https://www.maxmind.com and run:
+```bash
+export MAXMIND_LICENSE_KEY="your_key_here"
+./scripts/update_geoip.sh
+```
+Without this the geo field displays "Unknown" — all other functionality is unaffected.
+
+### 6. Launching Kaia
 Initialize all local dependencies (Ollama, Postgres) and launch the CLI session:
 ```bash
 ./scripts/activate_kaia_env.sh

@@ -1,3 +1,5 @@
+# IMPORTANT: Set KAIA_PROJECT_DIR to the absolute path of your Kaia repo.
+# Edit the Environment= line below before running: systemctl enable --now <service>
 [Unit]
 Description=Kaia Emergency Network Lockdown
 DefaultDependencies=no
@@ -5,7 +7,8 @@ Before=network.target shutdown.target
 
 [Service]
 Type=oneshot
-ExecStart=/bin/bash /home/ekco/github/Kaia/scripts/kaia-lockdown.sh
+Environment=KAIA_PROJECT_DIR=/home/ekco/github/Kaia
+ExecStart=/bin/bash ${KAIA_PROJECT_DIR}/scripts/kaia-lockdown.sh
 RemainAfterExit=no
 
 [Install]

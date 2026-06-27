@@ -281,38 +281,7 @@ class PolicyGate:
             trigger_lockdown("operator_command")
             return {"status": "success", "message": "Emergency lockdown activated."}
 
-        if action == "add_rule":
-            if not cap_token:
-                return {"status": "denied", "message": "Missing capability token."}
-            try:
-                from security.rule_engine import RuleEngine
-                from security.schemas import IocRuleRequest
-                rule_fields = {k: v for k, v in payload.items() if k not in ("action", "capability_token", "session_id")}
-                rule_req = IocRuleRequest(**rule_fields)
-                
-                ok_tok, err_tok = verify_capability_token(cap_token, "write_file", f"rules/{rule_req.rule_name}.yar")
-                if not ok_tok:
-                    self._log_audit(payload, "denied", reason=f"Invalid capability token: {err_tok}")
-                    log_security_event("invalid_capability_token", "policy_gate", "kaiacord", hashlib.sha256(str(payload).encode()).hexdigest(), "blocked", session_id)
-                    return {"status": "denied", "message": f"Invalid capability token: {err_tok}"}
-                
-                engine = RuleEngine.get_instance()
-                ok, err = engine.add_rule(
-                    rule_name=rule_req.rule_name,
-                    author=rule_req.author,
-                    threat_description=rule_req.threat_description,
-                    target_ioc_indicator=rule_req.target_ioc_indicator,
-                    mitre_framework_id=rule_req.mitre_framework_id
-                )
-                if ok:
-                    self._log_audit(payload, "approved", reason="YARA rule compiled and stored successfully.")
-                    return {"status": "success", "message": "YARA rule compiled, validated, and saved successfully."}
-                else:
-                    self._log_audit(payload, "denied", reason=f"Validation failed: {err}")
-                    return {"status": "error", "message": f"Validation failed: {err}"}
-            except Exception as e:
-                self._log_audit(payload, "denied", reason=f"Rule parsing exception: {e}")
-                return {"status": "error", "message": f"Rule compilation failed: {e}"}
+
 
         # Restrictiveness Lattice and Capability Intersection Checks
         try:
@@ -354,6 +323,39 @@ class PolicyGate:
                 result_status = "approved" if success else "failed"
                 self._log_audit(req, "approved" if success else "denied", executor="HostExecutor.execute_diagnostics")
                 return {"status": "success" if success else "error", "stdout": stdout, "stderr": stderr}
+
+            elif action == "add_rule":
+                if not cap_token:
+                    return {"status": "denied", "message": "Missing capability token."}
+                try:
+                    from security.rule_engine import RuleEngine
+                    from security.schemas import IocRuleRequest
+                    rule_fields = {k: v for k, v in payload.items() if k not in ("action", "capability_token", "session_id")}
+                    rule_req = IocRuleRequest(**rule_fields)
+                    
+                    ok_tok, err_tok = verify_capability_token(cap_token, "write_file", f"rules/{rule_req.rule_name}.yar")
+                    if not ok_tok:
+                        self._log_audit(payload, "denied", reason=f"Invalid capability token: {err_tok}")
+                        log_security_event("invalid_capability_token", "policy_gate", "kaiacord", hashlib.sha256(str(payload).encode()).hexdigest(), "blocked", session_id)
+                        return {"status": "denied", "message": f"Invalid capability token: {err_tok}"}
+                    
+                    engine = RuleEngine.get_instance()
+                    ok, err = engine.add_rule(
+                        rule_name=rule_req.rule_name,
+                        author=rule_req.author,
+                        threat_description=rule_req.threat_description,
+                        target_ioc_indicator=rule_req.target_ioc_indicator,
+                        mitre_framework_id=rule_req.mitre_framework_id
+                    )
+                    if ok:
+                        self._log_audit(payload, "approved", reason="YARA rule compiled and stored successfully.")
+                        return {"status": "success", "message": "YARA rule compiled, validated, and saved successfully."}
+                    else:
+                        self._log_audit(payload, "denied", reason=f"Validation failed: {err}")
+                        return {"status": "error", "message": f"Validation failed: {err}"}
+                except Exception as e:
+                    self._log_audit(payload, "denied", reason=f"Rule parsing exception: {e}")
+                    return {"status": "error", "message": f"Rule compilation failed: {e}"}
 
             elif action == "block_ip":
                 req = MitigationRequest(**payload)
