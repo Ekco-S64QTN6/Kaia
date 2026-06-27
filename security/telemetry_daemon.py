@@ -13,7 +13,28 @@ from security.db import log_security_event
 logger = logging.getLogger(__name__)
 
 def get_network_connections() -> list:
-    """Returns a list of active network connections in a structured, clean format."""
+    """Returns active network connections from eBPF, falling back to psutil if disabled."""
+    try:
+        from security.ebpf_telemetry import EBPFTelemetryEngine, HAS_BCC
+        if HAS_BCC:
+            engine = EBPFTelemetryEngine.get_instance()
+            conns = engine.get_recent_connections()
+            if conns:
+                formatted = []
+                for c in conns:
+                    formatted.append({
+                        "ip": c["daddr"],
+                        "port": str(c["dport"]),
+                        "pid": str(c["pid"]),
+                        "comm": c["comm"],
+                        "state": "ESTABLISHED",
+                        "timestamp": datetime.fromtimestamp(c["timestamp"]).isoformat() + "Z"
+                    })
+                return formatted
+    except Exception as e:
+        logger.warning(f"Failed to fetch network connections via eBPF: {e}")
+
+    # Fallback to psutil
     connections = []
     try:
         for conn in psutil.net_connections(kind='inet'):
@@ -41,7 +62,26 @@ def get_network_connections() -> list:
     return connections
 
 def get_process_lifecycle_events() -> list:
-    """Gets currently running processes."""
+    """Returns process execution events from eBPF, falling back to psutil if disabled."""
+    try:
+        from security.ebpf_telemetry import EBPFTelemetryEngine, HAS_BCC
+        if HAS_BCC:
+            engine = EBPFTelemetryEngine.get_instance()
+            execs = engine.get_recent_execs()
+            if execs:
+                formatted = []
+                for e in execs:
+                    formatted.append({
+                        "pid": str(e["pid"]),
+                        "comm": e["comm"],
+                        "path": e["filename"],
+                        "timestamp": datetime.fromtimestamp(e["timestamp"]).isoformat() + "Z"
+                    })
+                return formatted
+    except Exception as e:
+        logger.warning(f"Failed to fetch process telemetry via eBPF: {e}")
+
+    # Fallback to psutil
     processes = []
     try:
         for p in psutil.process_iter(['pid', 'name', 'exe', 'username']):
@@ -167,11 +207,10 @@ class ScriptSentinelHandler(FileSystemEventHandler):
             except Exception:
                 file_hash = "unknown"
             
-            # Log script sentinel warning to security DB
             log_security_event(
                 event_type="telemetry_script_sentinel_alert",
                 source="script_sentinel",
-                actor="system",
+                actor=filepath,
                 payload_hash=file_hash,
                 disposition="blocked",
                 session_id="system_sentinel"

@@ -160,3 +160,6 @@ yarl==1.20.1
 zipp==3.23.0
 watchdog==6.0.0
 PyGObject==3.56.3
+# bcc                  # BPF/eBPF Python bindings (installed system-wide via pacman, add as comment)
+yara-python>=4.3.0     # YARA rule compilation and scanning
+maxminddb>=2.4.0       # GeoLite2 MMDB reader (already imported in threat_intel.py, add formally)

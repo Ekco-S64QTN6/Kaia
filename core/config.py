@@ -24,7 +24,10 @@ load_dotenv(BASE_DIR / ".env")
 GENERAL_KNOWLEDGE_DIR = BASE_DIR / "core" / "data"
 PERSONAL_CONTEXT_DIR = BASE_DIR / "core" / "personal_context"
 PERSONA_DIR = BASE_DIR / "core" / "data"
-PERSIST_DIR = BASE_DIR / "storage"
+STORAGE_DIR = BASE_DIR / "storage"
+PERSIST_DIR = STORAGE_DIR
+SECURITY_STORAGE_DIR = STORAGE_DIR / "security"
+THREAT_INTEL_DIR = STORAGE_DIR / "threat_intel"
 DOWNLOADS_DIR = Path.home() / "Downloads"
 LOG_DIR = BASE_DIR / "logs"
 LOG_FILE_PATH = LOG_DIR / "kaia.log"
@@ -32,7 +35,9 @@ LOG_FILE_PATH = LOG_DIR / "kaia.log"
 # Ensure directories exist
 GENERAL_KNOWLEDGE_DIR.mkdir(exist_ok=True)
 PERSONAL_CONTEXT_DIR.mkdir(exist_ok=True)
-PERSIST_DIR.mkdir(exist_ok=True)
+STORAGE_DIR.mkdir(exist_ok=True)
+SECURITY_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+THREAT_INTEL_DIR.mkdir(parents=True, exist_ok=True)
 LOG_DIR.mkdir(exist_ok=True)
 
 # ChromaDB Configuration
@@ -173,10 +178,14 @@ SCRIPT_ALLOWLIST = [
 ]
 
 # Security Subsystem Configuration
-SECURITY_DB_PATH = str(PERSIST_DIR / "security_events.db")
-AUDIT_LOG_PATH = str(PERSIST_DIR / "audit_ledger.json")
+SECURITY_DB_PATH = str(SECURITY_STORAGE_DIR / "security_events.db")
+AUDIT_LOG_PATH = str(SECURITY_STORAGE_DIR / "audit_ledger.json")
 POLICY_GATE_SOCKET = "/run/kaiacord/policy_gate.sock"
 POLICY_GATE_SOCKET_FALLBACK = "/tmp/policy_gate.sock"
+DISCOVERY_INTERFACE = "auto"
+ASSETS_DB_PATH = str(THREAT_INTEL_DIR / "assets.db")
+GEOIP_DB_PATH = str(THREAT_INTEL_DIR / "geoip" / "GeoLite2-City.mmdb")
+YARA_RULES_DIR = str(THREAT_INTEL_DIR / "rules")
 try:
     CAPABILITY_TOKEN_SECRET = os.environ["KAIA_CAPABILITY_TOKEN_SECRET"]
 except KeyError:

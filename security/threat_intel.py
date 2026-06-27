@@ -11,7 +11,7 @@ import config
 logger = logging.getLogger(__name__)
 
 # Local threat intel directories
-THREAT_INTEL_DIR = os.path.join(os.path.dirname(config.SECURITY_DB_PATH), "threat_intel")
+THREAT_INTEL_DIR = str(config.THREAT_INTEL_DIR)
 REPUTATION_DB_PATH = os.path.join(THREAT_INTEL_DIR, "reputation.db")
 INTERNETDB_PATH = os.path.join(THREAT_INTEL_DIR, "internetdb", "internetdb.db")
 CVE_DB_PATH = os.path.join(THREAT_INTEL_DIR, "cvedb", "cve.db")
@@ -134,10 +134,9 @@ def lookup_geoip(ip: str) -> dict:
     Attempts to read from MaxMind GeoLite2-City MMDB database.
     If database is missing, returns safe default fields.
     """
-    initialize_intel()
     try:
         import maxminddb
-        geoip_db = os.path.join(THREAT_INTEL_DIR, "geoip", "GeoLite2-City.mmdb")
+        geoip_db = config.GEOIP_DB_PATH
         if os.path.exists(geoip_db):
             with maxminddb.open_database(geoip_db) as reader:
                 record = reader.get(ip)

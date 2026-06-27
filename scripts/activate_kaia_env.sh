@@ -38,26 +38,42 @@ if [ -f .env ]; then
 fi
 
 echo -e "${COLOR_BLUE}Checking Policy Gate Daemon status...${COLOR_RESET}"
-if ! pgrep -f "security/policy_gate.py" > /dev/null; then
-    echo -e "${COLOR_YELLOW}Policy Gate Daemon is not running. Starting...${COLOR_RESET}"
-    if [ -z "$KAIA_CAPABILITY_TOKEN_SECRET" ]; then
-        echo -e "${COLOR_RED}Error: KAIA_CAPABILITY_TOKEN_SECRET environment variable is not set. Cannot start Policy Gate Daemon.${COLOR_RESET}"
-        exit 1
+if systemctl list-unit-files kaia-policy-gate.service &>/dev/null; then
+    echo -e "${COLOR_BLUE}Systemd service kaia-policy-gate is installed.${COLOR_RESET}"
+    if ! systemctl is-active --quiet kaia-policy-gate.service; then
+        echo -e "${COLOR_YELLOW}Starting kaia-policy-gate service...${COLOR_RESET}"
+        sudo systemctl start kaia-policy-gate.service
+        sleep 2
     fi
-    sudo mkdir -p /run/kaiacord 2>/dev/null || true
-    sudo chown -R $USER:kaiacord /run/kaiacord 2>/dev/null || true
-    sudo chmod 0770 /run/kaiacord 2>/dev/null || true
-    
-    nohup "$KAIA_PROJECT_DIR/.venv/bin/python" "$KAIA_PROJECT_DIR/security/policy_gate.py" > "$KAIA_PROJECT_DIR/logs/policy_gate.log" 2>&1 &
-    sleep 2
-    if pgrep -f "security/policy_gate.py" > /dev/null; then
-        echo -e "${COLOR_GREEN}Policy Gate Daemon started successfully.${COLOR_RESET}"
+    if systemctl is-active --quiet kaia-policy-gate.service; then
+        echo -e "${COLOR_GREEN}Policy Gate Daemon systemd service is running.${COLOR_RESET}"
     else
-        echo -e "${COLOR_RED}Error: Policy Gate Daemon failed to start. Check $KAIA_PROJECT_DIR/logs/policy_gate.log for details.${COLOR_RESET}"
+        echo -e "${COLOR_RED}Error: Failed to start kaia-policy-gate service.${COLOR_RESET}"
         exit 1
     fi
 else
-    echo -e "${COLOR_GREEN}Policy Gate Daemon is already running.${COLOR_RESET}"
+    # Fallback to nohup launch
+    if ! pgrep -f "security/policy_gate.py" > /dev/null; then
+        echo -e "${COLOR_YELLOW}Policy Gate Daemon is not running. Starting via fallback nohup...${COLOR_RESET}"
+        if [ -z "$KAIA_CAPABILITY_TOKEN_SECRET" ]; then
+            echo -e "${COLOR_RED}Error: KAIA_CAPABILITY_TOKEN_SECRET environment variable is not set. Cannot start Policy Gate Daemon.${COLOR_RESET}"
+            exit 1
+        fi
+        sudo mkdir -p /run/kaiacord 2>/dev/null || true
+        sudo chown -R $USER:kaiacord /run/kaiacord 2>/dev/null || true
+        sudo chmod 0770 /run/kaiacord 2>/dev/null || true
+        
+        nohup "$KAIA_PROJECT_DIR/.venv/bin/python" "$KAIA_PROJECT_DIR/security/policy_gate.py" > "$KAIA_PROJECT_DIR/logs/policy_gate.log" 2>&1 &
+        sleep 2
+        if pgrep -f "security/policy_gate.py" > /dev/null; then
+            echo -e "${COLOR_GREEN}Policy Gate Daemon started successfully (fallback).${COLOR_RESET}"
+        else
+            echo -e "${COLOR_RED}Error: Policy Gate Daemon failed to start. Check $KAIA_PROJECT_DIR/logs/policy_gate.log for details.${COLOR_RESET}"
+            exit 1
+        fi
+    else
+        echo -e "${COLOR_GREEN}Policy Gate Daemon is already running (fallback).${COLOR_RESET}"
+    fi
 fi
 
 echo -e "${COLOR_BLUE}Checking Ollama status...${COLOR_RESET}"

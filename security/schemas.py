@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, Field, IPvAnyAddress
 
 class CapabilityToken(BaseModel):
@@ -61,5 +61,11 @@ class AuditRecord(BaseModel):
     executor: Optional[str] = None
     session_id: str
 
-# Use Any from typing
-from typing import Any
+
+class IocRuleRequest(BaseModel):
+    rule_name: str = Field(min_length=3, max_length=64, pattern=r"^[a-zA-Z0-9_]+$")
+    author: str = Field(default="Kaia Automated Rule Engine")
+    threat_description: str = Field(min_length=10, max_length=256)
+    target_ioc_indicator: str = Field(min_length=4, max_length=128)
+    mitre_framework_id: Optional[str] = Field(default=None, pattern=r"^T[0-9]{4}$")
+

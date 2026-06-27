@@ -40,10 +40,14 @@ def test_heuristics():
             
     if failed == 0:
         print("\nAll tests passed!")
-        sys.exit(0)
+        if __name__ == "__main__":
+            sys.exit(0)
     else:
         print(f"\n{failed} tests failed.")
-        sys.exit(1)
+        if __name__ == "__main__":
+            sys.exit(1)
+        else:
+            raise AssertionError(f"{failed} tests failed.")
 
 if __name__ == "__main__":
     test_heuristics()

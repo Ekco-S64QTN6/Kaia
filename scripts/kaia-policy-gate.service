@@ -1,0 +1,29 @@
+# Systemd service unit for Kaia Policy Gate
+# Installation instructions:
+#   sudo cp scripts/kaia-policy-gate.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now kaia-policy-gate.service
+
+[Unit]
+Description=Kaia Out-of-Process Policy Gate Daemon
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /home/ekco/github/Kaia/security/policy_gate.py
+Restart=always
+RestartSec=1
+RuntimeDirectory=kaiacord
+User=root
+Group=kaiacord
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ReadWritePaths=/run/kaiacord
+CapabilityBoundingSet=CAP_NET_RAW CAP_SYS_ADMIN
+AmbientCapabilities=CAP_NET_RAW CAP_SYS_ADMIN
+
+[Install]
+WantedBy=multi-user.target

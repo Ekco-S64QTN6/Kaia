@@ -26,6 +26,8 @@ import urllib.error
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
 from collections import deque
+from datetime import datetime, timedelta
+import queue
 
 import psutil
 
@@ -160,23 +162,14 @@ class KaiamonSnapshot:
     The UI thread renders exclusively from this object and never
     inspects collector-owned structures directly.
     """
-    pings: Dict[str, Tuple[float, ...]] = field(default_factory=dict)
-    services: Tuple[ServiceState, ...] = field(default_factory=tuple)
-    cpu_temp: float = 0.0
-    cpu_hotspot: float = 0.0
-    cpu_power: float = 0.0
-    cpu_throttled: bool = False
-    gpu_temp: float = 0.0
-    gpu_power: float = 0.0
-    gpu_fan: float = 0.0
-    gpu_mem_used: float = 0.0
-    split_lock_events: int = 0
-    split_lock_last_app: str = "None"
     logs: Tuple[LogEntry, ...] = field(default_factory=tuple)
     lps: float = 0.0
     lps_scale: float = 5.0
     filter_mode: str = "All"
     paused: bool = False
+    threat_intel: dict = field(default_factory=dict)
+    containment: dict = field(default_factory=dict)
+    system_security: dict = field(default_factory=dict)
     snapshot_time: float = field(default_factory=time.time)
 
 
@@ -195,7 +188,7 @@ class Pane:
 
 
 class LayoutManager:
-    """Calculates pane positions for the four-panel layout."""
+    """Calculates pane positions for the five-panel layout."""
 
     def __init__(self) -> None:
         self.height: int = 24
@@ -209,122 +202,440 @@ class LayoutManager:
         if height < MIN_TERMINAL_HEIGHT or width < MIN_TERMINAL_WIDTH:
             return False
 
-        top_height = 8
-        left_width = int(width * 0.35)
-        middle_width = int(width * 0.30)
-        right_width = width - left_width - middle_width
+        # Command interface takes bottom 5 lines
+        cmd_height = 5
+        top_height = height - cmd_height
 
-        self.panes["pings"] = Pane(
-            y=0, x=0, height=top_height, width=left_width,
-            title="PINGS (MS)", color_pair=1,
-        )
-        self.panes["services"] = Pane(
-            y=0, x=left_width, height=top_height, width=middle_width,
-            title="SERVICES", color_pair=2,
-        )
-        self.panes["thermals"] = Pane(
-            y=0, x=left_width + middle_width, height=top_height,
-            width=right_width, title="THERMALS", color_pair=1,
-        )
+        half_width = width // 2
+        half_height = top_height // 2
 
-        logs_height = height - top_height
-        menu_footer = "[Q]uit ╭─╮ [C]lear ╭─╮ [P]ause ╭─╮ [F]ilter"
         self.panes["logs"] = Pane(
-            y=top_height, x=0, height=logs_height, width=width,
-            title="SYSTEM LOGS", footer=menu_footer, color_pair=1,
+            y=0, x=0, height=half_height, width=half_width,
+            title="SECURITY AUDIT LOG", color_pair=1,
+        )
+        self.panes["threat_intel"] = Pane(
+            y=0, x=half_width, height=half_height, width=width - half_width,
+            title="THREAT INTELLIGENCE", color_pair=2,
+        )
+        self.panes["containment"] = Pane(
+            y=half_height, x=0, height=top_height - half_height, width=half_width,
+            title="CONTAINMENT & SENTINEL", color_pair=1,
+        )
+        self.panes["system_security"] = Pane(
+            y=half_height, x=half_width, height=top_height - half_height, width=width - half_width,
+            title="SYSTEM SECURITY", color_pair=2,
+        )
+
+        menu_footer = "[Q]uit [C]lear [P]ause [F]ilter:All/Sec/Net/Hw"
+        self.panes["command"] = Pane(
+            y=top_height, x=0, height=cmd_height, width=width,
+            title="COMMAND INTERFACE", footer=menu_footer, color_pair=1,
         )
         return True
 
 
-# ==================== COLLECTORS ====================
-
-class PingCollector:
-    """Measures network latency to configured targets via HTTP HEAD / TCP socket."""
-
+class ThreatIntelCollector(threading.Thread):
+    """Pane 2: Threat Intelligence data collector."""
     def __init__(self, stop_event: threading.Event) -> None:
+        super().__init__(daemon=True, name="threat-intel-collector")
         self._stop = stop_event
         self._lock = threading.Lock()
-        self._data: Dict[str, deque] = {
-            name: deque([0.0] * SPARKLINE_LENGTH, maxlen=SPARKLINE_LENGTH)
-            for name in PING_TARGETS
+        self._data = {
+            "active_blocks": 0,
+            "recent_blocks": [],
+            "gate_offline": False,
+            "rules_counts": {"input": 0, "forward": 0, "output": 0},
+            "recent_assets": [],
+            "honeypot_status": {"last_trigger_ip": "None", "last_trigger_time": "None", "total_triggers": 0}
         }
-        self._thread: Optional[threading.Thread] = None
-
-    def start(self) -> None:
-        """Launch the collector thread."""
-        self._thread = threading.Thread(
-            target=self._run, daemon=True, name="ping-collector",
-        )
-        self._thread.start()
-
-    def get_data(self) -> Dict[str, Tuple[float, ...]]:
-        """Return an immutable copy of current ping data."""
+        
+    def get_data(self) -> dict:
         with self._lock:
-            return {name: tuple(vals) for name, vals in self._data.items()}
-
-    # --- measurement helpers ---
-
-    @staticmethod
-    def _measure_http(url: str) -> float:
-        """Measure HTTP HEAD round-trip time in milliseconds.  Returns -1.0 on failure."""
-        t0 = time.perf_counter()
+            return dict(self._data)
+            
+    def _get_nft_counts(self):
+        counts = {"input": 0, "forward": 0, "output": 0}
+        gate_offline = False
         try:
-            req = urllib.request.Request(
-                url, headers={"User-Agent": HTTP_USER_AGENT}, method="HEAD",
-            )
-            try:
-                with urllib.request.urlopen(req, timeout=1.0) as res:
-                    res.read()
-            except urllib.error.HTTPError:
-                pass  # HTTP error still indicates a successful network round-trip
-            return (time.perf_counter() - t0) * 1000.0
+            res = subprocess.run(["sudo", "nft", "-nn", "list", "ruleset"], capture_output=True, text=True, timeout=3.0)
+            if res.returncode != 0:
+                gate_offline = True
+            else:
+                lines = res.stdout.splitlines()
+                current_chain = None
+                for line in lines:
+                    line_strip = line.strip()
+                    if "chain " in line_strip:
+                        if "input" in line_strip:
+                            current_chain = "input"
+                        elif "forward" in line_strip:
+                            current_chain = "forward"
+                        elif "output" in line_strip:
+                            current_chain = "output"
+                        else:
+                            current_chain = None
+                    elif line_strip == "}":
+                        current_chain = None
+                    elif current_chain and ("drop" in line_strip.lower() or "reject" in line_strip.lower()):
+                        counts[current_chain] += 1
         except Exception:
-            return -1.0
+            gate_offline = True
+        return counts, gate_offline
 
-    @staticmethod
-    def _measure_socket(host: str, port: int = 53) -> float:
-        """Measure TCP connection time in milliseconds.  Returns -1.0 on failure."""
-        t0 = time.perf_counter()
-        try:
-            with socket.create_connection((host, port), timeout=1.0):
-                pass
-            return (time.perf_counter() - t0) * 1000.0
-        except Exception:
-            return -1.0
-
-    @staticmethod
-    def _measure_socket_file(path: str) -> float:
-        """Check if a Unix domain socket file exists and is connectable.  Returns 0.1ms on success, -1.0 on failure."""
-        if not os.path.exists(path):
-            return -1.0
-        t0 = time.perf_counter()
-        try:
-            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            s.settimeout(1.0)
-            s.connect(path)
-            s.close()
-            return max(0.1, (time.perf_counter() - t0) * 1000.0)
-        except Exception:
-            return -1.0
-
-    # --- thread body ---
-
-    def _run(self) -> None:
+    def run(self) -> None:
+        from security import threat_intel
         while not self._stop.is_set():
-            for name, (method, target) in PING_TARGETS.items():
-                if self._stop.is_set():
-                    return
-                if method == "http":
-                    latency = self._measure_http(target)
-                elif method == "socket_file":
-                    latency = self._measure_socket_file(target)
+            counts, gate_offline = self._get_nft_counts()
+            
+            if not os.path.exists(config.POLICY_GATE_SOCKET):
+                gate_offline = True
+            else:
+                try:
+                    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                    s.settimeout(0.5)
+                    s.connect(config.POLICY_GATE_SOCKET)
+                    s.close()
+                except Exception:
+                    gate_offline = True
+                
+            active_blocks = counts["input"]
+            
+            recent_blocks = []
+            if os.path.exists(config.SECURITY_DB_PATH):
+                try:
+                    conn = sqlite3.connect(config.SECURITY_DB_PATH, timeout=1.0)
+                    cursor = conn.cursor()
+                    threshold = (datetime.utcnow() - timedelta(hours=24)).isoformat() + "Z"
+                    cursor.execute("""
+                        SELECT actor, timestamp FROM security_events
+                        WHERE type = 'block_ip' AND disposition = 'approved' AND timestamp >= ?
+                        ORDER BY timestamp DESC
+                    """, (threshold,))
+                    rows = cursor.fetchall()
+                    unique_ips = []
+                    for row in rows:
+                        ip = row[0]
+                        if ip not in unique_ips:
+                            unique_ips.append(ip)
+                        if len(unique_ips) >= 5:
+                            break
+                    conn.close()
+                    
+                    for ip in unique_ips:
+                        rep = threat_intel.get_ip_reputation(ip)
+                        shodan = threat_intel.lookup_internetdb(ip)
+                        recent_blocks.append({
+                            "ip": ip,
+                            "geo": rep.get("tags", ["US"]) if rep.get("tags") else ["US"],
+                            "tags": shodan.get("tags", []),
+                            "ports": shodan.get("ports", [])
+                        })
+                except Exception:
+                    pass
+            
+            recent_assets = []
+            try:
+                from security.network_discovery import PassiveDiscoveryEngine
+                discovery = PassiveDiscoveryEngine.get_instance()
+                recent_assets = discovery.get_recent_assets(5)
+            except Exception as e:
+                logger.error(f"Failed to fetch LAN assets: {e}")
+
+            # Honeypot triggers
+            total_triggers = 0
+            last_ip = "None"
+            last_time = "None"
+            if os.path.exists(config.SECURITY_DB_PATH):
+                try:
+                    conn = sqlite3.connect(config.SECURITY_DB_PATH)
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        SELECT actor, timestamp FROM security_events
+                        WHERE type IN ('honeypot_port_trigger', 'honeypot_file_access')
+                        ORDER BY timestamp DESC
+                    """)
+                    rows = cursor.fetchall()
+                    total_triggers = len(rows)
+                    if rows:
+                        last_ip = rows[0][0]
+                        last_time = rows[0][1]
+                    conn.close()
+                except Exception:
+                    pass
+            honeypot_status = {
+                "last_trigger_ip": last_ip,
+                "last_trigger_time": last_time,
+                "total_triggers": total_triggers
+            }
+
+            with self._lock:
+                self._data = {
+                    "active_blocks": active_blocks,
+                    "recent_blocks": recent_blocks,
+                    "gate_offline": gate_offline,
+                    "rules_counts": counts,
+                    "recent_assets": recent_assets,
+                    "honeypot_status": honeypot_status
+                }
+            self._stop.wait(10.0)
+
+
+class ContainmentCollector(threading.Thread):
+    """Pane 3: Containment & Sentinel data collector."""
+    def __init__(self, stop_event: threading.Event) -> None:
+        super().__init__(daemon=True, name="containment-collector")
+        self._stop = stop_event
+        self._lock = threading.Lock()
+        self._data = {
+            "lattice_str": "",
+            "sandbox_tier": "",
+            "cgroup_cpu": "",
+            "cgroup_mem": "",
+            "cgroup_pids": 0,
+            "sentinel_alerts": 0,
+            "last_alert_path": "None",
+            "fim_alerts": [],
+            "privilege_alerts": []
+        }
+        
+    def get_data(self) -> dict:
+        with self._lock:
+            return dict(self._data)
+            
+    def run(self) -> None:
+        while not self._stop.is_set():
+            g_lvl = config.GLOBAL_LATTICE_LEVEL
+            w_lvl = config.WORKSPACE_LATTICE_LEVEL
+            g_idx = config.LATTICE_LEVELS.index(g_lvl) if g_lvl in config.LATTICE_LEVELS else 0
+            w_idx = config.LATTICE_LEVELS.index(w_lvl) if w_lvl in config.LATTICE_LEVELS else 0
+            eff_idx = min(g_idx, w_idx)
+            eff_lvl = config.LATTICE_LEVELS[eff_idx]
+            
+            lattice_str = f"GLOBAL({g_idx}) ∩ WORKSPACE({w_idx}) → EFFECTIVE({eff_idx})"
+            sandbox_tier = eff_lvl
+            
+            cgroup_cpu = config.CGROUP_CPU_QUOTA
+            cgroup_mem = config.CGROUP_MEMORY_MAX
+            cgroup_pids = config.CGROUP_TASKS_MAX
+            
+            sentinel_alerts = 0
+            last_alert_path = "None"
+            
+            if os.path.exists(config.SECURITY_DB_PATH):
+                try:
+                    conn = sqlite3.connect(config.SECURITY_DB_PATH, timeout=1.0)
+                    cursor = conn.cursor()
+                    threshold = (datetime.utcnow() - timedelta(hours=24)).isoformat() + "Z"
+                    cursor.execute("""
+                        SELECT COUNT(*), MAX(timestamp) FROM security_events
+                        WHERE type = 'telemetry_script_sentinel_alert' AND timestamp >= ?
+                    """, (threshold,))
+                    row = cursor.fetchone()
+                    if row and row[0]:
+                        sentinel_alerts = row[0]
+                        cursor.execute("""
+                            SELECT actor FROM security_events
+                            WHERE type = 'telemetry_script_sentinel_alert' AND timestamp >= ?
+                            ORDER BY timestamp DESC LIMIT 1
+                        """, (threshold,))
+                        alert_row = cursor.fetchone()
+                        if alert_row:
+                            last_alert_path = alert_row[0]
+                    conn.close()
+                except Exception:
+                    pass
+            
+            fim_alerts = []
+            try:
+                from security.fim_daemon import FIMDaemon
+                fim_daemon = FIMDaemon()
+                fim_alerts = fim_daemon.get_recent_alerts(5)
+            except Exception as e:
+                logger.error(f"Failed to fetch FIM alerts: {e}")
+
+            privilege_alerts = []
+            if os.path.exists(config.SECURITY_DB_PATH):
+                try:
+                    conn = sqlite3.connect(config.SECURITY_DB_PATH)
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        SELECT actor, timestamp, payload_hash FROM security_events
+                        WHERE type = 'privilege_escalation'
+                        ORDER BY timestamp DESC LIMIT 3
+                    """)
+                    rows = cursor.fetchall()
+                    for r in rows:
+                        privilege_alerts.append({
+                            "comm_pid": r[0],
+                            "timestamp": r[1],
+                            "details": r[2]
+                        })
+                    conn.close()
+                except Exception:
+                    pass
+
+            with self._lock:
+                self._data = {
+                    "lattice_str": lattice_str,
+                    "sandbox_tier": sandbox_tier,
+                    "cgroup_cpu": cgroup_cpu,
+                    "cgroup_mem": cgroup_mem,
+                    "cgroup_pids": cgroup_pids,
+                    "sentinel_alerts": sentinel_alerts,
+                    "last_alert_path": last_alert_path,
+                    "fim_alerts": fim_alerts,
+                    "privilege_alerts": privilege_alerts
+                }
+            self._stop.wait(2.0)
+
+
+class SystemSecurityCollector(threading.Thread):
+    """Pane 4: System Security data collector."""
+    def __init__(self, stop_event: threading.Event) -> None:
+        super().__init__(daemon=True, name="system-security-collector")
+        self._stop = stop_event
+        self._lock = threading.Lock()
+        self._data = {
+            "tokens_active": 0,
+            "tokens_expired": 0,
+            "tokens_rejected": 0,
+            "rules_counts": {"input": 0, "forward": 0, "output": 0},
+            "gate_running": False,
+            "gate_pid": 0,
+            "gate_uptime": "N/A",
+            "yara_rules_count": 0,
+            "lockdown_active": False
+        }
+        
+    def get_data(self) -> dict:
+        with self._lock:
+            return dict(self._data)
+            
+    def _parse_tokens(self):
+        active = 0
+        expired = 0
+        rejected = 0
+        seen_signatures = set()
+        
+        if os.path.exists(config.AUDIT_LOG_PATH):
+            try:
+                with open(config.AUDIT_LOG_PATH, "r") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            record = json.loads(line)
+                            result = record.get("result", "")
+                            cap_token_str = record.get("capability_token")
+                            
+                            if not cap_token_str:
+                                continue
+                                
+                            token_data = json.loads(cap_token_str)
+                            sig = token_data.get("signature")
+                            if not sig or sig in seen_signatures:
+                                continue
+                            seen_signatures.add(sig)
+                            
+                            if result == "denied":
+                                rejected += 1
+                                continue
+                                
+                            expires_str = token_data.get("expires", "")
+                            if expires_str:
+                                expires_dt = datetime.fromisoformat(expires_str.replace("Z", ""))
+                                if datetime.utcnow() > expires_dt:
+                                    expired += 1
+                                else:
+                                    active += 1
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+        return active, expired, rejected
+
+    def run(self) -> None:
+        while not self._stop.is_set():
+            active, expired, rejected = self._parse_tokens()
+            
+            counts = {"input": 0, "forward": 0, "output": 0}
+            try:
+                res = subprocess.run(["sudo", "nft", "-nn", "list", "ruleset"], capture_output=True, text=True, timeout=2.0)
+                if res.returncode == 0:
+                    lines = res.stdout.splitlines()
+                    current_chain = None
+                    for line in lines:
+                        line_strip = line.strip()
+                        if "chain " in line_strip:
+                            if "input" in line_strip:
+                                current_chain = "input"
+                            elif "forward" in line_strip:
+                                current_chain = "forward"
+                            elif "output" in line_strip:
+                                current_chain = "output"
+                            else:
+                                current_chain = None
+                        elif line_strip == "}":
+                            current_chain = None
+                        elif current_chain and ("drop" in line_strip.lower() or "reject" in line_strip.lower()):
+                            counts[current_chain] += 1
+            except Exception:
+                pass
+                
+            gate_running = False
+            gate_pid = 0
+            gate_uptime = "N/A"
+            
+            if os.path.exists(config.POLICY_GATE_SOCKET):
+                try:
+                    res = subprocess.run(["pgrep", "-f", "policy_gate.py"], capture_output=True, text=True)
+                    if res.returncode == 0 and res.stdout.strip():
+                        gate_pid = int(res.stdout.split()[0])
+                        gate_running = True
+                        uptime_res = subprocess.run(["ps", "-o", "etime=", "-p", str(gate_pid)], capture_output=True, text=True)
+                        if uptime_res.returncode == 0:
+                            gate_uptime = uptime_res.stdout.strip()
+                except Exception:
+                    pass
+            
+            # Yara rules count
+            yara_rules_count = 0
+            try:
+                from security.rule_engine import RuleEngine
+                engine = RuleEngine.get_instance()
+                if engine.scanner:
+                    yara_rules_count = len(engine.scanner)
                 else:
-                    latency = self._measure_socket(target)
-                with self._lock:
-                    self._data[name].append(
-                        max(0.0, latency) if latency >= 0 else -1.0,
-                    )
-            self._stop.wait(PING_INTERVAL)
+                    yara_rules_count = len([f for f in os.listdir(config.YARA_RULES_DIR) if f.endswith(".yar")])
+            except Exception:
+                try:
+                    yara_rules_count = len([f for f in os.listdir(config.YARA_RULES_DIR) if f.endswith(".yar")])
+                except Exception:
+                    pass
+
+            # Lockdown active
+            lockdown_active = False
+            try:
+                res = subprocess.run(["/usr/bin/systemctl", "is-active", "kaia-lockdown.service"], capture_output=True, text=True, timeout=2.0)
+                if res.stdout.strip() == "active":
+                    lockdown_active = True
+            except Exception:
+                pass
+
+            with self._lock:
+                self._data = {
+                    "tokens_active": active,
+                    "tokens_expired": expired,
+                    "tokens_rejected": rejected,
+                    "rules_counts": counts,
+                    "gate_running": gate_running,
+                    "gate_pid": gate_pid,
+                    "gate_uptime": gate_uptime,
+                    "yara_rules_count": yara_rules_count,
+                    "lockdown_active": lockdown_active
+                }
+            self._stop.wait(5.0)
 
 
 class ServiceCollector:
@@ -867,7 +1178,7 @@ class AuditLogCollector:
             conn = sqlite3.connect(self._security_db_path, timeout=1.0)
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT rowid, timestamp, type, source, actor, details, result, session_id
+                SELECT rowid, timestamp, type, source, actor, payload_hash, disposition, session_id
                 FROM security_events
                 WHERE rowid > ?
                 ORDER BY rowid ASC
@@ -875,20 +1186,28 @@ class AuditLogCollector:
             """, (self._last_seen_rowid,))
             rows = cursor.fetchall()
             for row in rows:
-                rowid, ts, event_type, source, actor, details, result, session_id = row
+                rowid, ts, event_type, source, actor, payload_hash, disposition, session_id = row
                 self._last_seen_rowid = rowid
-                # Format timestamp for display
                 disp_ts = ts[:19].split("T")[-1] if "T" in str(ts) else str(ts)[:8]
-                # Build display message
-                result_tag = f"[{result}]" if result else ""
-                msg = f"GATE {result_tag}: {event_type}"
+                
+                if disposition == "approved":
+                    icon = "✓"
+                    status = "approved"
+                    level = "SUCCESS"
+                elif disposition in ("blocked", "denied"):
+                    icon = "✗"
+                    status = "denied"
+                    level = "ERROR"
+                else:
+                    icon = "⚠"
+                    status = disposition
+                    level = "WARN"
+                    
+                detail = f"hash:{payload_hash[:8]}" if payload_hash else ""
                 if source:
-                    msg += f" ({source})"
-                if details:
-                    # Truncate long details
-                    detail_str = str(details)[:80]
-                    msg += f" — {detail_str}"
-                level = self._classify_severity(f"{event_type} {result} {details}")
+                    detail += f" ({source})"
+                
+                msg = f"{icon} {event_type.upper():<12} │ {status:<8} │ {detail}"
                 entries.append(LogEntry(timestamp=disp_ts, level=level, message=msg))
             conn.close()
         except Exception:
@@ -913,7 +1232,6 @@ class AuditLogCollector:
             if not content:
                 return entries
 
-            # Handle both JSON array and newline-delimited JSON
             if content.startswith("["):
                 records = json.loads(content)
             else:
@@ -926,7 +1244,6 @@ class AuditLogCollector:
                         except json.JSONDecodeError:
                             continue
 
-            # Only process new entries
             new_records = records[self._last_ledger_entries:]
             self._last_ledger_entries = len(records)
 
@@ -936,12 +1253,21 @@ class AuditLogCollector:
                 action = record.get("action", "unknown")
                 result = record.get("result", "")
                 reason = record.get("reason", "")
-                msg = f"AUDIT: {action}"
-                if result:
-                    msg += f" [{result}]"
-                if reason:
-                    msg += f" — {reason[:60]}"
-                level = self._classify_severity(f"{action} {result}")
+                
+                if result == "approved":
+                    icon = "✓"
+                    status = "approved"
+                    level = "SUCCESS"
+                elif result in ("denied", "blocked"):
+                    icon = "✗"
+                    status = "denied"
+                    level = "ERROR"
+                else:
+                    icon = "⚠"
+                    status = result
+                    level = "WARN"
+                    
+                msg = f"{icon} {action.upper():<12} │ {status:<8} │ {reason[:60]}"
                 entries.append(LogEntry(timestamp=disp_ts, level=level, message=msg))
         except Exception:
             pass  # Never crash the collector
@@ -996,33 +1322,32 @@ class CollectorManager:
     Responsibilities:
       - Start / stop all collector threads
       - Produce immutable KaiamonSnapshot objects for the UI
-      - Manage subprocess and NVML cleanup
+      - Manage subprocess cleanup
     """
 
     def __init__(self) -> None:
         self._stop_event = threading.Event()
-        self._ping = PingCollector(self._stop_event)
-        self._service = ServiceCollector(self._stop_event)
-        self._telemetry = TelemetryCollector(self._stop_event)
-        self._log = LogCollector(self._stop_event)
+        self._threat_intel = ThreatIntelCollector(self._stop_event)
+        self._containment = ContainmentCollector(self._stop_event)
+        self._system_security = SystemSecurityCollector(self._stop_event)
+        self._log = AuditLogCollector(self._stop_event)
 
     @property
-    def log_collector(self) -> LogCollector:
+    def log_collector(self) -> AuditLogCollector:
         """Expose log collector for pause/filter/clear commands."""
         return self._log
 
     def start_all(self) -> None:
         """Start every collector thread."""
-        self._ping.start()
-        self._service.start()
-        self._telemetry.start()
+        self._threat_intel.start()
+        self._containment.start()
+        self._system_security.start()
         self._log.start()
 
     def stop_all(self) -> None:
         """Signal shutdown and release all resources."""
         self._stop_event.set()
         self._log.stop()
-        self._telemetry.shutdown_nvml()
 
     def take_snapshot(self) -> KaiamonSnapshot:
         """
@@ -1031,33 +1356,20 @@ class CollectorManager:
         This is the ONLY place where collector-owned state is read.
         The returned object is safe to use from the UI thread without locks.
         """
-        pings = self._ping.get_data()
-        services = self._service.get_data()
-        telemetry = self._telemetry.get_data()
+        threat_intel = self._threat_intel.get_data()
+        containment = self._containment.get_data()
+        system_security = self._system_security.get_data()
         logs, lps, lps_scale, filter_mode, paused = self._log.get_data()
-        sl_events, sl_app = self._log.get_split_lock_data()
-
-        # Forward split-lock data to telemetry for snapshot consistency
-        self._telemetry.update_split_lock(sl_events, sl_app)
 
         return KaiamonSnapshot(
-            pings=pings,
-            services=services,
-            cpu_temp=telemetry["cpu_temp"],
-            cpu_hotspot=telemetry["cpu_hotspot"],
-            cpu_power=telemetry["cpu_power"],
-            cpu_throttled=telemetry["cpu_throttled"],
-            gpu_temp=telemetry["gpu_temp"],
-            gpu_power=telemetry["gpu_power"],
-            gpu_fan=telemetry["gpu_fan"],
-            gpu_mem_used=telemetry["gpu_mem_used"],
-            split_lock_events=sl_events,
-            split_lock_last_app=sl_app,
             logs=logs,
             lps=lps,
             lps_scale=lps_scale,
             filter_mode=filter_mode,
             paused=paused,
+            threat_intel=threat_intel,
+            containment=containment,
+            system_security=system_security
         )
 
 
@@ -1079,6 +1391,255 @@ class KaiamonUI:
         self._stdscr = None
         self._layout = LayoutManager()
         self._collector_mgr = CollectorManager()
+        self._cmd_queue = queue.Queue()
+        self._resp_queue = queue.Queue()
+        self._input_buffer = ""
+        self._cmd_history = []
+        self._history_idx = -1
+        self._responses = []
+        self._lockdown_pending = False
+        threading.Thread(target=self._command_worker, daemon=True, name="cmd-worker").start()
+
+    def _add_response(self, text: str) -> None:
+        """Add a command response line safely."""
+        self._resp_queue.put(text)
+
+    def _command_worker(self) -> None:
+        """Worker thread to process commands asynchronously."""
+        from security.policy_gate import generate_capability_token
+        
+        def send_pg(action, payload, cap_token):
+            import socket
+            import json
+            import uuid
+            
+            req_id = str(uuid.uuid4())
+            nested = {
+                "request_id": req_id,
+                "action": action,
+                "payload": payload,
+                "capability_token": cap_token
+            }
+            try:
+                s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                s.settimeout(2.0)
+                s.connect(config.POLICY_GATE_SOCKET)
+                payload_bytes = json.dumps(nested).encode('utf-8')
+                header = len(payload_bytes).to_bytes(4, byteorder='big')
+                s.sendall(header + payload_bytes)
+                
+                header_resp = bytearray()
+                while len(header_resp) < 4:
+                    p = s.recv(4 - len(header_resp))
+                    if not p:
+                        return False, "Connection closed"
+                    header_resp.extend(p)
+                length = int.from_bytes(header_resp, byteorder='big')
+                
+                payload_resp = bytearray()
+                while len(payload_resp) < length:
+                    p = s.recv(length - len(payload_resp))
+                    if not p:
+                        return False, "Connection closed"
+                    payload_resp.extend(p)
+                s.close()
+                resp = json.loads(payload_resp.decode('utf-8'))
+                return resp.get("approved", False), resp.get("executor_response", {})
+            except Exception as e:
+                return False, f"Socket error: {e}"
+
+        while self._running or not self._cmd_queue.empty():
+            try:
+                cmd_line = self._cmd_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+                
+            cmd_line = cmd_line.strip()
+            if not cmd_line:
+                continue
+                
+            self._add_response(f"> {cmd_line}")
+            
+            try:
+                if self._lockdown_pending:
+                    self._lockdown_pending = False
+                    if cmd_line.lower() in ("y", "yes"):
+                        self._add_response("Initiating Emergency Network Lockdown...")
+                        approved, resp = send_pg("lockdown", {}, None)
+                        if approved:
+                            self._add_response("[SUCCESS] Emergency Lockdown activated.")
+                        else:
+                            msg = resp.get("message") if isinstance(resp, dict) else str(resp)
+                            self._add_response(f"[ERROR] Lockdown failed to trigger: {msg}")
+                    else:
+                        self._add_response("Lockdown aborted.")
+                    continue
+
+                parts = cmd_line.split()
+                cmd = parts[0].lower()
+                args = parts[1:]
+                
+                if False:
+                    pass
+                if cmd == "block" and len(args) >= 1:
+                    ip = args[0]
+                    self._add_response(f"Mitigating threat IP: {ip}...")
+                    token = generate_capability_token("block_ip", ip, duration_seconds=15)
+                    payload = {"target_ip": ip, "protocol": "all", "session_id": "dashboard"}
+                    approved, resp = send_pg("block_ip", payload, token)
+                    if approved:
+                        self._add_response(f"[APPROVED] Firewall updated for IP {ip}.")
+                    else:
+                        msg = resp.get("message") if isinstance(resp, dict) else str(resp)
+                        self._add_response(f"[DENIED] block_ip rejected: {msg}")
+                        
+                elif cmd == "show" and len(args) >= 1 and args[0] == "rules":
+                    self._add_response("Querying host firewall rules...")
+                    payload = {"query_type": "nft_list", "args": [], "justification": "operator query", "session_id": "dashboard"}
+                    approved, resp = send_pg("diagnostics", payload, None)
+                    if approved:
+                        stdout = resp.get("stdout", "")
+                        for line in stdout.splitlines()[:30]:
+                            self._add_response(line)
+                        if len(stdout.splitlines()) > 30:
+                            self._add_response("... (output truncated)")
+                    else:
+                        msg = resp.get("message") if isinstance(resp, dict) else str(resp)
+                        self._add_response(f"[DENIED] show rules rejected: {msg}")
+                        
+                elif cmd == "restart" and len(args) >= 1:
+                    srv = args[0]
+                    self._add_response(f"Restarting service {srv}...")
+                    token = generate_capability_token("restart_service", srv, duration_seconds=15)
+                    payload = {"service_name": srv, "justification": "operator request", "session_id": "dashboard"}
+                    approved, resp = send_pg("restart_service", payload, token)
+                    if approved:
+                        self._add_response(f"[APPROVED] Service {srv} restarted successfully.")
+                    else:
+                        msg = resp.get("message") if isinstance(resp, dict) else str(resp)
+                        self._add_response(f"[DENIED] restart {srv} rejected: {msg}")
+                        
+                elif cmd == "list" and len(args) >= 2 and args[0] == "recent" and args[1] == "blocks":
+                    self._add_response("Querying recent blocked IPs...")
+                    if os.path.exists(config.SECURITY_DB_PATH):
+                        conn = sqlite3.connect(config.SECURITY_DB_PATH)
+                        cursor = conn.cursor()
+                        cursor.execute("""
+                            SELECT actor, timestamp FROM security_events
+                            WHERE type = 'block_ip' AND disposition = 'approved'
+                            ORDER BY timestamp DESC LIMIT 10
+                        """)
+                        rows = cursor.fetchall()
+                        if rows:
+                            for row in rows:
+                                self._add_response(f" - {row[0]} at {row[1]}")
+                        else:
+                            self._add_response("No recent blocks found.")
+                        conn.close()
+                    else:
+                        self._add_response("Security events database not found.")
+                        
+                elif cmd == "check" and len(args) >= 2 and args[0] == "threat":
+                    ip = args[1]
+                    self._add_response(f"Enriching threat intel for IP: {ip}...")
+                    from security import threat_intel
+                    rep = threat_intel.get_ip_reputation(ip)
+                    shodan = threat_intel.lookup_internetdb(ip)
+                    self._add_response(f"Reputation: {rep.get('score', 'unknown')}/100")
+                    if shodan.get("ports"):
+                        self._add_response(f"Open Ports: {shodan.get('ports')}")
+                    if shodan.get("tags"):
+                        self._add_response(f"Shodan Tags: {shodan.get('tags')}")
+                    if shodan.get("vulns"):
+                        self._add_response(f"Vulnerabilities: {shodan.get('vulns')}")
+                        
+                elif cmd == "show" and len(args) >= 3 and args[0] == "audit" and args[1] == "--since":
+                    since_str = args[2]
+                    try:
+                        hours = int(since_str.replace("h", ""))
+                        self._add_response(f"Querying audit events in the last {hours} hours...")
+                        if os.path.exists(config.SECURITY_DB_PATH):
+                            conn = sqlite3.connect(config.SECURITY_DB_PATH)
+                            cursor = conn.cursor()
+                            threshold = (datetime.utcnow() - timedelta(hours=hours)).isoformat() + "Z"
+                            cursor.execute("""
+                                SELECT timestamp, type, actor, disposition FROM security_events
+                                WHERE timestamp >= ? ORDER BY timestamp DESC LIMIT 20
+                            """, (threshold,))
+                            rows = cursor.fetchall()
+                            if rows:
+                                for row in rows:
+                                    self._add_response(f"[{row[0][:19]}] {row[1]} │ {row[2]} │ {row[3]}")
+                            else:
+                                self._add_response("No audit events found in this window.")
+                            conn.close()
+                        else:
+                            self._add_response("Security events database not found.")
+                    except ValueError:
+                        self._add_response("Invalid usage. E.g.: show audit --since 2h")
+                elif cmd == "lockdown":
+                    self._add_response("Are you sure? [y/N]")
+                    self._lockdown_pending = True
+                    
+                elif cmd == "add" and len(args) >= 3 and args[0] == "rule":
+                    name = args[1]
+                    indicator = args[2]
+                    mitre = None
+                    if len(args) >= 4 and args[3].startswith("mitre:"):
+                        mitre = args[3].split(":", 1)[1]
+                        
+                    self._add_response(f"Compiling and validating YARA rule: {name}...")
+                    
+                    token = generate_capability_token("write_file", f"rules/{name}.yar", duration_seconds=30)
+                    payload = {
+                        "rule_name": name,
+                        "author": "Kaia Automated Rule Engine",
+                        "threat_description": f"Operator rule targeting indicator {indicator}",
+                        "target_ioc_indicator": indicator,
+                        "mitre_framework_id": mitre,
+                        "session_id": "dashboard"
+                    }
+                    approved, resp = send_pg("add_rule", payload, token)
+                    if approved:
+                        self._add_response(f"[APPROVED] YARA rule {name} validated and active.")
+                    else:
+                        msg = resp.get("message") if isinstance(resp, dict) else str(resp)
+                        self._add_response(f"[DENIED] add rule failed: {msg}")
+
+                elif cmd == "show" and len(args) >= 2 and args[0] == "assets":
+                    self._add_response("Querying passive LAN assets...")
+                    try:
+                        from security.network_discovery import PassiveDiscoveryEngine
+                        discovery = PassiveDiscoveryEngine.get_instance()
+                        assets = discovery.get_recent_assets(20)
+                        if assets:
+                            for a in assets:
+                                self._add_response(f" • {a['ip']:<15} {a['mac']} │ {a['vendor']} │ {a['detection_vector']} │ Last: {a['last_seen']}")
+                        else:
+                            self._add_response("No LAN assets discovered yet.")
+                    except Exception as e:
+                        self._add_response(f"Error querying assets: {e}")
+
+                elif cmd == "show" and len(args) >= 3 and args[0] == "fim" and args[1] == "alerts":
+                    self._add_response("Querying recent FIM alerts...")
+                    try:
+                        from security.fim_daemon import FIMDaemon
+                        fim = FIMDaemon()
+                        alerts = fim.get_recent_alerts(10)
+                        if alerts:
+                            for a in alerts:
+                                lbl = f" [{a['timestamp'][:19]}] {a['event_type'].upper()} │ {os.path.basename(a['path'])} │ {a['comm']} (PID {a['pid']})"
+                                if a['yara_matches']:
+                                    lbl += f" │ YARA:{a['yara_matches']}"
+                                self._add_response(lbl)
+                        else:
+                            self._add_response("No FIM alerts recorded.")
+                    except Exception as e:
+                        self._add_response(f"Error querying FIM: {e}")
+                else:
+                    self._add_response(f"Unknown command or arguments: {cmd_line}")
+            except Exception as e:
+                self._add_response(f"Error executing command: {e}")
 
     # ==================== Terminal Safety ====================
 
@@ -1181,11 +1742,42 @@ class KaiamonUI:
                 lc.paused = not lc.paused
             elif ch in (ord("f"), ord("F")):
                 lc = self._collector_mgr.log_collector
-                modes = ("All", "Net", "Hw")
+                modes = ("All", "Sec", "Net", "Hw")
                 idx = (modes.index(lc.filter_mode) + 1) % len(modes)
                 lc.filter_mode = modes[idx]
             elif ch in (ord("r"), ord("R")):
                 self._stdscr.clear()
+            elif ch == 27:
+                self._input_buffer = ""
+            elif ch in (10, 13):
+                if self._input_buffer.strip():
+                    cmd = self._input_buffer
+                    self._cmd_history.append(cmd)
+                    if len(self._cmd_history) > 50:
+                        self._cmd_history.pop(0)
+                    self._history_idx = -1
+                    self._cmd_queue.put(cmd)
+                    self._input_buffer = ""
+            elif ch in (curses.KEY_BACKSPACE, 127, 8):
+                if len(self._input_buffer) > 0:
+                    self._input_buffer = self._input_buffer[:-1]
+            elif ch in (curses.KEY_UP, 259):
+                if self._cmd_history:
+                    if self._history_idx == -1:
+                        self._history_idx = len(self._cmd_history) - 1
+                    elif self._history_idx > 0:
+                        self._history_idx -= 1
+                    self._input_buffer = self._cmd_history[self._history_idx]
+            elif ch in (curses.KEY_DOWN, 258):
+                if self._cmd_history and self._history_idx != -1:
+                    if self._history_idx < len(self._cmd_history) - 1:
+                        self._history_idx += 1
+                        self._input_buffer = self._cmd_history[self._history_idx]
+                    else:
+                        self._history_idx = -1
+                        self._input_buffer = ""
+            elif 32 <= ch <= 126:
+                self._input_buffer += chr(ch)
         except Exception:
             pass
         return True
@@ -1262,143 +1854,19 @@ class KaiamonUI:
 
     # ==================== Pane Drawing ====================
 
-    def _draw_pings_pane(self, snap: KaiamonSnapshot) -> None:
-        """Draw the network latency pings panel."""
-        pane = self._layout.panes.get("pings")
-        if not pane:
-            return
-        self._draw_box(pane)
-        py = pane.y + 1
-        px = pane.x + 2
-        p_w = pane.width - 4
-
-        for name, vals in snap.pings.items():
-            if py >= pane.y + pane.height - 1:
-                break
-            latest = vals[-1] if vals else 0.0
-            disp_name = name[:12].ljust(12)
-
-            if latest < 0.001 or latest < 0:
-                val_str = "ERR".rjust(6)
-                color = curses.color_pair(5)
-                spark = " " * SPARKLINE_LENGTH
-            else:
-                val_str = f"{int(latest)}ms".rjust(6)
-                if latest < 50:
-                    color = curses.color_pair(3)
-                elif latest < 150:
-                    color = curses.color_pair(4)
-                else:
-                    color = curses.color_pair(5)
-                spark = self._make_sparkline(vals)
-
-            spark_w = p_w - len(disp_name) - len(val_str) - 2
-            if spark_w > 0:
-                row = f"{disp_name} {val_str}  {spark[-spark_w:]}"
-            else:
-                row = f"{disp_name} {val_str}"
-            self._safe_addstr(py, px, row[:p_w], color)
-            py += 1
-
-    def _draw_services_pane(self, snap: KaiamonSnapshot) -> None:
-        """Draw the service watchdog panel."""
-        pane = self._layout.panes.get("services")
-        if not pane:
-            return
-        self._draw_box(pane)
-        sy = pane.y + 1
-        sx = pane.x + 2
-        s_w = pane.width - 4
-
-        for srv in snap.services:
-            if sy >= pane.y + pane.height - 1:
-                break
-            short = srv.name.replace(".service", "")
-            disp = short[:10].ljust(10)
-
-            if srv.active and srv.substate == "running":
-                dot_color = curses.color_pair(3)
-            elif srv.active:
-                dot_color = curses.color_pair(4)
-            else:
-                dot_color = curses.color_pair(5)
-
-            if srv.active and srv.pid > 0:
-                stats = f" {srv.cpu:4.1f}% {int(srv.memory_mb)}M"
-            else:
-                stats = " offline"
-            restart_tag = f" R:{srv.restarts}" if srv.restarts > 0 else ""
-
-            self._safe_addstr(sy, sx, disp[:8].ljust(8),
-                              curses.color_pair(2) | curses.A_BOLD)
-            self._safe_addstr(sy, sx + 9, "●", dot_color)
-            remaining = s_w - 11
-            self._safe_addstr(sy, sx + 11,
-                              (stats + restart_tag)[:remaining],
-                              curses.color_pair(6))
-            sy += 1
-
-    def _draw_thermals_pane(self, snap: KaiamonSnapshot) -> None:
-        """Draw the hardware thermals and limits panel."""
-        pane = self._layout.panes.get("thermals")
-        if not pane:
-            return
-        self._draw_box(pane)
-        ty = pane.y + 1
-        tx = pane.x + 2
-        tw = pane.width - 4
-
-        cpu_t = f"CPU Temp:  {snap.cpu_temp:4.1f}\u00b0C / {snap.cpu_hotspot:4.1f}\u00b0C"
-        self._safe_addstr(ty, tx, cpu_t[:tw],
-                          curses.color_pair(1) | curses.A_BOLD)
-        ty += 1
-
-        cpu_p = f"CPU Power: {snap.cpu_power:4.1f} W"
-        self._safe_addstr(ty, tx, cpu_p[:tw], curses.color_pair(2))
-        ty += 1
-
-        if snap.cpu_throttled:
-            self._safe_addstr(ty, tx, "CPU LIMIT: THROTTLED"[:tw],
-                              curses.color_pair(5) | curses.A_BOLD)
-        else:
-            self._safe_addstr(ty, tx, "CPU Limit: Nominal"[:tw],
-                              curses.color_pair(3))
-        ty += 1
-
-        gpu_t = f"GPU Temp:  {snap.gpu_temp:2.0f}\u00b0C  Fan: {snap.gpu_fan:2.0f}%"
-        self._safe_addstr(ty, tx, gpu_t[:tw],
-                          curses.color_pair(1) | curses.A_BOLD)
-        ty += 1
-
-        gpu_p = (f"GPU Power: {snap.gpu_power:3.0f}W   "
-                 f"VRAM: {snap.gpu_mem_used / 1024.0:3.1f}G/12G")
-        self._safe_addstr(ty, tx, gpu_p[:tw], curses.color_pair(2))
-        ty += 1
-
-        if snap.split_lock_events > 0:
-            sl = (f"SPLIT-LOCK: {snap.split_lock_events} "
-                  f"({snap.split_lock_last_app})")
-            self._safe_addstr(ty, tx, sl[:tw],
-                              curses.color_pair(5) | curses.A_BOLD)
-        else:
-            self._safe_addstr(ty, tx, "Split-Lock: 0 events"[:tw],
-                              curses.color_pair(3))
-
     def _draw_logs_pane(self, snap: KaiamonSnapshot) -> None:
-        """Draw the system logs panel with severity coloring and LPS bar."""
+        """Draw the system logs panel with severity coloring and EPS bar."""
         pane = self._layout.panes.get("logs")
         if not pane:
             return
 
-        # Build dynamic title with adaptive LPS bar
-        lps_ratio = (min(1.0, snap.lps / snap.lps_scale)
-                     if snap.lps_scale > 0 else 0.0)
+        lps_ratio = (min(1.0, snap.lps / snap.lps_scale) if snap.lps_scale > 0 else 0.0)
         filled = int(lps_ratio * LPS_BAR_WIDTH)
         bar = LPS_BAR_FILLED * filled + LPS_BAR_EMPTY * (LPS_BAR_WIDTH - filled)
-        pane.title = (f"SYSTEM LOGS \u2500 LPS: {snap.lps:4.1f} [{bar}] "
-                      f"\u2500 Filter: {snap.filter_mode}")
+        pane.title = (f"SECURITY AUD LOG ─ EPS: {snap.lps:4.1f}/s [{bar}] "
+                      f"─ Filter: {snap.filter_mode}")
         if snap.paused:
-            pane.title += " \u2500 PAUSED"
+            pane.title += " ─ PAUSED"
 
         self._draw_box(pane)
         ly = pane.y + 1
@@ -1406,7 +1874,6 @@ class KaiamonUI:
         l_h = pane.height - 2
         l_w = pane.width - 4
 
-        # Apply filter to log snapshot
         filtered: List[LogEntry] = []
         for log in snap.logs:
             if snap.filter_mode == "Net":
@@ -1415,9 +1882,11 @@ class KaiamonUI:
             elif snap.filter_mode == "Hw":
                 if not any(k in log.message.lower() for k in HW_FILTER_KEYWORDS):
                     continue
+            elif snap.filter_mode == "Sec":
+                if not any(k in log.message.lower() for k in SEC_FILTER_KEYWORDS):
+                    continue
             filtered.append(log)
 
-        # Show most recent entries that fit
         for log in filtered[-l_h:]:
             if ly >= pane.y + pane.height - 1:
                 break
@@ -1430,10 +1899,228 @@ class KaiamonUI:
             else:
                 l_color = curses.color_pair(6)
 
-            self._safe_addstr(ly, lx, f"{log.timestamp} ",
-                              curses.color_pair(1))
+            self._safe_addstr(ly, lx, f"{log.timestamp} ", curses.color_pair(1))
             self._safe_addstr(ly, lx + 9, log.message[:l_w - 9], l_color)
             ly += 1
+
+    def _draw_threat_intel_pane(self, snap: KaiamonSnapshot) -> None:
+        """Draw Pane 2: Threat Intelligence."""
+        pane = self._layout.panes.get("threat_intel")
+        if not pane:
+            return
+        self._draw_box(pane)
+        ty = pane.y + 1
+        tx = pane.x + 2
+        tw = pane.width - 4
+        
+        info = snap.threat_intel
+        if not info:
+            return
+            
+        if info.get("gate_offline"):
+            self._safe_addstr(ty, tx, "⚠ POLICY GATE OFFLINE".center(tw), curses.color_pair(5) | curses.A_BOLD)
+            ty += 2
+            
+        self._safe_addstr(ty, tx, f"Active Firewall Blocks: {info.get('active_blocks', 0)}", curses.color_pair(2) | curses.A_BOLD)
+        ty += 1
+        
+        self._safe_addstr(ty, tx, "Recent Blocks:", curses.color_pair(1) | curses.A_BOLD)
+        ty += 1
+        
+        for item in info.get("recent_blocks", []):
+            if ty >= pane.y + pane.height - 1:
+                break
+            ip = item.get("ip")
+            geo = ",".join(item.get("geo", []))
+            tags = ",".join(item.get("tags", []))
+            ports = ",".join(str(p) for p in item.get("ports", []))
+            
+            line = f" • {ip:<15} ({geo})"
+            if tags:
+                line += f" tags:{tags}"
+            if ports:
+                line += f" ports:{ports}"
+            self._safe_addstr(ty, tx, line[:tw], curses.color_pair(6))
+            ty += 1
+
+        ty += 1
+        # Add LAN Assets
+        self._safe_addstr(ty, tx, "LAN Assets (L2/L3 Passive):", curses.color_pair(1) | curses.A_BOLD)
+        ty += 1
+        for asset in info.get("recent_assets", []):
+            if ty >= pane.y + pane.height - 1:
+                break
+            ip = asset.get("ip")
+            vendor = asset.get("vendor", "unknown")
+            vector = asset.get("detection_vector", "ARP")
+            line = f" • {ip:<15} {vendor} ({vector})"
+            self._safe_addstr(ty, tx, line[:tw], curses.color_pair(6))
+            ty += 1
+
+        # Add Honeypot status
+        hp = info.get("honeypot_status", {})
+        if ty < pane.y + pane.height - 1:
+            ty += 1
+            self._safe_addstr(ty, tx, "Honeypots / Decoys:", curses.color_pair(1) | curses.A_BOLD)
+            ty += 1
+            triggers = hp.get("total_triggers", 0)
+            hp_color = curses.color_pair(5) | curses.A_BOLD if triggers > 0 else curses.color_pair(3)
+            self._safe_addstr(ty, tx, f" • Triggers: {triggers}", hp_color)
+            ty += 1
+            if triggers > 0 and ty < pane.y + pane.height - 1:
+                last_ip = hp.get("last_trigger_ip", "None")
+                self._safe_addstr(ty, tx, f" • Last IP:  {last_ip}", curses.color_pair(4))
+                ty += 1
+
+    def _draw_containment_pane(self, snap: KaiamonSnapshot) -> None:
+        """Draw Pane 3: Containment & Sentinel."""
+        pane = self._layout.panes.get("containment")
+        if not pane:
+            return
+        self._draw_box(pane)
+        cy = pane.y + 1
+        cx = pane.x + 2
+        cw = pane.width - 4
+        
+        info = snap.containment
+        if not info:
+            return
+            
+        self._safe_addstr(cy, cx, "Lattice Calculation:", curses.color_pair(1) | curses.A_BOLD)
+        cy += 1
+        self._safe_addstr(cy, cx + 2, info.get("lattice_str", ""), curses.color_pair(3) | curses.A_BOLD)
+        cy += 2
+        
+        self._safe_addstr(cy, cx, f"Sandbox Tier: {info.get('sandbox_tier')}", curses.color_pair(6))
+        cy += 1
+        
+        cgroup_str = f"cgroup: CPU {info.get('cgroup_cpu')}  MEM {info.get('cgroup_mem')}  PID {info.get('cgroup_pids')}"
+        self._safe_addstr(cy, cx, cgroup_str, curses.color_pair(6))
+        cy += 2
+        
+        self._safe_addstr(cy, cx, "Script Sentinel:", curses.color_pair(1) | curses.A_BOLD)
+        cy += 1
+        alerts = info.get("sentinel_alerts", 0)
+        color = curses.color_pair(5) if alerts > 0 else curses.color_pair(3)
+        self._safe_addstr(cy, cx + 2, f"ALERTS: {alerts}", color | curses.A_BOLD)
+        cy += 1
+        if alerts > 0:
+            last_path = info.get("last_alert_path", "None")
+            self._safe_addstr(cy, cx + 2, f"Last: {last_path}"[-cw:], curses.color_pair(4))
+            cy += 1
+
+        cy += 1
+        # Add FIM Alerts
+        self._safe_addstr(cy, cx, "FIM Alerts (fanotify):", curses.color_pair(1) | curses.A_BOLD)
+        cy += 1
+        fim_alerts = info.get("fim_alerts", [])
+        if not fim_alerts:
+            self._safe_addstr(cy, cx + 2, "No FIM alerts", curses.color_pair(3))
+            cy += 1
+        else:
+            for alert in fim_alerts:
+                if cy >= pane.y + pane.height - 1:
+                    break
+                path = alert.get("path")
+                yara = alert.get("yara_matches")
+                lbl = f" • {os.path.basename(path)} ({alert.get('event_type')})"
+                if yara:
+                    lbl += f" YARA:{yara}"
+                self._safe_addstr(cy, cx + 2, lbl[:cw], curses.color_pair(4))
+                cy += 1
+        cy += 1
+
+        # Add Privilege Escalation Alerts
+        self._safe_addstr(cy, cx, "Privilege Escalations (eBPF):", curses.color_pair(1) | curses.A_BOLD)
+        cy += 1
+        privs = info.get("privilege_alerts", [])
+        if not privs:
+            self._safe_addstr(cy, cx + 2, "No privilege alerts", curses.color_pair(3))
+            cy += 1
+        else:
+            for p in privs:
+                if cy >= pane.y + pane.height - 1:
+                    break
+                self._safe_addstr(cy, cx + 2, f" • {p.get('comm_pid')} {p.get('details')}"[:cw], curses.color_pair(5) | curses.A_BOLD)
+                cy += 1
+
+    def _draw_system_security_pane(self, snap: KaiamonSnapshot) -> None:
+        """Draw Pane 4: System Security."""
+        pane = self._layout.panes.get("system_security")
+        if not pane:
+            return
+        self._draw_box(pane)
+        sy = pane.y + 1
+        sx = pane.x + 2
+        sw = pane.width - 4
+        
+        info = snap.system_security
+        if not info:
+            return
+            
+        self._safe_addstr(sy, sx, "Capability Tokens", curses.color_pair(1) | curses.A_BOLD)
+        sy += 1
+        self._safe_addstr(sy, sx + 2, f"Active:   {info.get('tokens_active')}", curses.color_pair(3))
+        sy += 1
+        self._safe_addstr(sy, sx + 2, f"Expired:  {info.get('tokens_expired')}", curses.color_pair(4))
+        sy += 1
+        rejected = info.get("tokens_rejected", 0)
+        r_color = curses.color_pair(5) | curses.A_BOLD if rejected > 0 else curses.color_pair(6)
+        self._safe_addstr(sy, sx + 2, f"Rejected: {rejected}", r_color)
+        sy += 2
+        
+        self._safe_addstr(sy, sx, "Firewall Statistics", curses.color_pair(1) | curses.A_BOLD)
+        sy += 1
+        counts = info.get("rules_counts", {})
+        self._safe_addstr(sy, sx + 2, f"Input DROP:   {counts.get('input', 0)}", curses.color_pair(6))
+        sy += 1
+        self._safe_addstr(sy, sx + 2, f"Forward DROP: {counts.get('forward', 0)}", curses.color_pair(6))
+        sy += 1
+        self._safe_addstr(sy, sx + 2, f"Output DROP:  {counts.get('output', 0)}", curses.color_pair(6))
+        sy += 2
+        
+        self._safe_addstr(sy, sx, "Policy Gate Health", curses.color_pair(1) | curses.A_BOLD)
+        sy += 1
+        status_str = f"RUNNING (PID {info.get('gate_pid')})" if info.get("gate_running") else "OFFLINE"
+        status_color = curses.color_pair(3) if info.get("gate_running") else curses.color_pair(5) | curses.A_BOLD
+        self._safe_addstr(sy, sx + 2, status_str, status_color)
+        sy += 1
+        self._safe_addstr(sy, sx + 2, f"Uptime: {info.get('gate_uptime')}", curses.color_pair(6))
+        sy += 2
+
+        # Add YARA rules count
+        self._safe_addstr(sy, sx, "YARA Rule Pipeline", curses.color_pair(1) | curses.A_BOLD)
+        sy += 1
+        self._safe_addstr(sy, sx + 2, f"Active Rules: {info.get('yara_rules_count', 0)}", curses.color_pair(6))
+        sy += 2
+
+        # Add Lockdown Status
+        lockdown_active = info.get("lockdown_active", False)
+        status_str = "⚠ LOCKDOWN ACTIVE" if lockdown_active else "INACTIVE"
+        status_color = curses.color_pair(5) | curses.A_BOLD if lockdown_active else curses.color_pair(3)
+        self._safe_addstr(sy, sx, f"Lockdown: {status_str}", status_color)
+
+    def _draw_command_pane(self, snap: KaiamonSnapshot) -> None:
+        """Draw Pane 5: Command Interface."""
+        pane = self._layout.panes.get("command")
+        if not pane:
+            return
+        self._draw_box(pane)
+        cy = pane.y + 1
+        cx = pane.x + 2
+        ch = pane.height - 2
+        cw = pane.width - 4
+        
+        fit_responses = self._responses[-ch:]
+        for line in fit_responses:
+            if cy >= pane.y + pane.height - 1:
+                break
+            self._safe_addstr(cy, cx, line[:cw], curses.color_pair(6))
+            cy += 1
+            
+        self._safe_addstr(pane.y + pane.height - 2, cx, " " * cw, curses.color_pair(6))
+        input_str = f"> {self._input_buffer}"
+        self._safe_addstr(pane.y + pane.height - 2, cx, input_str[:cw], curses.color_pair(6) | curses.A_BOLD)
 
     # ==================== Frame Composition ====================
 
@@ -1450,10 +2137,20 @@ class KaiamonUI:
                                   curses.color_pair(5) | curses.A_BOLD)
                 return
 
-            self._draw_pings_pane(snap)
-            self._draw_services_pane(snap)
-            self._draw_thermals_pane(snap)
+            while not self._resp_queue.empty():
+                try:
+                    line = self._resp_queue.get_nowait()
+                    self._responses.append(line)
+                    if len(self._responses) > 100:
+                        self._responses.pop(0)
+                except Exception:
+                    break
+
             self._draw_logs_pane(snap)
+            self._draw_threat_intel_pane(snap)
+            self._draw_containment_pane(snap)
+            self._draw_system_security_pane(snap)
+            self._draw_command_pane(snap)
         except curses.error:
             pass
 

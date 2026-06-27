@@ -6,6 +6,7 @@ import hmac
 import hashlib
 import re
 import threading
+import subprocess
 from datetime import datetime
 from pydantic import ValidationError
 
@@ -84,6 +85,28 @@ def sanitize_args(args: list) -> tuple:
             return False, f"Unsafe shell character detected in argument: {arg}"
         sanitized.append(arg)
     return True, sanitized
+
+
+def trigger_lockdown(reason: str) -> None:
+    logger.critical(f"EMERGENCY LOCKDOWN TRIGGERED! Reason: {reason}")
+    try:
+        log_security_event(
+            event_type="emergency_lockdown_triggered",
+            source="policy_gate",
+            actor=reason,
+            payload_hash="",
+            disposition="blocked",
+            session_id="system_protection"
+        )
+    except Exception as e:
+        logger.error(f"Failed to log emergency_lockdown_triggered: {e}")
+        
+    # Run the lockdown systemd service
+    res = subprocess.run(["/usr/bin/systemctl", "start", "kaia-lockdown.service"], check=False)
+    if res.returncode != 0:
+        logger.warning("Systemd service kaia-lockdown.service failed or not installed. Falling back to direct script run.")
+        script_path = os.path.join(config.WORKSPACE_DIR, "scripts", "kaia-lockdown.sh")
+        subprocess.run(["/bin/bash", script_path], check=False)
 
 
 class PolicyGate:
@@ -254,8 +277,42 @@ class PolicyGate:
         session_id = payload.get("session_id", "default_session")
         cap_token = payload.get("capability_token")
 
-        if not action:
-            return {"status": "error", "message": "Missing 'action' field in request payload."}
+        if action == "lockdown":
+            trigger_lockdown("operator_command")
+            return {"status": "success", "message": "Emergency lockdown activated."}
+
+        if action == "add_rule":
+            if not cap_token:
+                return {"status": "denied", "message": "Missing capability token."}
+            try:
+                from security.rule_engine import RuleEngine
+                from security.schemas import IocRuleRequest
+                rule_fields = {k: v for k, v in payload.items() if k not in ("action", "capability_token", "session_id")}
+                rule_req = IocRuleRequest(**rule_fields)
+                
+                ok_tok, err_tok = verify_capability_token(cap_token, "write_file", f"rules/{rule_req.rule_name}.yar")
+                if not ok_tok:
+                    self._log_audit(payload, "denied", reason=f"Invalid capability token: {err_tok}")
+                    log_security_event("invalid_capability_token", "policy_gate", "kaiacord", hashlib.sha256(str(payload).encode()).hexdigest(), "blocked", session_id)
+                    return {"status": "denied", "message": f"Invalid capability token: {err_tok}"}
+                
+                engine = RuleEngine.get_instance()
+                ok, err = engine.add_rule(
+                    rule_name=rule_req.rule_name,
+                    author=rule_req.author,
+                    threat_description=rule_req.threat_description,
+                    target_ioc_indicator=rule_req.target_ioc_indicator,
+                    mitre_framework_id=rule_req.mitre_framework_id
+                )
+                if ok:
+                    self._log_audit(payload, "approved", reason="YARA rule compiled and stored successfully.")
+                    return {"status": "success", "message": "YARA rule compiled, validated, and saved successfully."}
+                else:
+                    self._log_audit(payload, "denied", reason=f"Validation failed: {err}")
+                    return {"status": "error", "message": f"Validation failed: {err}"}
+            except Exception as e:
+                self._log_audit(payload, "denied", reason=f"Rule parsing exception: {e}")
+                return {"status": "error", "message": f"Rule compilation failed: {e}"}
 
         # Restrictiveness Lattice and Capability Intersection Checks
         try:
@@ -309,6 +366,8 @@ class PolicyGate:
 
                 success, stdout, stderr = HostExecutor.execute_mitigation(req.target_ip, req.protocol, req.port)
                 self._log_audit(req, "approved" if success else "denied", executor="HostExecutor.execute_mitigation")
+                if success:
+                    log_security_event("block_ip", "policy_gate", req.target_ip, hashlib.sha256(str(payload).encode()).hexdigest(), "approved", session_id)
                 return {"status": "success" if success else "error", "stdout": stdout, "stderr": stderr}
 
             elif action == "restart_service":
@@ -379,7 +438,10 @@ class PolicyGate:
 
                 success, stdout, stderr = HostExecutor.execute_state_modification(req.filepath, req.content)
                 self._log_audit(req, "approved" if success else "denied", executor="HostExecutor.execute_state_modification")
-                return {"status": "success" if success else "error", "stdout": stdout, "stderr": stderr}
+                if not success:
+                    log_security_event("file_write_violation", "policy_gate", "kaiacord", hashlib.sha256(str(payload).encode()).hexdigest(), "blocked", session_id)
+                    return {"status": "denied", "message": stderr}
+                return {"status": "success", "stdout": stdout, "stderr": stderr}
 
             elif action == "run_script":
                 req = ScriptExecutionRequest(**payload)
@@ -444,6 +506,13 @@ class PolicyGate:
 if __name__ == "__main__":
     import sys
     import security.db
+    from security.tamper_detection import TamperDetector
+    from security.rule_engine import RuleEngine
+    from security.fim_daemon import FIMDaemon
+    from security.ebpf_telemetry import EBPFTelemetryEngine
+    from security.network_discovery import PassiveDiscoveryEngine
+    from security.honeypot import HoneypotCoordinator
+    
     # Initialize security DB
     security.db.initialize_db()
     
@@ -454,6 +523,34 @@ if __name__ == "__main__":
         handlers=[logging.StreamHandler(sys.stdout)]
     )
     
+    detector = TamperDetector()
+    detector.start()
+    
+    # Initialize YARA Rule Engine
+    rule_engine = RuleEngine.get_instance()
+    
+    # Initialize and start FIMDaemon
+    fim = FIMDaemon(yara_scanner=rule_engine.scanner)
+    fim_started = fim.start()
+    if not fim_started:
+        logger.warning("FIMDaemon could not start. Falling back to watchdog script sentinel.")
+        start_script_sentinel()
+    else:
+        # Register reload callback to dynamically update FIM rules on rule addition
+        rule_engine.register_reload_callback(fim.reload_rules)
+
+    # Initialize and start eBPF telemetry engine
+    ebpf = EBPFTelemetryEngine.get_instance()
+    ebpf.start()
+
+    # Initialize and start Passive Discovery
+    discovery = PassiveDiscoveryEngine.get_instance()
+    discovery.start()
+
+    # Initialize and start Honeypot coordinator
+    honeypots = HoneypotCoordinator.get_instance()
+    honeypots.start(ebpf_engine=ebpf)
+    
     gate = PolicyGate()
     logger.info("Starting standalone Policy Gate Daemon...")
     gate.is_running = True
@@ -461,4 +558,13 @@ if __name__ == "__main__":
         gate._run_server()
     except KeyboardInterrupt:
         logger.info("KeyboardInterrupt received, stopping...")
+    finally:
         gate.stop()
+        detector.stop()
+        if fim_started:
+            fim.stop()
+        else:
+            stop_script_sentinel()
+        ebpf.stop()
+        discovery.stop()
+        honeypots.stop()
