@@ -18,15 +18,21 @@ if [ -z "$MAXMIND_LICENSE_KEY" ]; then
     exit 1
 fi
 
+if [ -z "$MAXMIND_ACCOUNT_ID" ]; then
+    echo -e "${COLOR_RED}Error: MAXMIND_ACCOUNT_ID environment variable is not set.${COLOR_RESET}"
+    echo -e "${COLOR_YELLOW}Please set your MaxMind Account ID (found on your maxmind.com account page).${COLOR_RESET}"
+    exit 1
+fi
+
 GEOIP_DIR="storage/threat_intel/geoip"
 mkdir -p "$GEOIP_DIR"
 
-URL="https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-City&license_key=${MAXMIND_LICENSE_KEY}&suffix=tar.gz"
+URL="https://download.maxmind.com/geoip/databases/GeoLite2-City/download?suffix=tar.gz"
 TEMP_TAR="/tmp/GeoLite2-City.tar.gz"
 TEMP_DIR="/tmp/GeoLite2-City-extracted"
 
 echo -e "${COLOR_BLUE}Downloading GeoLite2 City database...${COLOR_RESET}"
-if curl -sSL -o "$TEMP_TAR" "$URL"; then
+if curl -sSL -u "${MAXMIND_ACCOUNT_ID}:${MAXMIND_LICENSE_KEY}" -o "$TEMP_TAR" "$URL"; then
     echo -e "${COLOR_GREEN}Download complete.${COLOR_RESET}"
 else
     echo -e "${COLOR_RED}Error: Failed to download database.${COLOR_RESET}"

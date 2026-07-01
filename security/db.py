@@ -10,6 +10,7 @@ def initialize_db():
     """Initializes the append-only security events database."""
     conn = sqlite3.connect(config.SECURITY_DB_PATH)
     cursor = conn.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL;")
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS security_events (
             event_id TEXT PRIMARY KEY,

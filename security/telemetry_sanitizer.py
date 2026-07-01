@@ -22,6 +22,7 @@ FIELD_SCHEMAS = {
     "ip": TelemetrySchemaField(45, r"[0-9a-fA-F\.:]", "ip"), # IPv4 or IPv6
     "port": TelemetrySchemaField(5, r"[0-9]", "port"),
     "pid": TelemetrySchemaField(10, r"[0-9]", "pid"),
+    "uid": TelemetrySchemaField(10, r"[0-9]", "uid"),
     "comm": TelemetrySchemaField(30, r"[a-zA-Z0-9_\-\.]", "comm"), # process name
     "path": TelemetrySchemaField(200, r"[a-zA-Z0-9_\-\.\/]", "path"), # file path
     "hostname": TelemetrySchemaField(64, r"[a-zA-Z0-9\-\.]", "hostname"),

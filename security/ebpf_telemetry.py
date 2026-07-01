@@ -308,12 +308,19 @@ class EBPFTelemetryEngine:
         event = self.bpf["tcp_retransmit_events"].event(data)
         saddr_str = socket.inet_ntoa(struct.pack("<I", event.saddr))
         daddr_str = socket.inet_ntoa(struct.pack("<I", event.daddr))
+        from security.telemetry_sanitizer import sanitize_telemetry
+        raw = {
+            "ip": saddr_str, "port": str(event.sport),
+        }
+        clean_src = sanitize_telemetry(raw)
+        raw2 = {"ip": daddr_str, "port": str(event.dport)}
+        clean_dst = sanitize_telemetry(raw2)
         with self.lock:
             self.retrans_deque.append({
-                "saddr": saddr_str,
-                "daddr": daddr_str,
-                "sport": event.sport,
-                "dport": event.dport,
+                "saddr": clean_src.get("ip", ""),
+                "daddr": clean_dst.get("ip", ""),
+                "sport": int(clean_src.get("port", 0) or 0),
+                "dport": int(clean_dst.get("port", 0) or 0),
                 "state": event.state,
                 "timestamp": time.time()
             })
@@ -324,10 +331,10 @@ class EBPFTelemetryEngine:
         from security.telemetry_sanitizer import sanitize_telemetry
         raw_pid = {"pid": str(event.pid)}
         raw_comm = {"comm": comm}
-        raw_uid = {"pid": str(event.uid)}
+        raw_uid = {"uid": str(event.uid)}
         clean_pid = sanitize_telemetry(raw_pid).get("pid", "")
         clean_comm = sanitize_telemetry(raw_comm).get("comm", "")
-        clean_uid = sanitize_telemetry(raw_uid).get("pid", "")
+        clean_uid = sanitize_telemetry(raw_uid).get("uid", "")
         clean_pid_int = int(clean_pid) if clean_pid else event.pid
         clean_uid_int = int(clean_uid) if clean_uid else event.uid
         with self.lock:

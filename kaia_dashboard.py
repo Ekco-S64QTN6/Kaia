@@ -1301,12 +1301,16 @@ class AuditLogCollector:
     # --- thread body (polling loop) ---
 
     def _run(self) -> None:
-        """Poll security_events.db and audit_ledger.json on a 250ms cycle."""
+        """Poll security_events.db (250ms) and audit_ledger.json (500ms)."""
+        ledger_tick = 0
         while not self._stop.is_set():
             try:
                 new_entries = []
                 new_entries.extend(self._poll_security_db())
-                new_entries.extend(self._poll_audit_ledger())
+                ledger_tick += 1
+                if ledger_tick >= 2:
+                    new_entries.extend(self._poll_audit_ledger())
+                    ledger_tick = 0
 
                 if new_entries:
                     now = time.time()
@@ -1562,7 +1566,14 @@ class KaiamonUI:
                     if shodan.get("tags"):
                         self._add_response(f"Shodan Tags: {shodan.get('tags')}")
                     if shodan.get("vulns"):
-                        self._add_response(f"Vulnerabilities: {shodan.get('vulns')}")
+                        self._add_response(f"Vulnerabilities ({len(shodan['vulns'])} total):")
+                        for cve_id in shodan["vulns"][:3]:
+                            details = threat_intel.lookup_cve_details(cve_id)
+                            cvss = details.get("cvss", "N/A")
+                            desc = str(details.get("details", ""))[:80]
+                            self._add_response(f"  • {cve_id} — CVSS: {cvss} — {desc}")
+                        if len(shodan["vulns"]) > 3:
+                            self._add_response(f"  ... and {len(shodan['vulns']) - 3} more")
                         
                 elif cmd == "show" and len(args) >= 3 and args[0] == "audit" and args[1] == "--since":
                     since_str = args[2]

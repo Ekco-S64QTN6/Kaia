@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Union
-from pydantic import BaseModel, Field, IPvAnyAddress
+from pydantic import BaseModel, Field
 
 class CapabilityToken(BaseModel):
     capability: str

@@ -59,6 +59,7 @@ class PassiveDiscoveryEngine:
     def start(self):
         # Initialize DB
         os.makedirs(os.path.dirname(config.ASSETS_DB_PATH), exist_ok=True)
+        conn = None
         try:
             conn = sqlite3.connect(config.ASSETS_DB_PATH)
             cursor = conn.cursor()
@@ -75,10 +76,15 @@ class PassiveDiscoveryEngine:
                 )
             """)
             conn.commit()
-            conn.close()
         except Exception as e:
             logger.error(f"Failed to initialize assets database: {e}")
             return False
+        finally:
+            try:
+                if conn:
+                    conn.close()
+            except Exception:
+                pass
 
         # Load OUI
         self.oui = load_oui()
@@ -101,6 +107,7 @@ class PassiveDiscoveryEngine:
         assets = []
         if not os.path.exists(config.ASSETS_DB_PATH):
             return assets
+        conn = None
         try:
             conn = sqlite3.connect(config.ASSETS_DB_PATH)
             cursor = conn.cursor()
@@ -120,9 +127,14 @@ class PassiveDiscoveryEngine:
                     "first_seen": r[5],
                     "last_seen": r[6]
                 })
-            conn.close()
         except Exception as e:
             logger.error(f"Error querying assets DB: {e}")
+        finally:
+            try:
+                if conn:
+                    conn.close()
+            except Exception:
+                pass
         return assets
 
     def _run(self):
@@ -263,6 +275,15 @@ class PassiveDiscoveryEngine:
     def _log_asset(self, ip: str, mac: str, hostname: str, vector: str):
         now = time.time()
         key = (mac, ip)
+
+        # Sanitize all fields from untrusted network input (INV-004)
+        from security.telemetry_sanitizer import sanitize_telemetry
+        raw = {"ip": ip, "hostname": hostname}
+        clean = sanitize_telemetry(raw)
+        ip = clean.get("ip", "")
+        hostname = clean.get("hostname", "")
+        if not ip:   # Drop events with unparseable IPs
+            return
         
         with self.cache_lock:
             last_seen = self.seen_cache.get(key, 0)
@@ -279,6 +300,7 @@ class PassiveDiscoveryEngine:
         ts_str = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         
         # Write to SQLite
+        conn = None
         try:
             conn = sqlite3.connect(config.ASSETS_DB_PATH)
             cursor = conn.cursor()
@@ -302,9 +324,14 @@ class PassiveDiscoveryEngine:
                 """, (ip, mac, hostname, vendor, vector, ts_str, ts_str))
                 
             conn.commit()
-            conn.close()
         except Exception as e:
             logger.error(f"Failed to log asset to database: {e}")
+        finally:
+            try:
+                if conn:
+                    conn.close()
+            except Exception:
+                pass
 
         # Spawn asynchronous threat intel enrichment
         threading.Thread(target=self._enrich_shodan, args=(ip, mac), daemon=True).start()

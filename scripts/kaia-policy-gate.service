@@ -1,5 +1,5 @@
 # IMPORTANT: Set KAIA_PROJECT_DIR to the absolute path of your Kaia repo.
-# Edit the Environment= line below before running: systemctl enable --now <service>
+# Edit the paths below before running: sudo scripts/install_services.sh
 [Unit]
 Description=Kaia Out-of-Process Policy Gate Daemon
 After=network.target postgresql.service
@@ -7,21 +7,22 @@ After=network.target postgresql.service
 [Service]
 Type=simple
 Environment=KAIA_PROJECT_DIR=/home/ekco/github/Kaia
-ExecStart=/usr/bin/python3 ${KAIA_PROJECT_DIR}/security/policy_gate.py
-WorkingDirectory=${KAIA_PROJECT_DIR}
+Environment=PYTHONPATH=/home/ekco/github/Kaia/core:/home/ekco/github/Kaia
+Environment=KAIA_CAPABILITY_TOKEN_SECRET=kaia_secure_signing_secret_key_2026
+ExecStart=/home/ekco/github/Kaia/.venv/bin/python /home/ekco/github/Kaia/security/policy_gate.py
+WorkingDirectory=/home/ekco/github/Kaia
 Restart=always
-RestartSec=1
+RestartSec=3
+StartLimitIntervalSec=30
+StartLimitBurst=3
 RuntimeDirectory=kaiacord
-User=root
+User=ekco
 Group=kaiacord
+AmbientCapabilities=CAP_NET_RAW CAP_SYS_ADMIN
 NoNewPrivileges=true
 ProtectSystem=strict
-ProtectHome=true
 PrivateTmp=true
-PrivateDevices=true
-ReadWritePaths=/run/kaiacord
-CapabilityBoundingSet=CAP_NET_RAW CAP_SYS_ADMIN
-AmbientCapabilities=CAP_NET_RAW CAP_SYS_ADMIN
+ReadWritePaths=/run/kaiacord /home/ekco/github/Kaia/storage /home/ekco/github/Kaia/logs
 
 [Install]
 WantedBy=multi-user.target

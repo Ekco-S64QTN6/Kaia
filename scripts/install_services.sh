@@ -6,7 +6,7 @@ KAIA_PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 for SERVICE in kaia-policy-gate kaia-lockdown; do
     SRC="$KAIA_PROJECT_DIR/scripts/${SERVICE}.service"
     DEST="/etc/systemd/system/${SERVICE}.service"
-    sed "s|KAIA_PROJECT_DIR=/home/ekco/github/Kaia|KAIA_PROJECT_DIR=${KAIA_PROJECT_DIR}|g" \
+    sed "s|/home/ekco/github/Kaia|${KAIA_PROJECT_DIR}|g" \
         "$SRC" > "$DEST"
     echo "Installed $DEST"
 done

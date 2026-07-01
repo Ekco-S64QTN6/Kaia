@@ -313,7 +313,7 @@ class PolicyGate:
                 
                 # Exec diagnostics (Green Tier: token is optional)
                 if req.capability_token:
-                    ok_tok, err_tok = verify_capability_token(req.capability_token, "view_logs", req.query_type)
+                    ok_tok, err_tok = verify_capability_token(req.capability_token, "diagnostics", req.query_type)
                     if not ok_tok:
                         self._log_audit(req, "denied", reason=f"Invalid capability token: {err_tok}")
                         log_security_event("invalid_capability_token", "policy_gate", "kaiacord", hashlib.sha256(str(payload).encode()).hexdigest(), "blocked", session_id)

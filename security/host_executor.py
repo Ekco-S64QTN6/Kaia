@@ -133,6 +133,8 @@ class HostExecutor:
                 "--dev", "/dev",
                 "--unshare-all",
                 "--bind", workspace_abs, workspace_abs,
+                "--bind", "/dev/null", os.path.join(workspace_abs, ".env"),
+                "--tmpfs", os.path.join(workspace_abs, "storage"),
                 "--ro-bind", script_path, "/tmp/run_script.sh",
                 "--",
                 "/tmp/run_script.sh"

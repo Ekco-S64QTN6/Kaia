@@ -80,6 +80,7 @@ class FIMDaemon:
             
         # Init DB directory
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        conn = None
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
@@ -95,10 +96,15 @@ class FIMDaemon:
                 )
             """)
             conn.commit()
-            conn.close()
         except Exception as e:
             logger.error(f"FIM audit database initialization failed: {e}")
             return False
+        finally:
+            try:
+                if conn:
+                    conn.close()
+            except Exception:
+                pass
 
         # Initialize fanotify fd
         # We monitor FAN_CLASS_NOTIF. We must close event fds ourselves.
@@ -144,6 +150,7 @@ class FIMDaemon:
         alerts = []
         if not os.path.exists(self.db_path):
             return alerts
+        conn = None
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
@@ -163,9 +170,14 @@ class FIMDaemon:
                     "yara_matches": row[5],
                     "sha256": row[6]
                 })
-            conn.close()
         except Exception:
             pass
+        finally:
+            try:
+                if conn:
+                    conn.close()
+            except Exception:
+                pass
         return alerts
 
     def _run(self):
@@ -285,6 +297,7 @@ class FIMDaemon:
         ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
         # Write to local database
+        conn = None
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
@@ -293,9 +306,14 @@ class FIMDaemon:
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             """, (ts, event_type, pid, comm, filepath, yara_str, sha))
             conn.commit()
-            conn.close()
         except Exception as e:
             logger.error(f"FIM audit database insert failed: {e}")
+        finally:
+            try:
+                if conn:
+                    conn.close()
+            except Exception:
+                pass
 
         # Trigger security alert on YARA matches
         if yara_matches:
