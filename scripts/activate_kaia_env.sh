@@ -98,8 +98,8 @@ else
     echo -e "${COLOR_GREEN}Ollama server is already running.${COLOR_RESET}"
 fi
 
-echo -e "${COLOR_BLUE}All services checked. Starting Kaia CLI application...${COLOR_RESET}"
+echo -e "${COLOR_BLUE}All services checked. Starting Kaia Security Dashboard...${COLOR_RESET}"
 
-"$KAIA_PROJECT_DIR/.venv/bin/python" "$KAIA_PROJECT_DIR/main.py"
+"$KAIA_PROJECT_DIR/.venv/bin/python" "$KAIA_PROJECT_DIR/kaia_dashboard.py"
 
 echo -e "${COLOR_BLUE}Kaia CLI application session ended.${COLOR_RESET}"

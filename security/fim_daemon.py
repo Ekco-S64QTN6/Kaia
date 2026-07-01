@@ -78,10 +78,10 @@ class FIMDaemon:
             logger.warning("FIMDaemon cannot start: libc fanotify binding unavailable.")
             return False
             
-        # Init DB directory
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         conn = None
         try:
+            # Init DB directory
+            os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             cursor.execute("""

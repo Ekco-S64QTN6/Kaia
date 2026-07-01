@@ -22,7 +22,7 @@ AmbientCapabilities=CAP_NET_RAW CAP_SYS_ADMIN
 NoNewPrivileges=true
 ProtectSystem=strict
 PrivateTmp=true
-ReadWritePaths=/run/kaiacord /home/ekco/github/Kaia/storage /home/ekco/github/Kaia/logs
+ReadWritePaths=/run/kaiacord /home/ekco/github/Kaia/storage /home/ekco/github/Kaia/logs /var/lib/secdaemon
 
 [Install]
 WantedBy=multi-user.target
