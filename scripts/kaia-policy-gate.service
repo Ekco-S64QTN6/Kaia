@@ -3,6 +3,8 @@
 [Unit]
 Description=Kaia Out-of-Process Policy Gate Daemon
 After=network.target postgresql.service
+StartLimitIntervalSec=30
+StartLimitBurst=3
 
 [Service]
 Type=simple
@@ -12,16 +14,18 @@ Environment=KAIA_CAPABILITY_TOKEN_SECRET=kaia_secure_signing_secret_key_2026
 ExecStart=/home/ekco/github/Kaia/.venv/bin/python /home/ekco/github/Kaia/security/policy_gate.py
 WorkingDirectory=/home/ekco/github/Kaia
 Restart=always
-RestartSec=3
-StartLimitIntervalSec=30
-StartLimitBurst=3
+RestartSec=1
 RuntimeDirectory=kaiacord
-User=ekco
+User=root
 Group=kaiacord
+CapabilityBoundingSet=CAP_NET_RAW CAP_SYS_ADMIN
 AmbientCapabilities=CAP_NET_RAW CAP_SYS_ADMIN
 NoNewPrivileges=true
 ProtectSystem=strict
+ProtectHome=true
+PrivateDevices=true
 PrivateTmp=true
+ReadOnlyPaths=/home/ekco/github/Kaia
 ReadWritePaths=/run/kaiacord /home/ekco/github/Kaia/storage /home/ekco/github/Kaia/logs /var/lib/secdaemon
 
 [Install]

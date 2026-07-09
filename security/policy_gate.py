@@ -7,7 +7,7 @@ import hashlib
 import re
 import threading
 import subprocess
-from datetime import datetime
+from datetime import datetime, UTC, timedelta
 from pydantic import ValidationError
 
 import config
@@ -27,13 +27,13 @@ def sign_token(token_dict: dict, secret: str) -> str:
 
 def generate_capability_token(capability: str, target: str, duration_seconds: int = 3600) -> str:
     """Generates and signs a capability token."""
-    issued_at = datetime.utcnow()
-    expires = datetime.fromtimestamp(issued_at.timestamp() + duration_seconds)
+    issued_at = datetime.now(UTC)
+    expires = issued_at + timedelta(seconds=duration_seconds)
     token_data = {
         "capability": capability,
         "target": target,
-        "issued_at": issued_at.isoformat() + "Z",
-        "expires": expires.isoformat() + "Z",
+        "issued_at": issued_at.isoformat().replace("+00:00", "Z"),
+        "expires": expires.isoformat().replace("+00:00", "Z"),
         "issued_by": "operator"
     }
     token_data["signature"] = sign_token(token_data, config.CAPABILITY_TOKEN_SECRET)
@@ -64,8 +64,11 @@ def verify_capability_token(token_str: str, required_capability: str, required_t
 
     # Verify expiration
     try:
-        expires_dt = datetime.fromisoformat(token_data["expires"].replace("Z", ""))
-        if datetime.utcnow() > expires_dt:
+        expires_str = token_data["expires"]
+        if expires_str.endswith("Z"):
+            expires_str = expires_str[:-1] + "+00:00"
+        expires_dt = datetime.fromisoformat(expires_str)
+        if datetime.now(UTC) > expires_dt:
             return False, "Token has expired."
     except Exception as e:
         return False, f"Failed to parse token expiration: {e}"
@@ -390,8 +393,8 @@ class PolicyGate:
 
                 # Check restart frequency threshold policies
                 import sqlite3
-                from datetime import datetime, timedelta
-                time_threshold = (datetime.utcnow() - timedelta(seconds=config.RESTART_MAX_FREQUENCY_WINDOW_SECONDS)).isoformat() + "Z"
+                from datetime import datetime, timedelta, UTC
+                time_threshold = (datetime.now(UTC) - timedelta(seconds=config.RESTART_MAX_FREQUENCY_WINDOW_SECONDS)).isoformat().replace("+00:00", "Z")
                 conn = sqlite3.connect(config.SECURITY_DB_PATH)
                 cursor = conn.cursor()
                 try:

@@ -33,8 +33,12 @@ class TamperDetector:
             
         # 2. Append-only security files
         self.append_only_files = [
-            config.SECURITY_DB_PATH,
             config.AUDIT_LOG_PATH,
+        ]
+        
+        # 3. SQLite append-only files
+        self.sqlite_append_only_files = [
+            config.SECURITY_DB_PATH,
         ]
 
     def _compute_sha256(self, filepath: str, limit: int = None) -> str:
@@ -49,6 +53,55 @@ class TamperDetector:
         except Exception as e:
             logger.error(f"Error computing hash for {filepath}: {e}")
             return ""
+
+    def _compute_sqlite_prefix_hash(self, db_path: str, row_count: int) -> str:
+        """
+        Hashes the logical content (not raw bytes) of the first `row_count` rows
+        by rowid. Stable across WAL checkpoints, header counter changes, and
+        VACUUM, since it only reflects committed row content.
+        """
+        import sqlite3
+        h = hashlib.sha256()
+        conn = None
+        try:
+            conn = sqlite3.connect(db_path, timeout=2.0)
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT event_id, timestamp, type, source, actor, payload_hash, disposition, session_id
+                FROM security_events
+                ORDER BY rowid ASC
+                LIMIT ?
+            """, (row_count,))
+            for row in cursor.fetchall():
+                h.update("|".join(str(c) for c in row).encode("utf-8"))
+        except Exception as e:
+            logger.error(f"Error computing SQLite content hash for {db_path}: {e}")
+            return ""
+        finally:
+            try:
+                if conn:
+                    conn.close()
+            except Exception:
+                pass
+        return h.hexdigest()
+
+    def _get_sqlite_row_count(self, db_path: str) -> int:
+        import sqlite3
+        conn = None
+        try:
+            conn = sqlite3.connect(db_path, timeout=2.0)
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM security_events")
+            return cursor.fetchone()[0]
+        except Exception as e:
+            logger.error(f"Error counting rows in {db_path}: {e}")
+            return 0
+        finally:
+            try:
+                if conn:
+                    conn.close()
+            except Exception:
+                pass
 
     def start(self):
         """Establish baselines and start audit thread."""
@@ -76,6 +129,13 @@ class TamperDetector:
                 h = self._compute_sha256(filepath, limit=size)
                 self._baselines[filepath] = (h, size)
 
+        # Baseline SQLite append-only files (using logical content hashing to avoid false alarms on WAL/header updates)
+        for filepath in self.sqlite_append_only_files:
+            if os.path.exists(filepath):
+                row_count = self._get_sqlite_row_count(filepath)
+                h = self._compute_sqlite_prefix_hash(filepath, row_count)
+                self._baselines[filepath] = (h, ("sqlite", row_count))
+
         self._thread = threading.Thread(target=self._run, daemon=True, name="tamper-detector")
         self._thread.start()
         logger.info("Tamper detection thread started successfully.")
@@ -97,6 +157,11 @@ class TamperDetector:
                 current_hash = self._compute_sha256(filepath)
                 if current_hash != baseline_hash:
                     self._trigger_tamper_alert(filepath, "Baseline hash mismatch")
+            elif isinstance(file_type, tuple) and len(file_type) == 2 and file_type[0] == "sqlite":
+                row_count = file_type[1]
+                current_hash = self._compute_sqlite_prefix_hash(filepath, row_count)
+                if current_hash != baseline_hash:
+                    self._trigger_tamper_alert(filepath, "SQLite historical row content mismatch (rows altered or deleted)")
             else:
                 # Append-only: read up to the original size
                 size_limit = file_type

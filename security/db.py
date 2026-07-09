@@ -32,8 +32,9 @@ def log_security_event(event_type: str, source: str, actor: str, payload_hash: s
     Appends a new security event.
     Returns the generated event_id.
     """
+    from datetime import UTC
     event_id = f"evt_{uuid.uuid4().hex[:8]}"
-    timestamp = datetime.utcnow().isoformat() + "Z"
+    timestamp = datetime.now(UTC).isoformat().replace("+00:00", "Z")
     
     conn = sqlite3.connect(config.SECURITY_DB_PATH)
     cursor = conn.cursor()

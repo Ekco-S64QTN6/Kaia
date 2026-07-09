@@ -26,7 +26,7 @@ import urllib.error
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
 from collections import deque
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 import queue
 import logging
 
@@ -309,7 +309,7 @@ class ThreatIntelCollector(threading.Thread):
                 try:
                     conn = sqlite3.connect(config.SECURITY_DB_PATH, timeout=1.0)
                     cursor = conn.cursor()
-                    threshold = (datetime.utcnow() - timedelta(hours=24)).isoformat() + "Z"
+                    threshold = (datetime.now(UTC) - timedelta(hours=24)).isoformat().replace("+00:00", "Z")
                     cursor.execute("""
                         SELECT actor, timestamp FROM security_events
                         WHERE type = 'block_ip' AND disposition = 'approved' AND timestamp >= ?
@@ -430,7 +430,7 @@ class ContainmentCollector(threading.Thread):
                 try:
                     conn = sqlite3.connect(config.SECURITY_DB_PATH, timeout=1.0)
                     cursor = conn.cursor()
-                    threshold = (datetime.utcnow() - timedelta(hours=24)).isoformat() + "Z"
+                    threshold = (datetime.now(UTC) - timedelta(hours=24)).isoformat().replace("+00:00", "Z")
                     cursor.execute("""
                         SELECT COUNT(*), MAX(timestamp) FROM security_events
                         WHERE type = 'telemetry_script_sentinel_alert' AND timestamp >= ?
@@ -561,8 +561,13 @@ class SystemSecurityCollector(threading.Thread):
                                 
                             expires_str = token_data.get("expires", "")
                             if expires_str:
-                                expires_dt = datetime.fromisoformat(expires_str.replace("Z", ""))
-                                if datetime.utcnow() > expires_dt:
+                                expires_str_aware = expires_str
+                                if expires_str_aware.endswith("Z"):
+                                    expires_str_aware = expires_str_aware[:-1] + "+00:00"
+                                expires_dt = datetime.fromisoformat(expires_str_aware)
+                                if expires_dt.tzinfo is None:
+                                    expires_dt = expires_dt.replace(tzinfo=UTC)
+                                if datetime.now(UTC) > expires_dt:
                                     expired += 1
                                 else:
                                     active += 1
@@ -1583,7 +1588,7 @@ class KaiamonUI:
                         if os.path.exists(config.SECURITY_DB_PATH):
                             conn = sqlite3.connect(config.SECURITY_DB_PATH)
                             cursor = conn.cursor()
-                            threshold = (datetime.utcnow() - timedelta(hours=hours)).isoformat() + "Z"
+                            threshold = (datetime.now(UTC) - timedelta(hours=hours)).isoformat().replace("+00:00", "Z")
                             cursor.execute("""
                                 SELECT timestamp, type, actor, disposition FROM security_events
                                 WHERE timestamp >= ? ORDER BY timestamp DESC LIMIT 20

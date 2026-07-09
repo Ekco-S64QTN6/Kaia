@@ -3,7 +3,7 @@ import psutil
 import logging
 import subprocess
 import hashlib
-from datetime import datetime
+from datetime import datetime, UTC
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
@@ -55,7 +55,7 @@ def get_network_connections() -> list:
                 "pid": str(conn.pid) if conn.pid else "",
                 "comm": comm,
                 "state": conn.status,
-                "timestamp": datetime.utcnow().isoformat() + "Z"
+                "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z")
             })
     except Exception as e:
         logger.error(f"Failed to fetch network connections telemetry: {e}")
@@ -90,7 +90,7 @@ def get_process_lifecycle_events() -> list:
                     "pid": str(p.info['pid']),
                     "comm": p.info['name'],
                     "path": p.info['exe'] or "",
-                    "timestamp": datetime.utcnow().isoformat() + "Z"
+                    "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z")
                 })
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue

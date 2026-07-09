@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, UTC
 from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, Field
 
@@ -51,7 +51,7 @@ class ScriptExecutionRequest(BaseModel):
 
 
 class AuditRecord(BaseModel):
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     actor: str = "kaiacord"
     request: Dict[str, Any] = Field(default_factory=dict)
     capability_token: Optional[str] = None

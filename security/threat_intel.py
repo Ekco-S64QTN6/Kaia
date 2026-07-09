@@ -2,7 +2,7 @@ import sqlite3
 import os
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 
 import requests
 
@@ -122,7 +122,7 @@ def update_ip_reputation(ip: str, score: int, tags: list):
         cursor.execute("""
             INSERT OR REPLACE INTO reputation_cache (ip, reputation_score, tags, last_updated)
             VALUES (?, ?, ?, ?)
-        """, (ip, score, ",".join(tags), datetime.utcnow().isoformat() + "Z"))
+        """, (ip, score, ",".join(tags), datetime.now(UTC).isoformat().replace("+00:00", "Z")))
         conn.commit()
     except Exception as e:
         logger.error(f"Failed to update reputation cache: {e}")
@@ -189,8 +189,13 @@ def _is_cache_stale(last_updated_str: str) -> bool:
     if not last_updated_str:
         return True
     try:
-        cached_at = datetime.fromisoformat(last_updated_str.replace("Z", "+00:00").replace("+00:00", ""))
-        return (datetime.utcnow() - cached_at) > timedelta(days=INTERNETDB_CACHE_TTL_DAYS)
+        expires_str = last_updated_str
+        if expires_str.endswith("Z"):
+            expires_str = expires_str[:-1] + "+00:00"
+        cached_at = datetime.fromisoformat(expires_str)
+        if cached_at.tzinfo is None:
+            cached_at = cached_at.replace(tzinfo=UTC)
+        return (datetime.now(UTC) - cached_at) > timedelta(days=INTERNETDB_CACHE_TTL_DAYS)
     except (ValueError, TypeError):
         return True
 
@@ -241,7 +246,7 @@ def _cache_internetdb_result(ip: str, api_data: dict):
             ",".join(api_data.get("tags", [])),
             ",".join(api_data.get("vulns", [])),
             ",".join(api_data.get("cpes", [])),
-            datetime.utcnow().isoformat() + "Z"
+            datetime.now(UTC).isoformat().replace("+00:00", "Z")
         ))
         conn.commit()
     except Exception as e:

@@ -169,3 +169,69 @@ def test_lockdown_trigger(tmp_path):
         
         # Verify fallback shell script execution
         mock_run.assert_any_call(["/bin/bash", str(tmp_path / "scripts" / "kaia-lockdown.sh")], check=False)
+
+
+def test_tamper_detector_sqlite_hash(tmp_path):
+    from security.tamper_detection import TamperDetector
+    import sqlite3
+    
+    db_path = str(tmp_path / "security_events.db")
+    
+    # Initialize mock database
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS security_events (
+            event_id TEXT PRIMARY KEY,
+            timestamp TEXT NOT NULL,
+            type TEXT NOT NULL,
+            source TEXT NOT NULL,
+            actor TEXT NOT NULL,
+            payload_hash TEXT,
+            disposition TEXT NOT NULL,
+            session_id TEXT NOT NULL
+        )
+    """)
+    cursor.execute("""
+        INSERT INTO security_events (event_id, timestamp, type, source, actor, payload_hash, disposition, session_id)
+        VALUES ('evt_1', '2026-07-09T08:00:00Z', 'block_ip', 'policy_gate', '127.0.0.1', 'abc', 'approved', 'session_1')
+    """)
+    conn.commit()
+    conn.close()
+
+    detector = TamperDetector()
+    detector.sqlite_append_only_files = [db_path]
+    detector.append_only_files = []
+    
+    # 1. Verify row count
+    row_count = detector._get_sqlite_row_count(db_path)
+    assert row_count == 1
+    
+    # 2. Verify hash is generated
+    h1 = detector._compute_sqlite_prefix_hash(db_path, row_count)
+    assert len(h1) == 64  # SHA-256 hex digest length
+    
+    # 3. Simulate normal database append (new row)
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO security_events (event_id, timestamp, type, source, actor, payload_hash, disposition, session_id)
+        VALUES ('evt_2', '2026-07-09T08:05:00Z', 'restart_service', 'policy_gate', 'nginx', 'def', 'approved', 'session_2')
+    """)
+    conn.commit()
+    conn.close()
+    
+    # 4. Content hash of the original first row should not change
+    h2 = detector._compute_sqlite_prefix_hash(db_path, row_count)
+    assert h1 == h2  # Hash of first row remains identical despite new row append
+    
+    # 5. Modify the baseline row (tampering simulation)
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE security_events SET disposition = 'denied' WHERE rowid = 1")
+    conn.commit()
+    conn.close()
+    
+    # 6. Verify hash mismatch detects modification
+    h3 = detector._compute_sqlite_prefix_hash(db_path, row_count)
+    assert h1 != h3  # Tamper detected!
