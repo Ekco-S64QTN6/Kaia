@@ -521,11 +521,17 @@ if __name__ == "__main__":
     # Initialize security DB
     security.db.initialize_db()
     
-    # Configure logging to stdout
+    # Configure logging with rotation and stdout
+    from logging.handlers import RotatingFileHandler
+    import config
+    os.makedirs(os.path.dirname(config.LOG_FILE_PATH), exist_ok=True)
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        handlers=[logging.StreamHandler(sys.stdout)]
+        handlers=[
+            RotatingFileHandler(config.LOG_FILE_PATH, maxBytes=5*1024*1024, backupCount=3),
+            logging.StreamHandler(sys.stdout)
+        ]
     )
     
     detector = TamperDetector()

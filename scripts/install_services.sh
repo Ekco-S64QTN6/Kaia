@@ -10,6 +10,11 @@ for SERVICE in kaia-policy-gate kaia-lockdown; do
         "$SRC" > "$DEST"
     echo "Installed $DEST"
 done
+# Pre-create filesystem honeypot files/folders so systemd can bind-mount them
+mkdir -p /var/backups /root/.ssh
+touch /etc/api_keys.json /var/backups/credentials.txt /root/.ssh/authorized_keys.bak
+chmod 600 /etc/api_keys.json /var/backups/credentials.txt /root/.ssh/authorized_keys.bak
+
 systemctl daemon-reload
 systemctl enable --now kaia-policy-gate.service
 echo "Done. kaia-lockdown.service installed but not enabled (start manually on breach)."

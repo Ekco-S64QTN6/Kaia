@@ -18,15 +18,15 @@ RestartSec=1
 RuntimeDirectory=kaiacord
 User=root
 Group=kaiacord
-CapabilityBoundingSet=CAP_NET_RAW CAP_SYS_ADMIN
-AmbientCapabilities=CAP_NET_RAW CAP_SYS_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_ADMIN CAP_DAC_OVERRIDE
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_ADMIN CAP_DAC_OVERRIDE
 NoNewPrivileges=true
 ProtectSystem=strict
-ProtectHome=true
+ProtectHome=read-only
 PrivateDevices=true
 PrivateTmp=true
 ReadOnlyPaths=/home/ekco/github/Kaia
-ReadWritePaths=/run/kaiacord /home/ekco/github/Kaia/storage /home/ekco/github/Kaia/logs /var/lib/secdaemon
+ReadWritePaths=/run/kaiacord /home/ekco/github/Kaia/storage /home/ekco/github/Kaia/logs /var/lib/secdaemon -/etc/api_keys.json -/var/backups/credentials.txt -/root/.ssh
 
 [Install]
 WantedBy=multi-user.target

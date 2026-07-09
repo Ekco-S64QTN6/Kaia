@@ -32,9 +32,11 @@ import logging
 
 import psutil
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+root_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, root_dir)
+sys.path.insert(0, os.path.join(root_dir, "core"))
 try:
-    from core import config
+    import config
     HAS_CONFIG = True
 except ImportError:
     HAS_CONFIG = False

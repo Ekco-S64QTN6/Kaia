@@ -122,10 +122,19 @@ class FIMDaemon:
         res = self.libc.fanotify_mark(self.fan_fd, FAN_MARK_ADD | FAN_MARK_MOUNT, mask, -1, workspace_path)
         if res < 0:
             errno = ctypes.get_errno()
-            logger.error(f"fanotify_mark mount failed (errno={errno}).")
-            os.close(self.fan_fd)
-            self.fan_fd = -1
-            return False
+            if errno == 22: # EINVAL - filesystem or kernel version doesn't support FAN_CREATE/FAN_ONDIR without FID reporting
+                logger.warning("fanotify_mark mount failed with directory events (EINVAL). Retrying with basic file modification mask...")
+                mask = FAN_MODIFY | FAN_CLOSE_WRITE | FAN_ATTRIB
+                res = self.libc.fanotify_mark(self.fan_fd, FAN_MARK_ADD | FAN_MARK_MOUNT, mask, -1, workspace_path)
+                if res >= 0:
+                    logger.info("Successfully marked mount with basic file modification mask.")
+            
+            if res < 0:
+                errno = ctypes.get_errno()
+                logger.error(f"fanotify_mark mount failed (errno={errno}).")
+                os.close(self.fan_fd)
+                self.fan_fd = -1
+                return False
             
         self._thread = threading.Thread(target=self._run, daemon=True, name="fim-daemon")
         self._thread.start()

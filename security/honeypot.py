@@ -108,7 +108,7 @@ class HoneypotCoordinator:
             try:
                 # Ensure directories exist
                 os.makedirs(os.path.dirname(path), exist_ok=True)
-                if not os.path.exists(path):
+                if not os.path.exists(path) or os.path.getsize(path) == 0:
                     with open(path, "w") as f:
                         f.write(content)
                     logger.info(f"Deployed filesystem decoy: {path}")
@@ -146,10 +146,12 @@ class HoneypotCoordinator:
         for path in self.decoys.keys():
             if os.path.exists(path):
                 try:
-                    os.remove(path)
-                    logger.info(f"Removed filesystem decoy: {path}")
+                    # Truncate to empty file instead of removing, to preserve systemd mount points
+                    with open(path, "w") as f:
+                        pass
+                    logger.info(f"Cleaned up filesystem decoy (truncated): {path}")
                 except Exception as e:
-                    logger.error(f"Failed to remove decoy file {path}: {e}")
+                    logger.error(f"Failed to clean up decoy file {path}: {e}")
 
     def get_decoy_status(self) -> dict:
         return dict(self.status)

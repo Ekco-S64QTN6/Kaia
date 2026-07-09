@@ -351,7 +351,7 @@ class EBPFTelemetryEngine:
                 source="ebpf_telemetry",
                 actor=f"{clean_comm} (PID {clean_pid_int})",
                 payload_hash=f"uid={clean_uid_int}",
-                disposition="approved",
+                disposition="observed",
                 session_id="system_protection"
             )
         except Exception:

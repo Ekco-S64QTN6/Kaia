@@ -18,7 +18,7 @@ class HostExecutor:
         else:
             return False, "", "Invalid diagnostics query type"
 
-        if query_type == "nft_list":
+        if query_type == "nft_list" and os.geteuid() != 0:
             cmd = ["sudo"] + cmd
 
         return HostExecutor._run_cmd(cmd)
@@ -36,10 +36,12 @@ class HostExecutor:
                 return False, "", f"Invalid IP address format: {target_ip}"
 
         # Construct nft command
-        cmd = ["sudo", "nft", "add", "rule", "ip", "filter", "input", "ip", "saddr", target_ip]
+        cmd = ["nft", "add", "rule", "ip", "filter", "input", "ip", "saddr", target_ip]
         if protocol in ["tcp", "udp"] and port:
             cmd += [protocol, "dport", str(port)]
         cmd += ["drop"]
+        if os.geteuid() != 0:
+            cmd = ["sudo"] + cmd
         
         return HostExecutor._run_cmd(cmd)
 
@@ -50,7 +52,9 @@ class HostExecutor:
         if service_name not in ALLOWED_SERVICES:
             return False, "", f"Service {service_name} is not in the allowlist for restarts."
 
-        cmd = ["sudo", "systemctl", "restart", service_name]
+        cmd = ["systemctl", "restart", service_name]
+        if os.geteuid() != 0:
+            cmd = ["sudo"] + cmd
         return HostExecutor._run_cmd(cmd)
 
     @staticmethod

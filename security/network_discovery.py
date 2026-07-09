@@ -12,14 +12,27 @@ logger = logging.getLogger(__name__)
 
 def get_default_interface() -> str:
     try:
-        with open("/proc/net/route", "r") as f:
-            lines = f.readlines()
-            for line in lines[1:]:
-                parts = line.split()
-                if len(parts) >= 3 and parts[1] == "00000000": # Destination 0.0.0.0
-                    return parts[0]
+        if os.path.exists("/proc/net/route"):
+            with open("/proc/net/route", "r") as f:
+                lines = f.readlines()
+                for line in lines[1:]:
+                    parts = line.split()
+                    if len(parts) >= 3 and parts[1] == "00000000": # Destination 0.0.0.0
+                        iface = parts[0]
+                        if os.path.exists(f"/sys/class/net/{iface}"):
+                            return iface
     except Exception:
         pass
+
+    # Fallback to the first available non-loopback interface in /sys/class/net/
+    try:
+        if os.path.exists("/sys/class/net"):
+            for iface in os.listdir("/sys/class/net"):
+                if iface != "lo" and os.path.exists(f"/sys/class/net/{iface}"):
+                    return iface
+    except Exception:
+        pass
+
     return "eth0"
 
 def load_oui() -> dict:
