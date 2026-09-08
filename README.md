@@ -220,7 +220,7 @@ Modifying any of these trips the detector:
 |---|---|
 | `.env` | **Lockdown** — holds `KAIA_CAPABILITY_TOKEN_SECRET` |
 | `core/config.py` | **Lockdown** |
-| `security/*.py` (`policy_gate`, `host_executor`, `schemas`, `tamper_detection`, `db`) | **Lockdown** |
+| **every** `security/*.py` | **Lockdown** — discovered by glob, so new modules are covered automatically |
 | `scripts/kaia-lockdown.sh` | **Lockdown** |
 | `/etc/systemd/system/kaia-policy-gate.service` | **Lockdown** |
 | `kaia_dashboard.py`, `main.py` | Critical alert + audit event, no lockdown |
@@ -258,6 +258,44 @@ sudo ./scripts/kaia-unlock.sh -s       # or replay the raw pre-lockdown snapshot
 Release requires typing `RESTORE` at a prompt — it re-exposes a host that something
 asserted was compromised, so it is never automatic. Afterwards, restart the Policy
 Gate so the tamper baseline is re-established.
+
+### Trusted integrity baseline
+
+Tamper detection compares against an operator-recorded baseline, not against
+whatever happens to be on disk when it starts. Without one, a file edited while the
+daemon was stopped simply *becomes* the new baseline — and anyone who can write a
+file can also restart a service, so that was a complete bypass.
+
+```bash
+sudo ./scripts/kaia-baseline.sh          # record the state you trust
+sudo systemctl restart kaia-policy-gate  # adopt it
+```
+
+Run it **only from a state you have reviewed.** Baselining a compromise makes the
+compromise the reference. The script shows a diff against the previous baseline
+before replacing it, and enumerates files via the detector itself so the two cannot
+drift apart.
+
+With no baseline present the daemon still runs, but logs a warning at startup that
+modifications made while it was stopped cannot be detected.
+
+### Monitor-only mode
+
+For tuning, or for working on the project without arming the tripwire:
+
+```bash
+KAIA_TAMPER_ENFORCE=0 python security/policy_gate.py
+```
+
+Detection and audit logging continue; lockdown is suppressed. This disables an active
+security control, so it is opt-in and logged as CRITICAL at startup.
+
+### Lockdown circuit breaker
+
+At most **3 lockdowns per hour** (`LOCKDOWN_MAX_PER_WINDOW` / `LOCKDOWN_WINDOW_SECONDS`).
+Beyond that, tampering is still detected and recorded but lockdown is suppressed, so
+the host stays reachable to investigate through. Every lockdown flushes the ruleset;
+an unbounded burst leaves you with no network and no firewall at the worst moment.
 
 **Alert latching:** one modification produces one CRITICAL alert and one lockdown.
 Subsequent checks log at WARNING without re-firing, and the detector re-arms when the

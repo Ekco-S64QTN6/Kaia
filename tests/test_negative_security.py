@@ -494,3 +494,102 @@ def test_service_allowlist_has_single_source():
         assert "ALLOWED_SERVICES = [" not in src, \
             f"{mod.__name__} redefines the service allowlist locally"
         assert "config.SERVICE_RESTART_ALLOWLIST" in src
+
+
+# ============================================================
+# Trusted baseline, monitor-only mode, and the lockdown circuit breaker
+# ============================================================
+
+def test_all_security_modules_are_watched(monkeypatch):
+    """The watchlist is discovered, not hand-listed.
+
+    An explicit list goes stale whenever a module is added: 8 of the 14 files in
+    security/ were unprotected, including telemetry_sanitizer.py which INV-004
+    depends on.
+    """
+    detector, _ = _detector_with_stubs(monkeypatch)
+    watched = {os.path.abspath(p) for p in detector.immutable_files}
+    pkg = os.path.join(config.WORKSPACE_DIR, "security")
+    for name in os.listdir(pkg):
+        if name.endswith(".py"):
+            assert os.path.abspath(os.path.join(pkg, name)) in watched, \
+                f"security/{name} is not integrity-protected"
+
+
+def test_trusted_baseline_detects_modification_while_stopped(monkeypatch, tmp_path):
+    """A file changed while the daemon was stopped must be caught at startup.
+
+    Hashing whatever is on disk means such a change silently BECOMES the
+    baseline -- and anyone who can write a file can also restart a service.
+    """
+    from security import tamper_detection as td
+    detector, lockdowns = _detector_with_stubs(monkeypatch)
+
+    target = os.path.join(config.WORKSPACE_DIR, "security", "host_executor.py")
+    baseline_file = tmp_path / "baseline.sha256"
+    # Record a hash that deliberately does NOT match what is on disk.
+    baseline_file.write_text(f"{'0' * 64}  {target}\n")
+    monkeypatch.setattr(config, "TRUSTED_BASELINE_PATH", str(baseline_file))
+
+    detector.immutable_files = [target]
+    detector.append_only_files = []
+    detector.sqlite_append_only_files = []
+    monkeypatch.setattr(detector, "_run", lambda: None)
+    detector.start()
+    detector.stop()
+
+    assert lockdowns, "startup must alert when disk state differs from the trusted baseline"
+    # And the runtime baseline must be the TRUSTED hash, not the on-disk one.
+    assert detector._baselines[target][0] == "0" * 64
+
+
+def test_no_trusted_baseline_falls_back_and_warns(monkeypatch, tmp_path, caplog):
+    """Absent a baseline the detector still runs, but must say the gap exists."""
+    from security import tamper_detection as td
+    detector, lockdowns = _detector_with_stubs(monkeypatch)
+    monkeypatch.setattr(config, "TRUSTED_BASELINE_PATH", str(tmp_path / "absent"))
+
+    target = os.path.join(config.WORKSPACE_DIR, "security", "host_executor.py")
+    detector.immutable_files = [target]
+    detector.append_only_files = []
+    detector.sqlite_append_only_files = []
+    monkeypatch.setattr(detector, "_run", lambda: None)
+
+    import logging
+    with caplog.at_level(logging.WARNING):
+        detector.start()
+    detector.stop()
+
+    assert not lockdowns, "no baseline is not itself a tamper event"
+    assert any("trusted integrity baseline" in r.message.lower() or
+               "cannot be detected" in r.message.lower() for r in caplog.records), \
+        "must warn that pre-start modification is undetectable"
+
+
+def test_monitor_only_mode_suppresses_lockdown(monkeypatch):
+    """KAIA_TAMPER_ENFORCE=0 must detect and log but never lock down."""
+    detector, lockdowns = _detector_with_stubs(monkeypatch)
+    monkeypatch.setattr(config, "TAMPER_ENFORCE", False)
+    detector._trigger_tamper_alert(
+        os.path.join(config.WORKSPACE_DIR, "security", "policy_gate.py"),
+        "Baseline hash mismatch", "HASH_X")
+    assert not lockdowns, "monitor-only mode must not trigger lockdown"
+
+
+def test_lockdown_circuit_breaker_caps_bursts(monkeypatch):
+    """A burst of distinct tampered files must not lock the host down repeatedly.
+
+    Every lockdown flushes the ruleset, so an unbounded burst leaves the operator
+    with no network to investigate through.
+    """
+    detector, lockdowns = _detector_with_stubs(monkeypatch)
+    monkeypatch.setattr(config, "TAMPER_ENFORCE", True)
+    monkeypatch.setattr(config, "LOCKDOWN_MAX_PER_WINDOW", 3)
+    monkeypatch.setattr(config, "LOCKDOWN_WINDOW_SECONDS", 3600)
+
+    for i in range(10):
+        detector._trigger_tamper_alert(
+            os.path.join(config.WORKSPACE_DIR, "security", f"mod_{i}.py"),
+            "Baseline hash mismatch", f"HASH_{i}")
+
+    assert len(lockdowns) == 3, f"expected the breaker to cap at 3, got {len(lockdowns)}"

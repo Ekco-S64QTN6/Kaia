@@ -193,6 +193,29 @@ NFT_BLOCK_TABLE = "kaia_block"
 NFT_BLOCK_CHAIN = "input"
 NFT_BLOCK_PRIORITY = -10
 
+# --- Integrity baseline -------------------------------------------------------
+# Tamper detection previously computed its baseline hashes from disk at startup,
+# which means a modification made while the daemon is stopped simply BECOMES the
+# new baseline and is never reported. An attacker who can write a file can also
+# restart a service. A trusted baseline, written deliberately by an operator and
+# owned by root, closes that: startup compares against the recorded state rather
+# than against whatever happens to be on disk.
+#
+# Generate/refresh after legitimate changes:  sudo ./scripts/kaia-baseline.sh
+TRUSTED_BASELINE_PATH = "/var/lib/kaia/baseline.sha256"
+
+# Circuit breaker. Latching already prevents one unchanged file from re-firing,
+# but several files changing in sequence could still trigger a burst. Cap the
+# number of lockdowns in a rolling window so an operator retains a usable
+# network to investigate with.
+LOCKDOWN_MAX_PER_WINDOW = 3
+LOCKDOWN_WINDOW_SECONDS = 3600
+
+# Monitor-only mode. Detect and log, but never trigger lockdown. Intended for
+# tuning and for working on the project; it disables an active security control,
+# so it is opt-in via the environment and logged loudly at startup.
+TAMPER_ENFORCE = os.environ.get("KAIA_TAMPER_ENFORCE", "1").strip().lower() not in ("0", "false", "no")
+
 # Security Subsystem Configuration
 SECURITY_DB_PATH = str(SECURITY_STORAGE_DIR / "security_events.db")
 AUDIT_LOG_PATH = str(SECURITY_STORAGE_DIR / "audit_ledger.json")

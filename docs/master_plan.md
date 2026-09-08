@@ -585,6 +585,32 @@ one (fixed 2026-09-08):
       no dependency on the Kaia repo, since a lockdown is exactly when Kaia cannot be
       trusted to repair itself.
 
+**Hardened 2026-09-08 (second pass):**
+
+- [x] **Trusted integrity baseline.** Baselines were computed from disk at startup,
+      so a file modified while the daemon was stopped became the new reference and
+      was never reported — and an attacker who can write a file can restart a
+      service. `scripts/kaia-baseline.sh` records operator-approved hashes to
+      root-owned `/var/lib/kaia/baseline.sha256`; startup compares against that and
+      reports drift. Absent a baseline the daemon warns that pre-start modification
+      is undetectable rather than staying silent.
+- [x] **Watchlist discovered, not listed.** 8 of 14 modules in `security/` were
+      unprotected, including `telemetry_sanitizer.py`, on which INV-004 depends.
+      Now globbed; coverage went from 8 files to 20.
+- [x] **Lockdown circuit breaker.** Capped at 3 per hour. Latching stops one
+      unchanged file re-firing, but a sequence of changed files could still burst —
+      and each lockdown flushes the ruleset, leaving no network to investigate with.
+- [x] **Monitor-only mode.** `KAIA_TAMPER_ENFORCE=0` detects and logs without
+      responding. Opt-in, logged CRITICAL at startup, since it disables a control.
+- [x] **Standalone panic recovery** at `~/kaia-panic-unlock.sh`, with no dependency
+      on this repo — a lockdown is exactly when Kaia cannot be trusted to fix itself.
+
+**Known-exposed credential (resolved):** `KAIA_CAPABILITY_TOKEN_SECRET` was committed
+to this public repository in 4 commits and remained the live signing key. Rotated
+2026-09-08. `install_services.sh` no longer provides a default and refuses the leaked
+value outright. History still contains it; rotation is the mitigation, since scrubbing
+does not un-publish a value that was public.
+
 Current priorities:
 
 1. **Dashboard Stage 2** — command input panel and response streaming. The largest

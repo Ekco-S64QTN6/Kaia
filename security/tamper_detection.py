@@ -19,25 +19,35 @@ class TamperDetector:
         # produces one lockdown instead of one every check interval.
         # filepath -> the observed state that fired (hash, or "missing").
         self._fired = {}
+        # Timestamps of recent lockdown triggers, for the circuit breaker.
+        self._lockdown_times = []
 
         # 1. Core configs (immutable)
         self.immutable_files = [
             os.path.join(config.WORKSPACE_DIR, ".env"),
             os.path.join(config.WORKSPACE_DIR, "core", "config.py"),
-            os.path.join(config.WORKSPACE_DIR, "security", "schemas.py"),
             os.path.join(config.WORKSPACE_DIR, "kaia_dashboard.py"),
             os.path.join(config.WORKSPACE_DIR, "main.py"),
-            os.path.join(config.WORKSPACE_DIR, "security", "policy_gate.py"),
-            os.path.join(config.WORKSPACE_DIR, "security", "host_executor.py"),
-            # Self-protection. Without these three the cheapest bypass in the
-            # whole system is to edit the watchdog first: neutralise
-            # tamper_detection.py and nothing else here is ever checked again;
-            # neutralise db.py and the alert is never recorded; neutralise
-            # kaia-lockdown.sh and the response never fires.
-            os.path.join(config.WORKSPACE_DIR, "security", "tamper_detection.py"),
-            os.path.join(config.WORKSPACE_DIR, "security", "db.py"),
             os.path.join(config.WORKSPACE_DIR, "scripts", "kaia-lockdown.sh"),
         ]
+
+        # Every module in the security package, discovered rather than listed.
+        #
+        # An explicit list goes stale the moment a module is added: before this,
+        # 8 of the 14 files in security/ were unprotected -- including
+        # telemetry_sanitizer.py, which INV-004 depends on, and rule_engine.py.
+        # Self-protection matters here too: neutralise tamper_detection.py and
+        # nothing else is ever checked again; neutralise db.py and the alert is
+        # never recorded.
+        security_pkg = os.path.join(config.WORKSPACE_DIR, "security")
+        try:
+            for name in sorted(os.listdir(security_pkg)):
+                if name.endswith(".py"):
+                    path = os.path.join(security_pkg, name)
+                    if path not in self.immutable_files:
+                        self.immutable_files.append(path)
+        except OSError as e:
+            logger.error(f"Could not enumerate {security_pkg} for integrity watch: {e}")
         
         # Systemd service unit (if exists)
         sysd_service = "/etc/systemd/system/kaia-policy-gate.service"
@@ -53,6 +63,34 @@ class TamperDetector:
         self.sqlite_append_only_files = [
             config.SECURITY_DB_PATH,
         ]
+
+    def _load_trusted_baseline(self) -> dict:
+        """Load operator-recorded hashes from a root-owned file, if present.
+
+        Returns {abspath: sha256}. Empty dict when no baseline exists, in which
+        case the detector falls back to trusting whatever is on disk at startup
+        (and says so loudly).
+
+        Format is `sha256sum`-compatible:  <hex>  <absolute path>
+        """
+        path = getattr(config, "TRUSTED_BASELINE_PATH", None)
+        if not path or not os.path.exists(path):
+            return {}
+        trusted = {}
+        try:
+            with open(path, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    parts = line.split(None, 1)
+                    if len(parts) == 2:
+                        trusted[os.path.abspath(parts[1].strip())] = parts[0].strip()
+        except Exception as e:
+            logger.error(f"Could not read trusted baseline {path}: {e}")
+            return {}
+        logger.info(f"Loaded {len(trusted)} trusted hashes from {path}")
+        return trusted
 
     def _compute_sha256(self, filepath: str, limit: int = None) -> str:
         h = hashlib.sha256()
@@ -129,11 +167,43 @@ class TamperDetector:
                 print(f"FATAL: Critical system file missing: {filepath}", file=sys.stderr)
                 sys.exit(1)
 
-        # Baseline immutable files
+        if not getattr(config, "TAMPER_ENFORCE", True):
+            logger.critical(
+                "TAMPER ENFORCEMENT IS DISABLED (KAIA_TAMPER_ENFORCE=0). Modifications "
+                "will be detected and logged but will NOT trigger emergency lockdown. "
+                "This is a security control running in monitor-only mode."
+            )
+
+        # Baseline immutable files against the TRUSTED record where one exists.
+        #
+        # Hashing whatever is on disk means a file edited while the daemon was
+        # stopped silently becomes the new baseline -- and anyone who can write a
+        # file can also restart a service, so that was a complete bypass. Where an
+        # operator-recorded hash exists we adopt it as the baseline and report the
+        # discrepancy immediately.
+        trusted = self._load_trusted_baseline()
+        if not trusted:
+            logger.warning(
+                "No trusted integrity baseline at %s -- falling back to hashing the "
+                "current on-disk state. Modifications made while this daemon was "
+                "stopped CANNOT be detected. Create one with: sudo ./scripts/kaia-baseline.sh",
+                getattr(config, "TRUSTED_BASELINE_PATH", "<unset>"),
+            )
+
         for filepath in self.immutable_files:
             if os.path.exists(filepath):
                 h = self._compute_sha256(filepath)
-                self._baselines[filepath] = (h, "immutable")
+                expected = trusted.get(os.path.abspath(filepath))
+                if expected and expected != h:
+                    self._trigger_tamper_alert(
+                        filepath,
+                        "Startup hash does not match the trusted baseline "
+                        "(file was modified while the daemon was stopped)",
+                        h,
+                    )
+                # Adopt the trusted hash so ongoing checks measure against the
+                # recorded state, not the possibly-tampered current one.
+                self._baselines[filepath] = (expected or h, "immutable")
 
         # Baseline append-only files (using prefix-hash technique to avoid false alarms on normal appends)
         for filepath in self.append_only_files:
@@ -219,6 +289,13 @@ class TamperDetector:
         except Exception as e:
             logger.error(f"Failed to log tamper event: {e}")
 
+        # Monitor-only mode: detect and record, but do not respond.
+        if not getattr(config, "TAMPER_ENFORCE", True):
+            logger.critical(
+                f"Lockdown SUPPRESSED (monitor-only mode) for tamper on: {filepath}"
+            )
+            return
+
         # Trigger emergency lockdown for files that gate or grant authority.
         # Previously a substring test that missed .env entirely -- the file that
         # holds KAIA_CAPABILITY_TOKEN_SECRET, i.e. the ability to mint any
@@ -234,6 +311,23 @@ class TamperDetector:
             os.path.abspath(config.WORKSPACE_DIR), "security"
         )
         if in_security_pkg or os.path.abspath(filepath) in {os.path.abspath(p) for p in lockdown_paths}:
+            # Circuit breaker. Latching stops one unchanged file re-firing, but a
+            # sequence of changed files could still produce a burst -- and every
+            # lockdown flushes the ruleset, so a burst leaves an operator with no
+            # network to investigate through. Cap the rate; keep alerting after.
+            now = time.time()
+            window = getattr(config, "LOCKDOWN_WINDOW_SECONDS", 3600)
+            limit = getattr(config, "LOCKDOWN_MAX_PER_WINDOW", 3)
+            self._lockdown_times = [t for t in self._lockdown_times if now - t < window]
+            if len(self._lockdown_times) >= limit:
+                logger.critical(
+                    f"LOCKDOWN RATE LIMIT REACHED ({limit} in {window}s). Tamper on "
+                    f"{filepath} recorded but lockdown SUPPRESSED so the host stays "
+                    f"reachable for investigation. Review immediately."
+                )
+                return
+            self._lockdown_times.append(now)
+
             try:
                 from security.policy_gate import trigger_lockdown
                 trigger_lockdown(f"Tamper detected on core file: {filepath}")
