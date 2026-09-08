@@ -1,5 +1,6 @@
 import subprocess
 import os
+import shutil
 import logging
 import config
 
@@ -35,21 +36,53 @@ class HostExecutor:
             except socket.error:
                 return False, "", f"Invalid IP address format: {target_ip}"
 
-        # Construct nft command
-        cmd = ["nft", "add", "rule", "ip", "filter", "input", "ip", "saddr", target_ip]
+        # Detect address family so the rule uses the right selector.
+        is_v6 = ":" in target_ip
+        saddr_sel = "ip6" if is_v6 else "ip"
+
+        table = config.NFT_BLOCK_TABLE
+        chain = config.NFT_BLOCK_CHAIN
+        prio = config.NFT_BLOCK_PRIORITY
+        sudo = [] if os.geteuid() == 0 else ["sudo"]
+
+        # Write into Kaia's OWN table, not ufw's.
+        #
+        # The previous implementation did `nft add rule ip filter input ...`.
+        # On this host "ip filter" is ufw's table (managed via iptables-nft), so
+        # the block landed inside ufw's ruleset and the next `ufw reload` --
+        # or the next lockdown/unlock cycle -- silently discarded it. A block
+        # that can vanish with no signal is worse than no block, because the
+        # audit ledger still says it was applied.
+        #
+        # An "inet" table covers v4 and v6, hook priority -10 puts it ahead of
+        # ufw's filter hook (priority 0), and `policy accept` means it only ever
+        # drops what we explicitly add. Flush/inspect with:
+        #     nft list table inet kaia_block
+        ensure_table = sudo + ["nft", "add", "table", "inet", table]
+        ok, _, err = HostExecutor._run_cmd(ensure_table)
+        if not ok:
+            return False, "", f"Failed to create nftables table '{table}': {err}"
+
+        ensure_chain = sudo + [
+            "nft", "add", "chain", "inet", table, chain,
+            f"{{ type filter hook input priority {prio}; policy accept; }}",
+        ]
+        ok, _, err = HostExecutor._run_cmd(ensure_chain)
+        if not ok:
+            return False, "", f"Failed to create nftables chain '{chain}': {err}"
+
+        cmd = sudo + ["nft", "add", "rule", "inet", table, chain, saddr_sel, "saddr", target_ip]
         if protocol in ["tcp", "udp"] and port:
             cmd += [protocol, "dport", str(port)]
         cmd += ["drop"]
-        if os.geteuid() != 0:
-            cmd = ["sudo"] + cmd
-        
+
         return HostExecutor._run_cmd(cmd)
 
     @staticmethod
     def execute_service_control(service_name: str) -> tuple:
         """Restarts a systemd unit."""
-        ALLOWED_SERVICES = ["nginx", "postgresql", "ollama"]
-        if service_name not in ALLOWED_SERVICES:
+        # Shared with the Policy Gate via config so the two cannot drift.
+        if service_name not in config.SERVICE_RESTART_ALLOWLIST:
             return False, "", f"Service {service_name} is not in the allowlist for restarts."
 
         cmd = ["systemctl", "restart", service_name]
@@ -101,7 +134,24 @@ class HostExecutor:
     @staticmethod
     def execute_script(script_name: str, effective_level: str = None) -> tuple:
         """Runs an allowlisted script inside an isolated sandbox matching the effective lattice level."""
-        script_path = os.path.abspath(os.path.expanduser(os.path.join("~", script_name)))
+        # Defence in depth. The Policy Gate already checks SCRIPT_ALLOWLIST, but
+        # tests/test_negative_security.py::test_executor_allowlist_enforced_directly
+        # establishes that the executor must also enforce its own allowlist when
+        # called without the gate. execute_service_control did; this did not.
+        if script_name not in config.SCRIPT_ALLOWLIST:
+            return False, "", f"Script '{script_name}' is not in the allowlist for execution."
+
+        # os.path.join("~", name) silently discards the "~" when name is absolute,
+        # and "../" components escape the home directory, so a bare join is not a
+        # containment boundary. Require a plain filename.
+        if os.sep in script_name or (os.altsep and os.altsep in script_name) \
+                or script_name in (".", "..") or script_name.startswith("~"):
+            return False, "", f"Script name '{script_name}' must be a bare filename, not a path."
+
+        home = os.path.realpath(os.path.expanduser("~"))
+        script_path = os.path.realpath(os.path.join(home, script_name))
+        if os.path.dirname(script_path) != home:
+            return False, "", f"Script path escapes the home directory: {script_path}"
         if not os.path.exists(script_path):
             return False, "", f"Script not found at: {script_path}"
         
@@ -222,19 +272,58 @@ class HostExecutor:
                 "/tmp/run_script.sh"
             ]
 
-        # Apply cgroup resource ceilings via systemd-run scope wrapper
-        cgroup_wrapper = [
-            "systemd-run",
-            "--user",
-            "--scope",
-            "-p", f"CPUQuota={config.CGROUP_CPU_QUOTA}",
-            "-p", f"MemoryMax={config.CGROUP_MEMORY_MAX}",
-            "-p", f"TasksMax={config.CGROUP_TASKS_MAX}",
-            "-p", f"IOWeight={config.CGROUP_IO_WEIGHT}"
-        ]
+        # Apply cgroup resource ceilings via systemd-run scope wrapper.
+        # master_plan.md §6.3 makes these mandatory for all script executions,
+        # so a wrapper we cannot build is a fail-closed condition (INV-001).
+        ok, cgroup_wrapper, err = HostExecutor._build_cgroup_wrapper()
+        if not ok:
+            return False, "", err
         cmd = cgroup_wrapper + cmd
 
         return HostExecutor._run_cmd(cmd)
+
+    @staticmethod
+    def _build_cgroup_wrapper() -> tuple:
+        """Build a systemd-run scope wrapper appropriate to the current context.
+
+        Returns (ok, wrapper_argv, error).
+
+        The Policy Gate runs as a root *system* service, which has no user
+        session bus. `systemd-run --user` fails there with "Failed to connect to
+        user scope bus: $DBUS_SESSION_BUS_ADDRESS and $XDG_RUNTIME_DIR not
+        defined", which previously broke every sandboxed script execution before
+        bwrap was ever reached. Root uses a system scope; an interactive user
+        with a session bus uses a user scope.
+
+        §6.3 requires these ceilings on every script execution, so if neither
+        form is available we fail closed rather than running uncontained.
+        """
+        if shutil.which("systemd-run") is None:
+            return False, [], (
+                "Containment failure: systemd-run not found, so the cgroup "
+                "resource ceilings required by the security policy cannot be "
+                "applied. Refusing to execute uncontained."
+            )
+
+        props = [
+            "-p", f"CPUQuota={config.CGROUP_CPU_QUOTA}",
+            "-p", f"MemoryMax={config.CGROUP_MEMORY_MAX}",
+            "-p", f"TasksMax={config.CGROUP_TASKS_MAX}",
+            "-p", f"IOWeight={config.CGROUP_IO_WEIGHT}",
+        ]
+        base = ["systemd-run", "--scope", "--collect", "--quiet"]
+
+        if os.geteuid() == 0:
+            return True, base + props, ""
+
+        if os.environ.get("XDG_RUNTIME_DIR") or os.environ.get("DBUS_SESSION_BUS_ADDRESS"):
+            return True, ["systemd-run", "--user", "--scope", "--collect", "--quiet"] + props, ""
+
+        return False, [], (
+            "Containment failure: no user session bus available and not running "
+            "as root, so cgroup resource ceilings cannot be applied. Refusing to "
+            "execute uncontained."
+        )
 
 
 

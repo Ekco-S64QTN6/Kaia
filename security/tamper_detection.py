@@ -15,6 +15,11 @@ class TamperDetector:
         self._thread = None
         self._baselines = {}  # filepath -> (hash_val, size_or_type)
         
+        # Files whose modification has already been alerted on, so one incident
+        # produces one lockdown instead of one every check interval.
+        # filepath -> the observed state that fired (hash, or "missing").
+        self._fired = {}
+
         # 1. Core configs (immutable)
         self.immutable_files = [
             os.path.join(config.WORKSPACE_DIR, ".env"),
@@ -24,6 +29,14 @@ class TamperDetector:
             os.path.join(config.WORKSPACE_DIR, "main.py"),
             os.path.join(config.WORKSPACE_DIR, "security", "policy_gate.py"),
             os.path.join(config.WORKSPACE_DIR, "security", "host_executor.py"),
+            # Self-protection. Without these three the cheapest bypass in the
+            # whole system is to edit the watchdog first: neutralise
+            # tamper_detection.py and nothing else here is ever checked again;
+            # neutralise db.py and the alert is never recorded; neutralise
+            # kaia-lockdown.sh and the response never fires.
+            os.path.join(config.WORKSPACE_DIR, "security", "tamper_detection.py"),
+            os.path.join(config.WORKSPACE_DIR, "security", "db.py"),
+            os.path.join(config.WORKSPACE_DIR, "scripts", "kaia-lockdown.sh"),
         ]
         
         # Systemd service unit (if exists)
@@ -150,26 +163,45 @@ class TamperDetector:
     def check_integrity(self):
         for filepath, (baseline_hash, file_type) in list(self._baselines.items()):
             if not os.path.exists(filepath):
-                self._trigger_tamper_alert(filepath, "File deleted / missing")
+                self._trigger_tamper_alert(filepath, "File deleted / missing", "missing")
                 continue
-                
+
             if file_type == "immutable":
                 current_hash = self._compute_sha256(filepath)
-                if current_hash != baseline_hash:
-                    self._trigger_tamper_alert(filepath, "Baseline hash mismatch")
+                reason = "Baseline hash mismatch"
             elif isinstance(file_type, tuple) and len(file_type) == 2 and file_type[0] == "sqlite":
-                row_count = file_type[1]
-                current_hash = self._compute_sqlite_prefix_hash(filepath, row_count)
-                if current_hash != baseline_hash:
-                    self._trigger_tamper_alert(filepath, "SQLite historical row content mismatch (rows altered or deleted)")
+                current_hash = self._compute_sqlite_prefix_hash(filepath, file_type[1])
+                reason = "SQLite historical row content mismatch (rows altered or deleted)"
             else:
                 # Append-only: read up to the original size
-                size_limit = file_type
-                current_hash = self._compute_sha256(filepath, limit=size_limit)
-                if current_hash != baseline_hash:
-                    self._trigger_tamper_alert(filepath, "Historical prefix hash mismatch (file altered or truncated)")
+                current_hash = self._compute_sha256(filepath, limit=file_type)
+                reason = "Historical prefix hash mismatch (file altered or truncated)"
 
-    def _trigger_tamper_alert(self, filepath: str, reason: str):
+            if current_hash != baseline_hash:
+                self._trigger_tamper_alert(filepath, reason, current_hash)
+            elif filepath in self._fired:
+                # Back to baseline: re-arm so a later, distinct modification
+                # alerts again instead of being swallowed by the latch.
+                self._fired.pop(filepath, None)
+                logger.warning(
+                    f"Tamper state cleared, file matches baseline again: {filepath}. "
+                    "Detector re-armed for this path."
+                )
+
+    def _trigger_tamper_alert(self, filepath: str, reason: str, observed_state: str = ""):
+        # Latch. The detector re-checks every 30s and the hash does not return to
+        # baseline on its own, so without this a single modification triggers a
+        # fresh lockdown forever -- re-flushing nftables every interval while an
+        # operator is trying to investigate. Alert loudly once per distinct file
+        # state; keep observing quietly after that.
+        if self._fired.get(filepath) == observed_state:
+            logger.warning(
+                f"Tamper still present (already alerted, lockdown not re-triggered): "
+                f"{filepath} | Reason: {reason}"
+            )
+            return
+        self._fired[filepath] = observed_state
+
         msg = f"CRITICAL TAMPER DETECTED: {filepath} | Reason: {reason}"
         print(msg, file=sys.stderr)
         logger.critical(msg)
@@ -187,8 +219,21 @@ class TamperDetector:
         except Exception as e:
             logger.error(f"Failed to log tamper event: {e}")
 
-        # Trigger emergency lockdown if core file
-        if "security/" in filepath or "core/config.py" in filepath:
+        # Trigger emergency lockdown for files that gate or grant authority.
+        # Previously a substring test that missed .env entirely -- the file that
+        # holds KAIA_CAPABILITY_TOKEN_SECRET, i.e. the ability to mint any
+        # capability token. Tampering with it is the most severe case, not an
+        # exempt one. Matched on resolved paths rather than substrings.
+        lockdown_paths = {
+            os.path.join(config.WORKSPACE_DIR, ".env"),
+            os.path.join(config.WORKSPACE_DIR, "core", "config.py"),
+            os.path.join(config.WORKSPACE_DIR, "scripts", "kaia-lockdown.sh"),
+            "/etc/systemd/system/kaia-policy-gate.service",
+        }
+        in_security_pkg = os.path.dirname(os.path.abspath(filepath)) == os.path.join(
+            os.path.abspath(config.WORKSPACE_DIR), "security"
+        )
+        if in_security_pkg or os.path.abspath(filepath) in {os.path.abspath(p) for p in lockdown_paths}:
             try:
                 from security.policy_gate import trigger_lockdown
                 trigger_lockdown(f"Tamper detected on core file: {filepath}")

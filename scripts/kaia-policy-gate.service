@@ -10,7 +10,7 @@ StartLimitBurst=3
 Type=simple
 Environment=KAIA_PROJECT_DIR=/home/ekco/github/Kaia
 Environment=PYTHONPATH=/home/ekco/github/Kaia/core:/home/ekco/github/Kaia
-Environment=KAIA_CAPABILITY_TOKEN_SECRET=kaia_secure_signing_secret_key_2026
+EnvironmentFile=/etc/kaia/secret.env
 ExecStart=/home/ekco/github/Kaia/.venv/bin/python /home/ekco/github/Kaia/security/policy_gate.py
 WorkingDirectory=/home/ekco/github/Kaia
 Restart=always

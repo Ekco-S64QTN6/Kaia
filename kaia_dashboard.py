@@ -240,6 +240,70 @@ class LayoutManager:
         return True
 
 
+def query_gate_diagnostics(query_type: str, args: list = None) -> Tuple[bool, str]:
+    """Sends a diagnostics query request to the Policy Gate socket."""
+    import socket
+    import json
+    import uuid
+    
+    payload = {
+        "request_id": str(uuid.uuid4()),
+        "action": "diagnostics",
+        "payload": {
+            "query_type": query_type,
+            "args": args or [],
+            "justification": "dashboard updates",
+            "session_id": "dashboard"
+        },
+        "capability_token": None
+    }
+    
+    sockets_to_try = []
+    if HAS_CONFIG:
+        sockets_to_try = [config.POLICY_GATE_SOCKET, config.POLICY_GATE_SOCKET_FALLBACK]
+    else:
+        sockets_to_try = ["/run/kaiacord/policy_gate.sock", "/tmp/policy_gate.sock"]
+        
+    for sock_path in sockets_to_try:
+        if not os.path.exists(sock_path):
+            continue
+        try:
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            s.settimeout(1.0)
+            s.connect(sock_path)
+            
+            payload_bytes = json.dumps(payload).encode('utf-8')
+            header = len(payload_bytes).to_bytes(4, byteorder='big')
+            s.sendall(header + payload_bytes)
+            
+            header_resp = bytearray()
+            while len(header_resp) < 4:
+                p = s.recv(4 - len(header_resp))
+                if not p:
+                    raise RuntimeError("Connection closed")
+                header_resp.extend(p)
+            length = int.from_bytes(header_resp, byteorder='big')
+            
+            payload_resp = bytearray()
+            while len(payload_resp) < length:
+                p = s.recv(length - len(payload_resp))
+                if not p:
+                    raise RuntimeError("Connection closed")
+                payload_resp.extend(p)
+            s.close()
+            
+            resp = json.loads(payload_resp.decode('utf-8'))
+            if resp.get("approved"):
+                exec_res = resp.get("executor_response", {})
+                if exec_res.get("status") == "success":
+                    return True, exec_res.get("stdout", "")
+                return False, exec_res.get("stderr", "Execution failed")
+            return False, resp.get("executor_response", {}).get("message", "Request denied")
+        except Exception:
+            pass
+    return False, "Policy Gate offline"
+
+
 class ThreatIntelCollector(threading.Thread):
     """Pane 2: Threat Intelligence data collector."""
     def __init__(self, stop_event: threading.Event) -> None:
@@ -262,30 +326,27 @@ class ThreatIntelCollector(threading.Thread):
     def _get_nft_counts(self):
         counts = {"input": 0, "forward": 0, "output": 0}
         gate_offline = False
-        try:
-            res = subprocess.run(["sudo", "nft", "-nn", "list", "ruleset"], capture_output=True, text=True, timeout=3.0)
-            if res.returncode != 0:
-                gate_offline = True
-            else:
-                lines = res.stdout.splitlines()
-                current_chain = None
-                for line in lines:
-                    line_strip = line.strip()
-                    if "chain " in line_strip:
-                        if "input" in line_strip:
-                            current_chain = "input"
-                        elif "forward" in line_strip:
-                            current_chain = "forward"
-                        elif "output" in line_strip:
-                            current_chain = "output"
-                        else:
-                            current_chain = None
-                    elif line_strip == "}":
-                        current_chain = None
-                    elif current_chain and ("drop" in line_strip.lower() or "reject" in line_strip.lower()):
-                        counts[current_chain] += 1
-        except Exception:
+        success, stdout = query_gate_diagnostics("nft_list")
+        if not success:
             gate_offline = True
+        else:
+            lines = stdout.splitlines()
+            current_chain = None
+            for line in lines:
+                line_strip = line.strip()
+                if "chain " in line_strip:
+                    if "input" in line_strip:
+                        current_chain = "input"
+                    elif "forward" in line_strip:
+                        current_chain = "forward"
+                    elif "output" in line_strip:
+                        current_chain = "output"
+                    else:
+                        current_chain = None
+                elif line_strip == "}":
+                    current_chain = None
+                elif current_chain and ("drop" in line_strip.lower() or "reject" in line_strip.lower()):
+                    counts[current_chain] += 1
         return counts, gate_offline
 
     def run(self) -> None:
@@ -293,16 +354,28 @@ class ThreatIntelCollector(threading.Thread):
         while not self._stop.is_set():
             counts, gate_offline = self._get_nft_counts()
             
-            if not os.path.exists(config.POLICY_GATE_SOCKET):
-                gate_offline = True
+            # Additional connection ping check checking both paths
+            socket_paths = []
+            if HAS_CONFIG:
+                socket_paths = [config.POLICY_GATE_SOCKET, config.POLICY_GATE_SOCKET_FALLBACK]
             else:
-                try:
-                    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                    s.settimeout(0.5)
-                    s.connect(config.POLICY_GATE_SOCKET)
-                    s.close()
-                except Exception:
-                    gate_offline = True
+                socket_paths = ["/run/kaiacord/policy_gate.sock", "/tmp/policy_gate.sock"]
+                
+            has_alive_socket = False
+            for sock_path in socket_paths:
+                if os.path.exists(sock_path):
+                    try:
+                        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                        s.settimeout(0.5)
+                        s.connect(sock_path)
+                        s.close()
+                        has_alive_socket = True
+                        break
+                    except Exception:
+                        pass
+                        
+            if not has_alive_socket:
+                gate_offline = True
                 
             active_blocks = counts["input"]
             
@@ -584,34 +657,38 @@ class SystemSecurityCollector(threading.Thread):
             active, expired, rejected = self._parse_tokens()
             
             counts = {"input": 0, "forward": 0, "output": 0}
-            try:
-                res = subprocess.run(["sudo", "nft", "-nn", "list", "ruleset"], capture_output=True, text=True, timeout=2.0)
-                if res.returncode == 0:
-                    lines = res.stdout.splitlines()
-                    current_chain = None
-                    for line in lines:
-                        line_strip = line.strip()
-                        if "chain " in line_strip:
-                            if "input" in line_strip:
-                                current_chain = "input"
-                            elif "forward" in line_strip:
-                                current_chain = "forward"
-                            elif "output" in line_strip:
-                                current_chain = "output"
-                            else:
-                                current_chain = None
-                        elif line_strip == "}":
+            success, stdout = query_gate_diagnostics("nft_list")
+            if success:
+                lines = stdout.splitlines()
+                current_chain = None
+                for line in lines:
+                    line_strip = line.strip()
+                    if "chain " in line_strip:
+                        if "input" in line_strip:
+                            current_chain = "input"
+                        elif "forward" in line_strip:
+                            current_chain = "forward"
+                        elif "output" in line_strip:
+                            current_chain = "output"
+                        else:
                             current_chain = None
-                        elif current_chain and ("drop" in line_strip.lower() or "reject" in line_strip.lower()):
-                            counts[current_chain] += 1
-            except Exception:
-                pass
+                    elif line_strip == "}":
+                        current_chain = None
+                    elif current_chain and ("drop" in line_strip.lower() or "reject" in line_strip.lower()):
+                        counts[current_chain] += 1
                 
             gate_running = False
             gate_pid = 0
             gate_uptime = "N/A"
             
-            if os.path.exists(config.POLICY_GATE_SOCKET):
+            socket_paths = []
+            if HAS_CONFIG:
+                socket_paths = [config.POLICY_GATE_SOCKET, config.POLICY_GATE_SOCKET_FALLBACK]
+            else:
+                socket_paths = ["/run/kaiacord/policy_gate.sock", "/tmp/policy_gate.sock"]
+                
+            socket_exists = any(os.path.exists(p) for p in socket_paths)
+            if socket_exists:
                 try:
                     res = subprocess.run(["pgrep", "-f", "policy_gate.py"], capture_output=True, text=True)
                     if res.returncode == 0 and res.stdout.strip():
@@ -1091,10 +1168,15 @@ class AuditLogCollector:
             self._security_db_path = config.SECURITY_DB_PATH
             self._audit_ledger_path = config.AUDIT_LOG_PATH
         else:
-            # Fallback: derive from project structure
+            # Fallback: derive from project structure.
+            # These must match core/config.py, which puts both under
+            # storage/security/. They previously pointed one level too high, so
+            # without config the collector silently polled files that do not
+            # exist and reported an empty audit stream -- and created a stray
+            # 0-byte storage/security_events.db as a side effect.
             base = os.path.dirname(os.path.abspath(__file__))
-            self._security_db_path = os.path.join(base, "storage", "security_events.db")
-            self._audit_ledger_path = os.path.join(base, "storage", "audit_ledger.json")
+            self._security_db_path = os.path.join(base, "storage", "security", "security_events.db")
+            self._audit_ledger_path = os.path.join(base, "storage", "security", "audit_ledger.json")
 
     def start(self) -> None:
         """Launch the collector thread."""
@@ -1194,6 +1276,14 @@ class AuditLogCollector:
         try:
             conn = sqlite3.connect(self._security_db_path, timeout=1.0)
             cursor = conn.cursor()
+            
+            # Handle database truncation/purge: reset rowid index if max rowid is less than self._last_seen_rowid
+            cursor.execute("SELECT MAX(rowid) FROM security_events")
+            max_rowid_row = cursor.fetchone()
+            max_rowid = max_rowid_row[0] if max_rowid_row and max_rowid_row[0] is not None else 0
+            if max_rowid < self._last_seen_rowid:
+                self._last_seen_rowid = 0
+                
             cursor.execute("""
                 SELECT rowid, timestamp, type, source, actor, payload_hash, disposition, session_id
                 FROM security_events
@@ -1240,6 +1330,11 @@ class AuditLogCollector:
             return entries
         try:
             file_size = os.path.getsize(self._audit_ledger_path)
+            
+            # Handle truncation/purge of ledger
+            if file_size < self._last_ledger_size:
+                self._last_ledger_entries = 0
+                
             if file_size == self._last_ledger_size:
                 return entries  # No changes
             self._last_ledger_size = file_size
@@ -1261,13 +1356,18 @@ class AuditLogCollector:
                         except json.JSONDecodeError:
                             continue
 
+            # Handle reset case if records list size was truncated
+            if len(records) < self._last_ledger_entries:
+                self._last_ledger_entries = 0
+
             new_records = records[self._last_ledger_entries:]
             self._last_ledger_entries = len(records)
 
             for record in new_records:
                 ts = str(record.get("timestamp", ""))
                 disp_ts = ts[:19].split("T")[-1] if "T" in ts else ts[:8]
-                action = record.get("action", "unknown")
+                request_dict = record.get("request", {})
+                action = request_dict.get("action", "unknown") if isinstance(request_dict, dict) else "unknown"
                 result = record.get("result", "")
                 reason = record.get("reason", "")
                 
@@ -1501,8 +1601,6 @@ class KaiamonUI:
                 cmd = parts[0].lower()
                 args = parts[1:]
                 
-                if False:
-                    pass
                 if cmd == "block" and len(args) >= 1:
                     ip = args[0]
                     self._add_response(f"Mitigating threat IP: {ip}...")
@@ -1635,7 +1733,7 @@ class KaiamonUI:
                         msg = resp.get("message") if isinstance(resp, dict) else str(resp)
                         self._add_response(f"[DENIED] add rule failed: {msg}")
 
-                elif cmd == "show" and len(args) >= 2 and args[0] == "assets":
+                elif cmd == "show" and len(args) >= 1 and args[0] == "assets":
                     self._add_response("Querying passive LAN assets...")
                     try:
                         from security.network_discovery import PassiveDiscoveryEngine
@@ -1649,7 +1747,7 @@ class KaiamonUI:
                     except Exception as e:
                         self._add_response(f"Error querying assets: {e}")
 
-                elif cmd == "show" and len(args) >= 3 and args[0] == "fim" and args[1] == "alerts":
+                elif cmd == "show" and len(args) >= 2 and args[0] == "fim" and args[1] == "alerts":
                     self._add_response("Querying recent FIM alerts...")
                     fim_db_path = "/var/lib/secdaemon/fim_audit.db"
                     if os.path.exists(fim_db_path):

@@ -6,6 +6,7 @@ import psutil
 import re
 import shlex
 import subprocess
+import tempfile
 import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -299,10 +300,16 @@ class KaiaCLI:
         """Retrieves Vulkan API information if available."""
         vulkan_info = []
         try:
-            result = subprocess.run(
-                ["vulkaninfo", "--json"],
-                capture_output=True, text=True, check=True, timeout=5
-            )
+            # vulkaninfo --json writes a VP_VULKANINFO_<device>.json profile file
+            # into the CURRENT WORKING DIRECTORY as a side effect, in addition to
+            # printing to stdout. Run it in a throwaway directory so it stops
+            # littering the repository root; we only consume stdout anyway.
+            with tempfile.TemporaryDirectory(prefix="kaia-vulkaninfo-") as _tmpdir:
+                result = subprocess.run(
+                    ["vulkaninfo", "--json"],
+                    capture_output=True, text=True, check=True, timeout=5,
+                    cwd=_tmpdir,
+                )
             data = json.loads(result.stdout)
             for gpu in data.get('GPU', []):
                 vulkan_info.append({

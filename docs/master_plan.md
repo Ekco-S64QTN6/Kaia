@@ -511,27 +511,92 @@ Tier 5: Enterprise Guardian Matrix (Future – includes advanced monitoring)
   - Ping/Service/Telemetry collectors repointed to Kaia targets (Ollama, Policy Gate socket, PostgreSQL, etc.).
   - Layout uses four security‑focused panes, no cognitive/affective data.
 
-**Pending / In Progress (Tier 3 completion and Tier 5):**
+**Verified complete (re-audited 2026-09-08).** Every item previously listed as
+pending below had in fact been implemented; the status section had gone stale
+rather than the work being outstanding:
 
-- [ ] **Dashboard bug fix:** `CollectorManager.__init__` still instantiates `LogCollector` instead of `AuditLogCollector`. Must use `self._log = AuditLogCollector(self._stop_event)`. This is the one remaining blocker for Stage 1.
-- [ ] **Dashboard Stage 2:** interactive command input + response streaming (new feature, not in `kaiamon.py`).
-- [ ] **Remove legacy cognitive files:** delete `cognitive_wiring.py` and `beliefs.json` directory.
-- [ ] **Policy Gate systemd migration:** currently subprocess; target is systemd unit with `RuntimeDirectory`.
-- [ ] **Tier 5 enhancements (future):** eBPF telemetry (replace polling), fanotify/YARA FIM with mount‑wide coverage and openat2/unlinkat hooks, passive discovery with raw socket parsing (ARP, mDNS, LLMNR, NetBIOS), honeypots/tripwires, expanded threat intel (GeoLite2, CVEDB, DuckDB).
-- [ ] **Implement path blocklist** for state modification as specified in §3.3.
-- [ ] **Implement Bubblewrap masking** of `.env` and `storage/` for script execution.
-- [ ] **Create negative test suite** to verify containment failures (see §10.4).
+- [x] **Dashboard `AuditLogCollector` bug** — `CollectorManager.__init__` uses
+      `AuditLogCollector` (kaia_dashboard.py:1449). Fixed.
+- [x] **Legacy cognitive files** — `security/cognitive_wiring.py` and
+      `storage/cognition/beliefs.json` are gone, with no remaining references.
+- [x] **Policy Gate systemd migration** — `scripts/kaia-policy-gate.service`
+      installed and running as a system unit.
+- [x] **Path blocklist for state modification** — `host_executor.execute_state_modification`
+      enforces extension, hidden-file, `.git` and protected-directory rules.
+- [x] **Bubblewrap masking** — `.env` bound to `/dev/null` and `storage/` mounted
+      `tmpfs` at every lattice level.
+- [x] **Negative test suite** — `tests/test_negative_security.py`; 42 tests pass.
+
+**Fixed 2026-09-08 (this pass):**
+
+- [x] **`systemd-run --user` under a root daemon.** The cgroup wrapper in
+      `host_executor.execute_script` used `--user`, which cannot work in a root
+      system service (no session bus) — it failed with "Failed to connect to user
+      scope bus" before bwrap was ever reached, so *every* sandboxed script
+      execution was broken end to end. Now selects a system scope as root, a user
+      scope otherwise, and **fails closed** if neither is available, since §6.3
+      makes the ceilings mandatory.
+- [x] **`execute_script` had no allowlist.** It trusted the Policy Gate entirely,
+      unlike `execute_service_control`, whose direct-call enforcement is asserted by
+      `test_executor_allowlist_enforced_directly`. It now checks `SCRIPT_ALLOWLIST`
+      itself, and rejects non-bare filenames — `os.path.join("~", name)` silently
+      discards the `~` when `name` is absolute, so it was never a containment boundary.
+- [x] **Dashboard fallback paths.** The no-config fallback pointed at
+      `storage/security_events.db` and `storage/audit_ledger.json`; both live under
+      `storage/security/`. The collector silently polled non-existent files and left
+      a stray 0-byte DB behind.
+- [x] **Tamper detector did not watch itself.** `tamper_detection.py`, `security/db.py`
+      and `scripts/kaia-lockdown.sh` were unprotected — neutralising the watchdog
+      first disabled the entire control silently. All three are now on the watchlist.
+- [x] **Lockdown was unbounded and irreversible.** It re-fired every 30s for a single
+      unchanged hash (24 times in 12 minutes during a live incident), and
+      `nft flush ruleset` destroyed UFW's rules with no restore path. Alerts now latch
+      per file-state and re-arm on restore; the ruleset is snapshotted to
+      `/var/lib/kaia/pre-lockdown.nft` before flushing; `scripts/kaia-unlock.sh` lifts it.
+- [x] **`.env` tampering did not trigger lockdown.** The trigger was a substring test
+      for `"security/"`, so the file holding `KAIA_CAPABILITY_TOKEN_SECRET` — the most
+      severe case — was exempt. Now matched on resolved paths.
+
+**Remaining (Tier 5, deferred):**
+
+- [ ] **Dashboard Stage 2:** interactive command input + response streaming.
+- [ ] **Tier 5 enhancements:** expanded eBPF coverage, YARA/fanotify FIM breadth,
+      NetBIOS in passive discovery, DuckDB threat-intel expansion.
 
 ### 10.3 Immediate Action Items (Priority Order)
 
-1. **Fix the one‑line bug in `kaia_dashboard.py`** – replace `LogCollector` with `AuditLogCollector` in `CollectorManager.__init__`.
-2. **Verify dashboard runs** – launch `python kaia_dashboard.py` and confirm all four panes populate with live data.
-3. **Complete Dashboard Stage 1** – ensure the audit log, threat intel, containment, and system security panes are fully functional (read‑only).
-4. **Begin Dashboard Stage 2** – implement the command input panel and response streaming (new work; use the existing log‑pane scrolling as a base).
-5. **Remove legacy cognitive code** – delete `security/cognitive_wiring.py` and references to `beliefs.json` (they are not used).
-6. **Move Policy Gate to systemd** – optional but recommended for production stability (unit template provided in Appendix A).
-7. **Phase 5 stretch goals** – eBPF telemetry, fanotify FIM, passive discovery, honeypots (can be deferred).
-8. **Implement security-hardening mitigations** from §3.3 and §6.4 (path blocklist, sandbox masking, tamper detection).
+Items 1–8 of the previous list are complete (see §10.2), as are items 2–4 of this
+one (fixed 2026-09-08):
+
+- [x] **Service allowlist reconciled.** `ALLOWED_SERVICES` was duplicated in
+      `policy_gate.py`, `host_executor.py` and the LLM prompt in `kaia_cli.py`, so the
+      three could drift. Now a single `config.SERVICE_RESTART_ALLOWLIST`, enforced by a
+      test that fails if either module redefines it locally.
+- [x] **`execute_mitigation` reconciled with the live firewall.** It wrote
+      `nft add rule ip filter input ...`, but `ip filter` is ufw's table (iptables-nft),
+      so every block was silently discarded by the next `ufw reload` — while the audit
+      ledger still recorded it as applied. Blocks now go to a dedicated
+      `inet kaia_block` table at hook priority −10, ahead of ufw and unaffected by its
+      reloads. IPv6 targets now use the `ip6` selector; `ip saddr` with a v6 address was
+      a syntax error nft rejected.
+- [x] **`vulkaninfo --json` CWD pollution.** It writes a `VP_VULKANINFO_*.json` profile
+      into the working directory as a side effect. Now runs with `cwd=` a temp dir.
+- [x] **Standalone panic recovery.** `~/kaia-panic-unlock.sh` restores networking with
+      no dependency on the Kaia repo, since a lockdown is exactly when Kaia cannot be
+      trusted to repair itself.
+
+Current priorities:
+
+1. **Dashboard Stage 2** — command input panel and response streaming. The largest
+   remaining piece of declared-but-unbuilt functionality.
+2. **Live-fire the mitigation path.** The new `inet kaia_block` table is unit-tested at
+   the command-construction level but has not been exercised against a real ruleset.
+   Block a throwaway address, confirm with `nft list table inet kaia_block`, then
+   `ufw reload` and confirm the rule survives.
+3. **Persistence of blocks across reboot.** `inet kaia_block` is runtime-only; a reboot
+   clears every block Kaia has applied. Decide whether blocks should be re-applied at
+   boot from the audit ledger, or remain deliberately ephemeral.
+4. **Tier 5 stretch goals** — expanded eBPF, YARA/fanotify breadth, NetBIOS discovery.
 
 ### 10.4 Negative Testing Requirements
 

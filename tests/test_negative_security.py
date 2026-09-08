@@ -338,3 +338,159 @@ def test_executor_allowlist_enforced_directly():
     success, stdout, stderr = HostExecutor.execute_service_control("apache2")
     assert not success
     assert "allowlist" in stderr.lower() or "not in" in stderr.lower()
+
+
+# ============================================================
+# Tamper detection: self-protection, latching, and lockdown scope
+#
+# Regression tests for a live incident on 2026-09-08: editing
+# security/host_executor.py while the Policy Gate was running caused
+# tamper detection to fire kaia-lockdown 24 times in 12 minutes --
+# one per 30s check interval -- each firing `nft flush ruleset` and
+# taking the host off the network. The detector was correct to fire;
+# it was wrong to fire repeatedly, and it was not watching itself.
+# ============================================================
+
+def _detector_with_stubs(monkeypatch):
+    """A TamperDetector whose side effects (DB write, lockdown) are captured."""
+    from security import tamper_detection as td
+    import security.policy_gate as pg
+
+    lockdowns = []
+    monkeypatch.setattr(td, "log_security_event", lambda **kw: None)
+    monkeypatch.setattr(pg, "trigger_lockdown", lambda reason: lockdowns.append(reason))
+    return td.TamperDetector(), lockdowns
+
+
+def test_tamper_detector_watches_itself(monkeypatch):
+    """The watchdog must protect its own code, its logger, and its response script.
+
+    Without this, the cheapest bypass in the system is to neutralise
+    tamper_detection.py first -- after which nothing else on the watchlist is
+    ever checked again.
+    """
+    detector, _ = _detector_with_stubs(monkeypatch)
+    watched = {os.path.abspath(p) for p in detector.immutable_files}
+    for required in (
+        os.path.join(config.WORKSPACE_DIR, "security", "tamper_detection.py"),
+        os.path.join(config.WORKSPACE_DIR, "security", "db.py"),
+        os.path.join(config.WORKSPACE_DIR, "scripts", "kaia-lockdown.sh"),
+    ):
+        assert os.path.abspath(required) in watched, f"{required} is not tamper-protected"
+
+
+def test_tamper_alert_latches_per_state(monkeypatch):
+    """One modification must produce exactly one lockdown, not one per interval."""
+    detector, lockdowns = _detector_with_stubs(monkeypatch)
+    target = os.path.join(config.WORKSPACE_DIR, "security", "host_executor.py")
+
+    for _ in range(5):
+        detector._trigger_tamper_alert(target, "Baseline hash mismatch", "HASH_A")
+    assert len(lockdowns) == 1, f"expected 1 lockdown for one state, got {len(lockdowns)}"
+
+
+def test_tamper_alert_refires_on_new_state(monkeypatch):
+    """A genuinely different modification must alert again, not be swallowed."""
+    detector, lockdowns = _detector_with_stubs(monkeypatch)
+    target = os.path.join(config.WORKSPACE_DIR, "security", "host_executor.py")
+
+    detector._trigger_tamper_alert(target, "Baseline hash mismatch", "HASH_A")
+    detector._trigger_tamper_alert(target, "Baseline hash mismatch", "HASH_B")
+    assert len(lockdowns) == 2, "a distinct second modification must re-trigger"
+
+
+def test_env_tamper_triggers_lockdown(monkeypatch):
+    """.env holds KAIA_CAPABILITY_TOKEN_SECRET -- tampering with it is the most
+    severe case, and previously did not trigger lockdown because the check was a
+    substring test for 'security/'."""
+    detector, lockdowns = _detector_with_stubs(monkeypatch)
+    detector._trigger_tamper_alert(
+        os.path.join(config.WORKSPACE_DIR, ".env"), "Baseline hash mismatch", "HASH_ENV"
+    )
+    assert len(lockdowns) == 1, ".env tampering must trigger emergency lockdown"
+
+
+# ============================================================
+# HostExecutor: defence in depth on script execution
+# ============================================================
+
+def test_executor_script_allowlist_enforced_directly():
+    """execute_script must enforce SCRIPT_ALLOWLIST even without the Policy Gate,
+    matching the standard test_executor_allowlist_enforced_directly sets for
+    execute_service_control."""
+    from security.host_executor import HostExecutor
+    success, _, stderr = HostExecutor.execute_script("definitely_not_allowlisted.sh")
+    assert not success
+    assert "allowlist" in stderr.lower()
+
+
+@pytest.mark.parametrize("evil", [
+    "/etc/passwd",
+    "../../../tmp/evil.sh",
+    "subdir/evil.sh",
+])
+def test_executor_script_rejects_path_escape(evil):
+    """os.path.join('~', name) silently discards '~' for absolute names and lets
+    '../' climb out of $HOME, so the executor must require a bare filename."""
+    from security.host_executor import HostExecutor
+    success, _, stderr = HostExecutor.execute_script(evil)
+    assert not success
+    assert "allowlist" in stderr.lower() or "bare filename" in stderr.lower() \
+        or "escapes" in stderr.lower()
+
+
+# ============================================================
+# execute_mitigation must not write into UFW's table
+# ============================================================
+
+def test_mitigation_uses_dedicated_table_not_ufw(monkeypatch):
+    """IP blocks must land in Kaia's own nftables table.
+
+    Writing to "ip filter" put the rule inside UFW's ruleset, where the next
+    `ufw reload` discarded it silently -- while the audit ledger still recorded
+    the block as applied. A block that can vanish without a signal is worse than
+    no block at all.
+    """
+    from security.host_executor import HostExecutor
+
+    issued = []
+    monkeypatch.setattr(HostExecutor, "_run_cmd",
+                        staticmethod(lambda cmd: (issued.append(cmd), (True, "", ""))[1]))
+
+    ok, _, _ = HostExecutor.execute_mitigation("203.0.113.42", "tcp", 4444)
+    assert ok
+
+    flat = [" ".join(c) for c in issued]
+    assert any(f"add table inet {config.NFT_BLOCK_TABLE}" in c for c in flat), \
+        "must create its own table"
+    rule = [c for c in flat if "add rule" in c]
+    assert rule, "no rule was added"
+    assert f"inet {config.NFT_BLOCK_TABLE}" in rule[0], "rule must target Kaia's table"
+    assert "ip filter" not in rule[0], "rule must NOT be written into ufw's table"
+    assert "203.0.113.42" in rule[0] and "drop" in rule[0]
+
+
+def test_mitigation_handles_ipv6_selector(monkeypatch):
+    """IPv6 targets need the ip6 selector; 'ip saddr' with a v6 address is a
+    syntax error nft rejects at rule-add time."""
+    from security.host_executor import HostExecutor
+
+    issued = []
+    monkeypatch.setattr(HostExecutor, "_run_cmd",
+                        staticmethod(lambda cmd: (issued.append(cmd), (True, "", ""))[1]))
+
+    HostExecutor.execute_mitigation("2001:db8::1", "all")
+    rule = [" ".join(c) for c in issued if "add rule" in " ".join(c)]
+    assert rule and "ip6 saddr" in rule[0], f"expected ip6 selector, got: {rule}"
+
+
+def test_service_allowlist_has_single_source():
+    """policy_gate and host_executor must share one allowlist, not two copies
+    that can drift apart."""
+    import inspect
+    from security import host_executor, policy_gate
+    for mod in (host_executor, policy_gate):
+        src = inspect.getsource(mod)
+        assert "ALLOWED_SERVICES = [" not in src, \
+            f"{mod.__name__} redefines the service allowlist locally"
+        assert "config.SERVICE_RESTART_ALLOWLIST" in src

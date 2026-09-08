@@ -47,17 +47,28 @@ A second-pass audit was conducted by cross-referencing the codebase with [master
   - Updated `check_integrity()` to verify the content-hash of the baselined rows. This is stable across WAL checkpoints and SQLite header changes.
 
 ### 3.2 Service Configuration Corrections & Hardening
-- **File Modified:** [kaia-policy-gate.service](file:///home/ekco/github/Kaia/scripts/kaia-policy-gate.service)
+- **Files Modified:** 
+  - [kaia-policy-gate.service](file:///home/ekco/github/Kaia/scripts/kaia-policy-gate.service)
+  - [install_services.sh](file:///home/ekco/github/Kaia/scripts/install_services.sh)
 - **Fixes:**
   - Changed `User=ekco` to `User=root`.
   - Set `RestartSec=1` (aligned with spec).
-  - Added hardening directives: `ProtectHome=read-only` (enabling visible read access to `/home` so systemd can bind-mount workspace paths, unlike `ProtectHome=true` which isolates them completely), `PrivateDevices=true`, and capability sets.
+  - Added hardening directives: `ProtectHome=read-only` (enabling visible read access to `/home` so systemd can bind-mount workspace paths, unlike `ProtectHome=true` which isolates them completely), `PrivateDevices=true`, and minimum capability sets (`CAP_NET_ADMIN`, `CAP_NET_RAW`, `CAP_SYS_ADMIN`, `CAP_DAC_OVERRIDE`).
+  - *Justification for CAP_DAC_OVERRIDE:* Restoring this capability is required because the daemon (running inside systemd) must parse user-owned files with strict permissions (like `.env` which is mode `0600` owned by `ekco`) and perform FIM/YARA integrity checks on user files. Without it, systemd enforces strict user-level DAC permissions, causing immediate `PermissionError` crashes.
+  - Securely externalized the `KAIA_CAPABILITY_TOKEN_SECRET` key by removing it from the tracked unit file and loading it dynamically via `EnvironmentFile=/etc/kaia/secret.env`. The installer script `install_services.sh` extracts the secret from the local `.env` and provisions `/etc/kaia/secret.env` with strict `0600` root-only permissions on host installation.
   - Added `ReadOnlyPaths=/home/ekco/github/Kaia` to ensure the Python runtime can import and read the project workspace code.
   - Pre-created honeypot files (`/etc/api_keys.json`, `/var/backups/credentials.txt`, `/root/.ssh/authorized_keys.bak`) on the host during repository installation via `install_services.sh` to guarantee systemd can bind-mount them under `ReadWritePaths=`.
   - Modified [honeypot.py](file:///home/ekco/github/Kaia/security/honeypot.py) to truncate files to 0 bytes on shutdown (instead of deleting them via `os.remove()`). This preserves the files on the host filesystem so that systemd namespace setup never fails on subsequent service starts, while ensuring no credential content remains when the daemon is stopped.
   - Moved `StartLimitIntervalSec=30` and `StartLimitBurst=3` from `[Service]` to `[Unit]` to comply with modern systemd parser syntax.
 
-### 3.3 Python UTC Deprecations Cleanup
+### 3.3 Dashboard TUI Command Parse Corrections
+- **File Modified:** [kaia_dashboard.py](file:///home/ekco/github/Kaia/kaia_dashboard.py)
+- **Fixes:**
+  - Fixed off-by-one check in the `show assets` argument parsing logic (now checks `len(args) >= 1` instead of `>= 2` to accommodate the command `"show assets"`).
+  - Fixed off-by-one check in the `show fim alerts` argument parsing logic (now checks `len(args) >= 2` instead of `>= 3` to accommodate the command `"show fim alerts"`).
+  - Removed obsolete/dead `if False: pass` block from the command dispatch logic in `_command_worker`.
+
+### 3.4 Python UTC Deprecations Cleanup
 - **Files Modified:**
   - [policy_gate.py](file:///home/ekco/github/Kaia/security/policy_gate.py)
   - [db.py](file:///home/ekco/github/Kaia/security/db.py)
@@ -67,23 +78,23 @@ A second-pass audit was conducted by cross-referencing the codebase with [master
   - [kaia_dashboard.py](file:///home/ekco/github/Kaia/kaia_dashboard.py)
 - **Fix:** Migrated all 11 naive `datetime.utcnow()` call sites to timezone-aware UTC datetime objects using `datetime.now(UTC)` or timezone-aware formats. Expired token comparisons and cache stale checks were updated to prevent timezone-naive/aware mixed comparisons.
 
-### 3.4 Package Initialization
+### 3.5 Package Initialization
 - **File Created:** [__init__.py](file:///home/ekco/github/Kaia/security/__init__.py)
 - **Fix:** Created empty init file to convert `security/` into a standard Python package.
 
-### 3.5 Redundant Sudo Cleanup
+### 3.6 Redundant Sudo Cleanup
 - **File Modified:** [host_executor.py](file:///home/ekco/github/Kaia/security/host_executor.py)
 - **Fix:** Checked `os.geteuid() == 0` (running as root) before prepending `sudo` to commands in `execute_diagnostics()`, `execute_mitigation()`, and `execute_service_control()`.
 
-### 3.6 Passive Telemetry TUI Icons correction
+### 3.7 Passive Telemetry TUI Icons correction
 - **File Modified:** [ebpf_telemetry.py](file:///home/ekco/github/Kaia/security/ebpf_telemetry.py)
 - **Fix:** Changed passive privilege escalation log event disposition from `"approved"` to `"observed"`. The dashboard maps `"observed"` to a warning icon `⚠` with a `WARN` log level, preventing misleading green success checkmarks.
 
-### 3.7 Interface Presence Fallback
+### 3.8 Interface Presence Fallback
 - **File Modified:** [network_discovery.py](file:///home/ekco/github/Kaia/security/network_discovery.py)
 - **Fix:** Enhanced `get_default_interface()` to first verify that the detected default gateway route interface exists in `/sys/class/net`. If missing, it scans `/sys/class/net` for the first active non-loopback interface (like `wlan0`), falling back to `"eth0"` only if none exist.
 
-### 3.8 FIM Mount Mark Fallback
+### 3.9 FIM Mount Mark Fallback
 - **File Modified:** [fim_daemon.py](file:///home/ekco/github/Kaia/security/fim_daemon.py)
 - **Fix:** In `start()`, if the initial `fanotify_mark` call fails with `errno=22` (`EINVAL`), FIMDaemon drops directory tracking mask flags (`FAN_CREATE` / `FAN_ONDIR`) and retries marking the mount with basic file modification flags (`FAN_MODIFY | FAN_CLOSE_WRITE | FAN_ATTRIB`).
 

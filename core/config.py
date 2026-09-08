@@ -177,6 +177,22 @@ SCRIPT_ALLOWLIST = [
     "update-system.sh"
 ]
 
+# Services the Policy Gate may restart. Single source of truth: this list was
+# previously duplicated in security/policy_gate.py, security/host_executor.py and
+# the LLM prompt in core/kaia_cli.py, so the three could drift apart -- and an
+# allowlist that disagrees with itself is not an allowlist.
+# NOTE: "nginx" is retained for compatibility but is not installed on the current
+# host; drop it if you never intend to run it. Keep this list minimal.
+SERVICE_RESTART_ALLOWLIST = ["nginx", "postgresql", "ollama"]
+
+# Dedicated nftables table for Kaia's IP blocks. Deliberately NOT ufw's own
+# "ip filter" table: rules written there are silently discarded by `ufw reload`,
+# so a block could disappear without any signal. A separate table at a higher
+# hook priority survives ufw reloads and is trivial to audit or flush.
+NFT_BLOCK_TABLE = "kaia_block"
+NFT_BLOCK_CHAIN = "input"
+NFT_BLOCK_PRIORITY = -10
+
 # Security Subsystem Configuration
 SECURITY_DB_PATH = str(SECURITY_STORAGE_DIR / "security_events.db")
 AUDIT_LOG_PATH = str(SECURITY_STORAGE_DIR / "audit_ledger.json")

@@ -197,5 +197,74 @@ Initialize all local dependencies (Ollama, Postgres) and launch the CLI session:
 
 ---
 
+## 🔧 Maintenance & Development
+
+**Stop the Policy Gate before editing Kaia's own source.**
+
+`security/tamper_detection.py` hashes the core files at startup and re-checks them
+every 30 seconds. Modifying any of them while the daemon is running is — correctly —
+indistinguishable from an intruder patching the security layer, and triggers
+`kaia-lockdown.service`, which flushes nftables and drops **all** traffic on the host.
+
+```bash
+sudo systemctl stop kaia-policy-gate     # 1. disarm
+#    ... edit, test, commit ...
+sudo systemctl start kaia-policy-gate    # 2. re-baseline against the new state
+```
+
+### Tamper-protected files
+
+Modifying any of these trips the detector:
+
+| File | Consequence |
+|---|---|
+| `.env` | **Lockdown** — holds `KAIA_CAPABILITY_TOKEN_SECRET` |
+| `core/config.py` | **Lockdown** |
+| `security/*.py` (`policy_gate`, `host_executor`, `schemas`, `tamper_detection`, `db`) | **Lockdown** |
+| `scripts/kaia-lockdown.sh` | **Lockdown** |
+| `/etc/systemd/system/kaia-policy-gate.service` | **Lockdown** |
+| `kaia_dashboard.py`, `main.py` | Critical alert + audit event, no lockdown |
+
+The detector watches **itself**, `security/db.py`, and `kaia-lockdown.sh` deliberately:
+without that, the cheapest bypass in the system is to neutralise the watchdog first.
+
+### If the network goes down unexpectedly
+
+Run this. It is deliberately standalone — no Kaia imports, no repo dependency, no
+network access — because if Kaia is what broke, nothing of Kaia's can be trusted to
+fix it:
+
+```bash
+sudo ~/kaia-panic-unlock.sh
+```
+
+It stops the Policy Gate first (otherwise the 30s tamper loop just re-locks you out
+on the next tick), deletes **only** Kaia's own `inet filter` lockdown table, reloads
+ufw, restarts NetworkManager, and verifies connectivity.
+
+A reboot also clears a lockdown — nftables rules are runtime-only and ufw re-applies
+at boot — but that loses your session and tells you nothing about why it fired.
+
+### Recovering from a lockdown
+
+`kaia-lockdown.sh` snapshots the live ruleset to `/var/lib/kaia/pre-lockdown.nft`
+before flushing, plus a timestamped copy for forensics. To lift it:
+
+```bash
+sudo ./scripts/kaia-unlock.sh          # regenerates via `ufw reload` where ufw is active
+sudo ./scripts/kaia-unlock.sh -s       # or replay the raw pre-lockdown snapshot
+```
+
+Release requires typing `RESTORE` at a prompt — it re-exposes a host that something
+asserted was compromised, so it is never automatic. Afterwards, restart the Policy
+Gate so the tamper baseline is re-established.
+
+**Alert latching:** one modification produces one CRITICAL alert and one lockdown.
+Subsequent checks log at WARNING without re-firing, and the detector re-arms when the
+file returns to baseline. Without this a single event re-flushed the firewall every
+30 seconds, which is precisely when an operator needs the network to investigate.
+
+---
+
 ## ⚖️ License
 Licensed under the [MIT License](LICENSE.md). Third-party dependencies are detailed in [NOTICE.md](NOTICE.md).

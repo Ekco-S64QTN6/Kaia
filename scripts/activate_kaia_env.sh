@@ -34,7 +34,14 @@ else
 fi
 
 if [ -f .env ]; then
-    export $(grep -v '^#' .env | xargs)
+    # `export $(grep -v '^#' .env | xargs)` word-splits on spaces inside values and
+    # mangles the "export VAR=..." form this project's .env actually uses (it would
+    # try to export a variable literally named "export"). Sourcing with allexport
+    # handles both, and quoted values survive intact.
+    set -a
+    # shellcheck source=/dev/null
+    . ./.env
+    set +a
 fi
 
 echo -e "${COLOR_BLUE}Checking Policy Gate Daemon status...${COLOR_RESET}"
@@ -61,7 +68,7 @@ else
             exit 1
         fi
         sudo mkdir -p /run/kaiacord 2>/dev/null || true
-        sudo chown -R $USER:kaiacord /run/kaiacord 2>/dev/null || true
+        sudo chown -R "$USER":kaiacord /run/kaiacord 2>/dev/null || true
         sudo chmod 0770 /run/kaiacord 2>/dev/null || true
         
         nohup "$KAIA_PROJECT_DIR/.venv/bin/python" "$KAIA_PROJECT_DIR/security/policy_gate.py" > "$KAIA_PROJECT_DIR/logs/policy_gate.log" 2>&1 &
