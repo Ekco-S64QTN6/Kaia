@@ -1,32 +1,62 @@
-# IMPORTANT: Set KAIA_PROJECT_DIR to the absolute path of your Kaia repo.
-# Edit the paths below before running: sudo scripts/install_services.sh
+# Kaia Policy Gate.
+#
+# Paths below refer to the DEPLOYED tree (/opt/kaia), not a developer checkout.
+# Install with: sudo scripts/install_services.sh
+#
+# The daemon runs as root because it manipulates nftables, restarts systemd
+# units and binds raw sockets. Running it out of a user-writable checkout would
+# therefore mean root executing code any unprivileged process could rewrite, so
+# install_services.sh deploys a root-owned copy and this unit points at that.
+
 [Unit]
 Description=Kaia Out-of-Process Policy Gate Daemon
-After=network.target postgresql.service
+After=network.target postgresql.service kaia-restore-blocks.service
 StartLimitIntervalSec=30
 StartLimitBurst=3
 
 [Service]
 Type=simple
-Environment=KAIA_PROJECT_DIR=/home/ekco/github/Kaia
-Environment=PYTHONPATH=/home/ekco/github/Kaia/core:/home/ekco/github/Kaia
+WorkingDirectory=/opt/kaia
+Environment=KAIA_PROJECT_DIR=/opt/kaia
+Environment=PYTHONPATH=/opt/kaia:/opt/kaia/core
+# Signing secret, root-owned 0600. Never inline it here: an earlier version set
+# Environment=KAIA_CAPABILITY_TOKEN_SECRET=... in this tracked file, which put
+# the live capability-token signing key into public git history.
 EnvironmentFile=/etc/kaia/secret.env
-ExecStart=/home/ekco/github/Kaia/.venv/bin/python /home/ekco/github/Kaia/security/policy_gate.py
-WorkingDirectory=/home/ekco/github/Kaia
+ExecStart=/usr/bin/python3 /opt/kaia/security/policy_gate.py
 Restart=always
 RestartSec=1
 RuntimeDirectory=kaiacord
+
 User=root
 Group=kaiacord
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_ADMIN CAP_DAC_OVERRIDE
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_ADMIN CAP_DAC_OVERRIDE
+
+# CAP_DAC_OVERRIDE dropped: it bypasses ALL file permission checks, and was only
+# needed because the daemon read a 0600 .env owned by an unprivileged user. The
+# secret now arrives via EnvironmentFile from root-owned /etc/kaia/secret.env.
+#
+# CAP_SYS_ADMIN dropped: required ONLY for mount-wide fanotify (FIM) and BCC/eBPF.
+# Both were non-functional as shipped -- fanotify failed EINVAL on every start and
+# BCC is not installed -- so granting it bought nothing. To re-enable FIM, verify
+# with `sudo python3 scripts/fanotify_probe.py /opt/kaia` and, if a mount mark
+# succeeds, add CAP_SYS_ADMIN back to BOTH lines below.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+
 NoNewPrivileges=true
 ProtectSystem=strict
-ProtectHome=read-only
+ProtectHome=true
 PrivateDevices=true
 PrivateTmp=true
-ReadOnlyPaths=/home/ekco/github/Kaia
-ReadWritePaths=/run/kaiacord /home/ekco/github/Kaia/storage /home/ekco/github/Kaia/logs /var/lib/secdaemon -/etc/api_keys.json -/var/backups/credentials.txt -/root/.ssh
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+# /var/lib/kaia holds the audit ledger and event DB (INV-008: outside the agent's
+# working tree). /opt/kaia itself stays read-only to the daemon.
+ReadWritePaths=/run/kaiacord /var/lib/kaia /opt/kaia/logs /var/lib/secdaemon
+ReadWritePaths=-/etc/api_keys.json -/var/backups/credentials.txt -/root/.ssh
 
 [Install]
 WantedBy=multi-user.target

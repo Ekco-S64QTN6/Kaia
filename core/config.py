@@ -25,6 +25,23 @@ GENERAL_KNOWLEDGE_DIR = BASE_DIR / "core" / "data"
 PERSONAL_CONTEXT_DIR = BASE_DIR / "core" / "personal_context"
 PERSONA_DIR = BASE_DIR / "core" / "data"
 STORAGE_DIR = BASE_DIR / "storage"
+
+# --- System state directory ---------------------------------------------------
+# INV-008 requires the audit ledger to live "completely outside the directory
+# mapping bounds of the agent's sandboxed working tree". It was inside the repo
+# at storage/security/, mode 0644 and owned by the invoking user, so anything
+# running as that user could rewrite the administration trail.
+#
+# Prefer /var/lib/kaia (root-owned, group-readable by kaiacord). Fall back to the
+# in-repo location when that is not usable -- unprivileged development, CI, and
+# the test suite all need to run without root.
+_SYSTEM_STATE_DIR = Path(os.environ.get("KAIA_STATE_DIR", "/var/lib/kaia"))
+if os.access(_SYSTEM_STATE_DIR, os.W_OK):
+    STATE_DIR = _SYSTEM_STATE_DIR
+    STATE_DIR_IS_SYSTEM = True
+else:
+    STATE_DIR = STORAGE_DIR / "security"
+    STATE_DIR_IS_SYSTEM = False
 PERSIST_DIR = STORAGE_DIR
 SECURITY_STORAGE_DIR = STORAGE_DIR / "security"
 THREAT_INTEL_DIR = STORAGE_DIR / "threat_intel"
@@ -217,8 +234,10 @@ LOCKDOWN_WINDOW_SECONDS = 3600
 TAMPER_ENFORCE = os.environ.get("KAIA_TAMPER_ENFORCE", "1").strip().lower() not in ("0", "false", "no")
 
 # Security Subsystem Configuration
-SECURITY_DB_PATH = str(SECURITY_STORAGE_DIR / "security_events.db")
-AUDIT_LOG_PATH = str(SECURITY_STORAGE_DIR / "audit_ledger.json")
+# Both live in STATE_DIR (see above): /var/lib/kaia in production, the in-repo
+# storage/security/ when running unprivileged.
+SECURITY_DB_PATH = str(STATE_DIR / "security_events.db")
+AUDIT_LOG_PATH = str(STATE_DIR / "audit_ledger.json")
 POLICY_GATE_SOCKET = "/run/kaiacord/policy_gate.sock"
 POLICY_GATE_SOCKET_FALLBACK = "/tmp/policy_gate.sock"
 DISCOVERY_INTERFACE = "auto"

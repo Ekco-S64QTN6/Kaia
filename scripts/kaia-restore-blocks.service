@@ -1,0 +1,29 @@
+[Unit]
+Description=Kaia: re-apply IP blocks recorded in the audit ledger
+Documentation=file:///opt/kaia/scripts/kaia_restore_blocks.py
+# nftables rules are runtime-only, so every block Kaia has applied is lost on
+# reboot. Rebuild them from the ledger before the Policy Gate starts accepting
+# new requests, so there is no window where previously-blocked traffic is allowed.
+After=network-pre.target nftables.service ufw.service
+Before=kaia-policy-gate.service
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/env python3 /opt/kaia/scripts/kaia_restore_blocks.py
+# Restoring blocks must never prevent the host from booting.
+SuccessExitStatus=0
+TimeoutStartSec=120
+
+# Only needs to write nftables rules.
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadOnlyPaths=/var/lib/kaia
+
+[Install]
+WantedBy=multi-user.target

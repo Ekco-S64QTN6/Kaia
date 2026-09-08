@@ -29,6 +29,11 @@ FAN_ATTRIB = 0x00000004
 O_RDONLY = 0x00000000
 O_LARGEFILE = 0x00008000
 
+# fanotify_mark(2) takes a dirfd. The code previously passed -1, which is not a
+# valid descriptor; AT_FDCWD is the documented "relative to cwd" value. It is
+# ignored when pathname is absolute, but passing a bogus fd is a latent trap.
+AT_FDCWD = -100
+
 class FanotifyEventMetadata(ctypes.Structure):
     _fields_ = [
         ("event_len", ctypes.c_uint32),
@@ -116,25 +121,53 @@ class FIMDaemon:
             
         self.fan_fd = fd
 
-        # Mark mount containing WORKSPACE_DIR
+        # Mark the mount containing WORKSPACE_DIR.
+        #
+        # This previously failed with EINVAL on every start, so mount-wide FIM has
+        # never actually run and the daemon silently fell back to the inotify
+        # watchdog -- which is the polling-style blind spot INV-009 forbids.
+        #
+        # Both attempts failed because both masks contained events that the kernel
+        # only permits when fanotify_init() was given FAN_REPORT_FID: the first had
+        # FAN_CREATE/FAN_ONDIR, and the "basic" retry still kept FAN_ATTRIB.
+        #
+        # Rather than assume exactly which flag a given kernel objects to, degrade
+        # progressively and record which tier actually took. FAN_MODIFY and
+        # FAN_CLOSE_WRITE are the classic notification events and need no FID.
         workspace_path = config.WORKSPACE_DIR.encode("utf-8")
-        mask = FAN_MODIFY | FAN_CLOSE_WRITE | FAN_CREATE | FAN_ATTRIB | FAN_ONDIR
-        res = self.libc.fanotify_mark(self.fan_fd, FAN_MARK_ADD | FAN_MARK_MOUNT, mask, -1, workspace_path)
+        mark_flags = FAN_MARK_ADD | FAN_MARK_MOUNT
+        mask_tiers = [
+            ("full (modify, close-write, create, attrib, ondir)",
+             FAN_MODIFY | FAN_CLOSE_WRITE | FAN_CREATE | FAN_ATTRIB | FAN_ONDIR),
+            ("no directory events (modify, close-write, attrib)",
+             FAN_MODIFY | FAN_CLOSE_WRITE | FAN_ATTRIB),
+            ("file content only (modify, close-write)",
+             FAN_MODIFY | FAN_CLOSE_WRITE),
+            ("minimal (modify)",
+             FAN_MODIFY),
+        ]
+
+        res = -1
+        for label, mask in mask_tiers:
+            res = self.libc.fanotify_mark(self.fan_fd, mark_flags, mask, AT_FDCWD, workspace_path)
+            if res >= 0:
+                logger.info(f"fanotify mount mark established: {label}.")
+                break
+            err = ctypes.get_errno()
+            logger.warning(f"fanotify_mark mount failed for mask '{label}' (errno={err}); degrading.")
+            if err != 22:  # only EINVAL is worth retrying with a narrower mask
+                break
+
         if res < 0:
             errno = ctypes.get_errno()
-            if errno == 22: # EINVAL - filesystem or kernel version doesn't support FAN_CREATE/FAN_ONDIR without FID reporting
-                logger.warning("fanotify_mark mount failed with directory events (EINVAL). Retrying with basic file modification mask...")
-                mask = FAN_MODIFY | FAN_CLOSE_WRITE | FAN_ATTRIB
-                res = self.libc.fanotify_mark(self.fan_fd, FAN_MARK_ADD | FAN_MARK_MOUNT, mask, -1, workspace_path)
-                if res >= 0:
-                    logger.info("Successfully marked mount with basic file modification mask.")
-            
-            if res < 0:
-                errno = ctypes.get_errno()
-                logger.error(f"fanotify_mark mount failed (errno={errno}).")
-                os.close(self.fan_fd)
-                self.fan_fd = -1
-                return False
+            logger.error(
+                f"fanotify_mark mount failed at every mask tier (errno={errno}). "
+                "Mount-wide FIM unavailable; falling back to the watchdog sentinel, "
+                "which cannot see changes made between scans (see INV-009)."
+            )
+            os.close(self.fan_fd)
+            self.fan_fd = -1
+            return False
             
         self._thread = threading.Thread(target=self._run, daemon=True, name="fim-daemon")
         self._thread.start()

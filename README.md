@@ -228,6 +228,71 @@ Modifying any of these trips the detector:
 The detector watches **itself**, `security/db.py`, and `kaia-lockdown.sh` deliberately:
 without that, the cheapest bypass in the system is to neutralise the watchdog first.
 
+### Deployment model
+
+**Develop in a checkout; run from `/opt/kaia`.**
+
+The daemon runs as root — it manipulates nftables, restarts units and binds raw
+sockets. Running it directly out of a checkout under `$HOME` therefore means root
+executing code any unprivileged process can rewrite, which is a privilege-escalation
+path that tamper detection can *report* but not *prevent*.
+
+```bash
+sudo scripts/install_services.sh
+```
+
+That deploys a root-owned copy to `/opt/kaia` (0644 files, 0755 dirs, root:root),
+provisions `/var/lib/kaia` for state, migrates any in-repo ledger, and installs the
+units. Re-run it after changes — the checkout is the source, `/opt/kaia` is what runs.
+
+### Privileges
+
+| Capability | Status | Why |
+|---|---|---|
+| `CAP_NET_ADMIN` | granted | nftables rules for IP blocking |
+| `CAP_NET_RAW` | granted | `AF_PACKET` sockets for passive discovery |
+| `CAP_DAC_OVERRIDE` | **dropped** | Bypasses *all* file permission checks. Only ever needed to read a `0600 .env` owned by an unprivileged user; the secret now comes from root-owned `/etc/kaia/secret.env`. |
+| `CAP_SYS_ADMIN` | **dropped** | Needed only for mount-wide `fanotify` and BCC/eBPF. Both were non-functional as shipped — fanotify failed `EINVAL` on every start, BCC is not installed — so it granted privilege for nothing. |
+
+To re-enable mount-wide FIM, check whether this kernel will accept a mount mark:
+
+```bash
+sudo python3 scripts/fanotify_probe.py /opt/kaia
+```
+
+If any mask tier reports `OK`, add `CAP_SYS_ADMIN` back to **both** the
+`CapabilityBoundingSet` and `AmbientCapabilities` lines in
+`scripts/kaia-policy-gate.service` and reinstall.
+
+### State and the audit ledger
+
+INV-008 requires the ledger to live outside the agent's working tree. It now sits in
+`/var/lib/kaia/` (root:kaiacord, 0750), not `storage/security/` inside the repo where
+anything running as the invoking user could rewrite the administration trail.
+
+Running unprivileged — development, CI, the test suite — falls back to the in-repo
+path automatically, so tests need no root.
+
+Rotation is deliberately **operator-driven**, never automatic: INV-003 gives the agent
+zero write/delete capability over the ledger, and tamper detection prefix-hashes it, so
+a daemon rotating its own log would be indistinguishable from an intruder truncating it.
+
+```bash
+sudo systemctl stop kaia-policy-gate
+sudo ./scripts/kaia-rotate-ledger.sh     # archives + gzips, keeps 6
+sudo ./scripts/kaia-baseline.sh          # ledger hash changed
+sudo systemctl start kaia-policy-gate
+```
+
+### Block persistence
+
+nftables rules are runtime-only, so a reboot silently clears every address Kaia has
+blocked. `kaia-restore-blocks.service` replays approved `block_ip` entries from the
+ledger at boot, before the Policy Gate starts accepting new requests. It re-uses
+`HostExecutor.execute_mitigation`, so table, chain and address-family handling have a
+single implementation. Malformed ledger lines are skipped rather than fatal — a corrupt
+ledger must not stop the host booting with its blocks in place.
+
 ### If the network goes down unexpectedly
 
 Run this. It is deliberately standalone — no Kaia imports, no repo dependency, no
