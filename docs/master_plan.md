@@ -611,6 +611,12 @@ to this public repository in 4 commits and remained the live signing key. Rotate
 value outright. History still contains it; rotation is the mitigation, since scrubbing
 does not un-publish a value that was public.
 
+**Blocked on privileged setup (see `docs/NEXT_STEPS.md`).** The hardened
+deployment is committed but not installed: the Policy Gate still runs from the
+developer checkout with `CAP_SYS_ADMIN` and `CAP_DAC_OVERRIDE`, the ledger is still
+inside the working tree, and the mitigation path has never been exercised against a
+real nftables ruleset. Four `sudo` steps, documented there.
+
 Current priorities:
 
 1. **Dashboard Stage 2** — command input panel and response streaming. The largest

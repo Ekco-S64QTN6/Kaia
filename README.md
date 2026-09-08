@@ -143,6 +143,11 @@ All detailed design reviews, feature proposals, temporary scratchpads, and execu
 
 ---
 
+> **Setup pending.** The hardened deployment (root-owned `/opt/kaia`, reduced
+> capabilities, relocated audit ledger, block persistence) is committed but not yet
+> installed on the development host. The privileged commands to apply it are in
+> **[docs/NEXT_STEPS.md](docs/NEXT_STEPS.md)**.
+
 ## 🚀 Getting Started
 
 ### 1. Prerequisites (Arch Linux)
