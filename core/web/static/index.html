@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KAIA // HARDENED SECURITY SENTINEL</title>
+  <meta name="description" content="Kaia Zero-Trust Linux Host Guardian & Cyber-Sentinel Operations Center">
+  <link rel="stylesheet" href="/static/css/sentinel.css">
+</head>
+<body>
+  <div id="app">
+    <!-- ── Header ── -->
+    <header>
+      <div class="logo-badge">
+        <div class="logo-icon"></div>
+        <div class="logo-text">KAIA // <span>SENTINEL</span></div>
+      </div>
+
+      <div class="header-badges">
+        <div class="pill">HOST <b id="host-name">--</b></div>
+        <div class="pill">POLICY GATE <b id="policy-gate-badge">--</b></div>
+        <div class="pill" id="threat-pill">THREAT <b id="threat-badge-val">--</b></div>
+        <div class="pill">LOG RATE <b id="lps-badge-val">--</b></div>
+        <div class="pill">STREAM <span class="dot" id="conn-dot"></span> <b id="conn-pill-text">CONNECTING</b></div>
+      </div>
+
+      <div class="spacer"></div>
+      <div id="clock">--:--:--</div>
+    </header>
+
+    <!-- ── Host & Services ── -->
+    <section class="panel" id="panel-host">
+      <div class="panel-header">
+        <div class="title">HOST &amp; SERVICES</div>
+        <div class="meta" id="host-meta"></div>
+      </div>
+      <div class="panel-body">
+        <div class="kpi-grid">
+          <div class="kpi">
+            <div class="kpi-label">CPU</div>
+            <div class="kpi-value" id="kpi-cpu">--</div>
+            <div class="kpi-sub" id="kpi-cpu-sub">--</div>
+            <canvas class="kpi-spark" id="spark-cpu"></canvas>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">MEMORY</div>
+            <div class="kpi-value" id="kpi-ram">--</div>
+            <div class="kpi-sub" id="kpi-ram-sub">--</div>
+            <canvas class="kpi-spark" id="spark-ram"></canvas>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">CPU THERMALS</div>
+            <div class="kpi-value" id="kpi-ctemp">--</div>
+            <div class="kpi-sub" id="kpi-ctemp-sub">--</div>
+            <canvas class="kpi-spark" id="spark-ctemp"></canvas>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">GPU</div>
+            <div class="kpi-value" id="kpi-gpu">--</div>
+            <div class="kpi-sub" id="kpi-gpu-sub">--</div>
+            <canvas class="kpi-spark" id="spark-gpu"></canvas>
+          </div>
+        </div>
+        <div class="table-fit table-fit-small" style="--rows: 4">
+          <table class="data-table">
+            <thead><tr><th>SERVICE</th><th>STATE</th><th class="num">PID</th><th class="num">CPU</th><th class="num">MEM</th></tr></thead>
+            <tbody id="services-body"></tbody>
+          </table>
+        </div>
+        <div class="table-fit">
+          <table class="data-table">
+            <thead><tr><th>TOP PROCESS</th><th>USER</th><th class="num">PID</th><th class="num">CPU</th><th class="num">MEM</th></tr></thead>
+            <tbody id="top-body"></tbody>
+          </table>
+        </div>
+        <div class="panel-foot" id="host-foot"></div>
+      </div>
+    </section>
+
+    <!-- ── Policy Gate & Containment ── -->
+    <section class="panel" id="panel-policy">
+      <div class="panel-header">
+        <div class="title">POLICY GATE &amp; CONTAINMENT</div>
+        <div class="meta" id="gate-meta"></div>
+      </div>
+      <div class="panel-body">
+        <div class="status-strip" id="gate-strip"></div>
+        <div class="stat-grid">
+          <div class="stat"><span class="stat-label">ACTIVE TOKENS</span><span class="stat-value" id="st-tok-active">--</span><span class="stat-sub" id="st-tok-expired"></span></div>
+          <div class="stat"><span class="stat-label">REJECTED INTENTS</span><span class="stat-value" id="st-rejected">--</span><span class="stat-sub" id="st-rejected-sub"></span></div>
+          <div class="stat"><span class="stat-label">SENTINEL ALERTS</span><span class="stat-value" id="st-alerts">--</span><span class="stat-sub" id="st-alerts-sub"></span></div>
+          <div class="stat"><span class="stat-label">FIM / PRIV ALERTS</span><span class="stat-value" id="st-fim">--</span><span class="stat-sub" id="st-fim-sub"></span></div>
+          <div class="stat"><span class="stat-label">FIREWALL BLOCKS</span><span class="stat-value" id="st-blocks">--</span><span class="stat-sub" id="st-rules"></span></div>
+          <div class="stat"><span class="stat-label">YARA RULES</span><span class="stat-value" id="st-yara">--</span><span class="stat-sub">rules loaded</span></div>
+          <div class="stat"><span class="stat-label">HONEYPOT TRIPS</span><span class="stat-value" id="st-honeypot">--</span><span class="stat-sub" id="st-honeypot-sub"></span></div>
+          <div class="stat"><span class="stat-label">SANDBOX</span><span class="stat-value" id="st-sandbox">--</span><span class="stat-sub" id="st-cgroup"></span></div>
+        </div>
+        <div class="kv-line"><span class="kv-key">LATTICE</span><span id="lattice-display">--</span></div>
+        <div class="kv-line"><span class="kv-key">LAST ALERT</span><span id="last-alert-path">--</span></div>
+        <div class="table-fit">
+          <table class="data-table">
+            <thead><tr><th>TOKEN</th><th>CAPABILITY</th><th>TARGET</th><th class="num">TTL</th></tr></thead>
+            <tbody id="tokens-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Panel 2: Tactical Sentinel Operative (Kaia Avatar) ── -->
+    <section class="panel" id="panel-operative">
+      <div class="panel-header">
+        <div class="title">
+          TACTICAL SENTINEL OPERATIVE
+        </div>
+        <div class="meta">AI HOST GUARDIAN</div>
+      </div>
+      <div class="panel-body">
+        <div class="operative-container">
+          <!-- Kaia codec avatar (WebGL2 rigged portrait; js/kaia/) mounts into #kaia-character-container -->
+          <div class="operative-stage" id="kaia-operative-stage">
+            <div id="kaia-character-container"></div>
+            <div class="conduit-glow-border" id="conduit-glow"></div>
+
+            <div class="operative-corner operative-tl">
+              <span class="dot green"></span> <span id="biometric-pulse">60 BPM</span>
+            </div>
+            <div class="operative-corner operative-tr">
+              <span id="biometric-conduit">EMERALD / 60 BPM (STABLE)</span>
+              <span class="operative-stance" id="biometric-stance">VIGILANT DEFENSE</span>
+            </div>
+
+            <div class="operative-statusbar">
+              <span class="state-badge" id="operative-badge">STATUS: SENTINEL WATCH</span>
+              <span class="statusbar-sep">|</span>
+              <span class="zero-trust">ZERO-TRUST ENFORCED</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Process Executions (exec tracepoints) ── -->
+    <section class="panel" id="panel-procs">
+      <div class="panel-header">
+        <div class="title">PROCESS EXECUTIONS</div>
+        <div class="meta" id="procs-meta"></div>
+      </div>
+      <div class="panel-body">
+        <div class="table-fit">
+          <table class="data-table">
+            <thead><tr><th>TIME</th><th class="num">PID</th><th>PROCESS</th><th>PATH</th><th>VERDICT</th></tr></thead>
+            <tbody id="procs-body"></tbody>
+          </table>
+        </div>
+        <div class="panel-foot" id="procs-foot"></div>
+      </div>
+    </section>
+
+    <!-- ── Audit Log ── -->
+    <section class="panel" id="panel-audit">
+      <div class="panel-header">
+        <div class="title">AUDIT LOG</div>
+        <div class="filters">
+          <button class="filter-pill active" data-filter="all">All</button>
+          <button class="filter-pill" data-filter="denied">Denied</button>
+          <button class="filter-pill" data-filter="approved">Approved</button>
+          <button class="filter-pill" data-filter="system">System</button>
+        </div>
+      </div>
+      <div class="panel-body">
+        <div class="rate-chart">
+          <canvas id="lps-chart"></canvas>
+        </div>
+        <div class="table-fit">
+          <table class="data-table">
+            <thead><tr><th>TIME</th><th>RESULT</th><th>EVENT</th><th>SOURCE</th></tr></thead>
+            <tbody id="audit-body"></tbody>
+          </table>
+        </div>
+        <div class="panel-foot" id="audit-foot"></div>
+      </div>
+    </section>
+
+    <!-- ── Network ── -->
+    <section class="panel" id="panel-network">
+      <div class="panel-header">
+        <div class="title">NETWORK</div>
+        <div class="meta">PASSIVE DISCOVERY</div>
+      </div>
+      <div class="panel-body">
+        <div class="status-strip" id="net-strip"></div>
+        <div class="table-fit table-fit-small" style="--rows: 2">
+          <table class="data-table" id="blocks-table">
+            <thead><tr><th>BLOCKED</th><th>REASON</th><th>WHEN</th></tr></thead>
+            <tbody id="blocks-body"></tbody>
+          </table>
+        </div>
+        <div class="table-fit">
+          <table class="data-table" id="listen-table">
+            <thead><tr><th>LISTENING</th><th>PROTO</th><th>PROCESS</th><th>BIND</th></tr></thead>
+            <tbody id="listen-body"></tbody>
+          </table>
+        </div>
+        <div class="table-fit">
+          <table class="data-table" id="assets-table">
+            <thead><tr><th>LAN ASSET</th><th>MAC</th><th>VENDOR / HOST</th><th>VIA</th><th>LAST SEEN</th></tr></thead>
+            <tbody id="assets-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Panel 7: Command Terminal Drawer ── -->
+    <section class="panel" id="panel-terminal">
+      <div class="panel-header">
+        <div class="title">
+          <span class="dot cyan"></span> OPERATOR COMMAND CONSOLE // POLICY GATE DISPATCH
+        </div>
+        <div class="terminal-quick-actions">
+          <button class="cmd-btn" data-cmd="status">[STATUS]</button>
+          <button class="cmd-btn" data-cmd="show rules">[RULES]</button>
+          <button class="cmd-btn" data-cmd="show assets">[ASSETS]</button>
+          <button class="cmd-btn" data-cmd="show fim alerts">[FIM ALERTS]</button>
+          <button class="cmd-btn" data-cmd="show audit --since 2h">[AUDIT 2h]</button>
+          <button class="cmd-btn danger" data-cmd="lockdown">[LOCKDOWN]</button>
+          <button class="cmd-btn" data-cmd="clear">[CLEAR]</button>
+        </div>
+      </div>
+      <div class="panel-body" style="padding:6px 10px">
+        <div class="terminal-split">
+          <div class="terminal-console-output" id="terminal-output"></div>
+          <div class="terminal-input-bar">
+            <span class="terminal-prompt">KAIA_SENTINEL:~$</span>
+            <input type="text" class="terminal-input" id="terminal-input" placeholder="Enter command (e.g., 'block 192.168.1.100', 'show rules', 'help')..." autocomplete="off" spellcheck="false">
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script src="/static/js/charts.js"></script>
+  <script src="/static/js/panels.js"></script>
+  <script src="/static/js/kaia/kaia-shaders.js"></script>
+  <script src="/static/js/kaia/kaia-renderer.js"></script>
+  <script src="/static/js/kaia/kaia-animator.js"></script>
+  <script src="/static/js/kaia/kaia-codec.js"></script>
+  <script src="/static/js/kaia/kaia-sentinel-states.js"></script>
+  <script src="/static/js/operative.js"></script>
+  <script src="/static/js/terminal.js"></script>
+  <script src="/static/js/app.js"></script>
+</body>
+</html>

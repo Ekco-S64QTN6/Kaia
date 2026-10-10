@@ -24,7 +24,7 @@ import json
 import urllib.request
 import urllib.error
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple, Any
 from collections import deque
 from datetime import datetime, timedelta, UTC
 import queue
@@ -177,6 +177,8 @@ class KaiamonSnapshot:
     containment: dict = field(default_factory=dict)
     system_security: dict = field(default_factory=dict)
     snapshot_time: float = field(default_factory=time.time)
+    host_telemetry: dict = field(default_factory=dict)
+    services: Tuple[Any, ...] = field(default_factory=tuple)
 
 
 # ==================== LAYOUT MANAGER ====================
@@ -1452,11 +1454,21 @@ class CollectorManager:
         self._containment = ContainmentCollector(self._stop_event)
         self._system_security = SystemSecurityCollector(self._stop_event)
         self._log = AuditLogCollector(self._stop_event)
+        self._telemetry = TelemetryCollector(self._stop_event)
+        self._service = ServiceCollector(self._stop_event)
 
     @property
     def log_collector(self) -> AuditLogCollector:
         """Expose log collector for pause/filter/clear commands."""
         return self._log
+
+    @property
+    def telemetry_collector(self) -> TelemetryCollector:
+        return self._telemetry
+
+    @property
+    def service_collector(self) -> ServiceCollector:
+        return self._service
 
     def start_all(self) -> None:
         """Start every collector thread."""
@@ -1464,11 +1476,14 @@ class CollectorManager:
         self._containment.start()
         self._system_security.start()
         self._log.start()
+        self._telemetry.start()
+        self._service.start()
 
     def stop_all(self) -> None:
         """Signal shutdown and release all resources."""
         self._stop_event.set()
         self._log.stop()
+        self._telemetry.shutdown_nvml()
 
     def take_snapshot(self) -> KaiamonSnapshot:
         """
@@ -1481,6 +1496,8 @@ class CollectorManager:
         containment = self._containment.get_data()
         system_security = self._system_security.get_data()
         logs, lps, lps_scale, filter_mode, paused = self._log.get_data()
+        hw_telemetry = self._telemetry.get_data()
+        services = self._service.get_data()
 
         return KaiamonSnapshot(
             logs=logs,
@@ -1490,7 +1507,9 @@ class CollectorManager:
             paused=paused,
             threat_intel=threat_intel,
             containment=containment,
-            system_security=system_security
+            system_security=system_security,
+            host_telemetry=hw_telemetry,
+            services=services
         )
 
 
@@ -2295,9 +2314,22 @@ class KaiamonUI:
 # ==================== ENTRY POINT ====================
 
 def main() -> None:
-    """Launch the Kaiamon system companion."""
-    ui = KaiamonUI()
-    ui.run()
+    """Launch Kaia Dashboard (Cyber-Sentinel Operations Center or curses TUI)."""
+    import argparse
+    parser = argparse.ArgumentParser(description="Kaia System & Security Monitoring")
+    parser.add_argument("--tui", "--curses", action="store_true", help="Launch terminal curses TUI dashboard")
+    parser.add_argument("--web", action="store_true", default=False, help="Launch Cyber-Sentinel Web Operations Center")
+    parser.add_argument("--host", default="127.0.0.1", help="Web bridge host (Default: 127.0.0.1)")
+    parser.add_argument("--port", type=int, default=8765, help="Web bridge port (Default: 8765)")
+    args = parser.parse_args()
+
+    if args.tui:
+        ui = KaiamonUI()
+        ui.run()
+    else:
+        from core.web_bridge import KaiaWebBridge
+        bridge = KaiaWebBridge(host=args.host, port=args.port)
+        bridge.run_sync()
 
 
 if __name__ == "__main__":
