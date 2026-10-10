@@ -136,6 +136,7 @@ class KaiaAnimator {
     for (const k of Object.keys(PARAMS)) this.springs[k] = { x: NEUTRAL[k], v: 0, t: NEUTRAL[k] };
     this.preset = { ...NEUTRAL };
     this.mood = 'neutral';
+    this.offsets = {};                             // setOffsets(): continuous nudges on top of the mood
     this.still = false;
 
     this.time = 0;
@@ -148,6 +149,8 @@ class KaiaAnimator {
     this.blink = { next: rand(1, 3), start: -1, double: false };
     this.sacc = { next: 0.5, x: 0, y: 0 };
     this.mouth = { x: 0, v: 0, t: 0 };
+    this.look = null;                              // lookAt(): a gaze target that overrides the mood's
+    this.lookYaw = { x: 0, v: 0, t: 0 };           // ...and turns the head a little toward it
     this.speech = { text: '', i: 0, acc: 0, cps: 30, done: true };
     this.reactions = [];
     this.sweep = -1;
@@ -182,7 +185,7 @@ class KaiaAnimator {
     if (preset === this.mood) return;
     this.mood = preset;
     this.preset = { ...NEUTRAL, ...MOODS[preset] };
-    for (const k of Object.keys(PARAMS)) this.springs[k].t = this.preset[k];
+    this._retarget();
     // Expression changes ride on a blink, a small head re-settle and a glyph
     // resync sweep down the face.
     this._scheduleBlink(0.06);
@@ -192,6 +195,25 @@ class KaiaAnimator {
     }
     this.sweep = 0;
     this.signal = Math.max(this.signal, 0.08);
+  }
+
+  _retarget() {
+    for (const k of Object.keys(PARAMS)) this.springs[k].t = this.preset[k] + (this.offsets[k] || 0);
+  }
+
+  /**
+   * Continuous expression nudges added to the current mood's targets, e.g. a
+   * smile that follows a valence reading. Replaces the previous offsets; the
+   * springs carry the change smoothly. Keys are the PARAMS names.
+   */
+  setOffsets(offsets) {
+    this.offsets = { ...(offsets || {}) };
+    this._retarget();
+  }
+
+  /** Change behaviour knobs (pulseRate, breathRate, saccade, ...) without a mood transition. */
+  setBehavior(knobs) {
+    for (const [k, v] of Object.entries(knobs || {})) if (!(k in PARAMS) && typeof v === 'number') this.preset[k] = v;
   }
 
   /** Mouth flaps for a transmitted line (no subtitle; the line goes to chatter). */
@@ -211,6 +233,15 @@ class KaiaAnimator {
       this.sacc.y = rand(-0.2, 0.1);
       this.sacc.next = this.time + 0.9;
     }
+  }
+
+  /**
+   * Direct her gaze at something on screen, e.g. a sweep moving across a dial.
+   * x, y in gaze units (-1 left/up .. 1 right/down; ~±0.6 reads naturally).
+   * Call it every frame while it applies; it lapses `holdS` after the last call.
+   */
+  lookAt(x, y = 0, holdS = 0.5) {
+    this.look = { x: clamp(x, -1, 1), y: clamp(y, -1, 1), until: this.time + holdS };
   }
 
   setLink(ok) {
@@ -299,8 +330,12 @@ class KaiaAnimator {
       this.sacc.y = rand(-r * 0.5, r * 0.5);
       this.sacc.next = this.time + (glance ? rand(0.6, 1.4) : rand(0.5, 2.6) / Math.max(0.3, P.saccade));
     }
-    this.springs.gazeX.t = P.gazeX + this.sacc.x;
-    this.springs.gazeY.t = P.gazeY + this.sacc.y;
+    const look = this.look && this.time < this.look.until ? this.look : null;
+    const saccW = look ? 0.3 : 1;                  // fixations stay small while she watches something
+    this.springs.gazeX.t = (look ? look.x : P.gazeX) + this.sacc.x * saccW;
+    this.springs.gazeY.t = (look ? look.y : P.gazeY) + this.sacc.y * saccW;
+    this.lookYaw.t = look ? look.x * 0.18 : 0;
+    springStep(this.lookYaw, OMEGA.head, dt);
 
     // blinks
     if (this.blink.start < 0 && this.time >= this.blink.next) {
@@ -359,7 +394,7 @@ class KaiaAnimator {
       gazeX: S('gazeX'),
       gazeY: gy,
       roll: S('roll') + swayRoll,
-      yaw: S('yaw') + swayYaw,
+      yaw: S('yaw') + swayYaw + this.lookYaw.x,
       pitch: S('pitch') + swayPitch,
       zoom: S('zoom'),
       breath,
