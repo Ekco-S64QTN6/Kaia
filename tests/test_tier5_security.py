@@ -63,6 +63,9 @@ def test_rule_compilation():
 
 
 def test_yara_rule_validation():
+    from security import rule_engine
+    if not rule_engine.HAS_YARA:
+        pytest.skip("yara binary and yara-python not installed on host")
     engine = RuleEngine.get_instance()
     # A standard valid rule text
     rule_text = """
