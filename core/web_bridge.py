@@ -840,6 +840,29 @@ class KaiaWebBridge:
 
         return app
 
+    def _local_request_error(self, request: web.Request) -> Optional[str]:
+        """Reject non-loopback hosts and cross-origin browser requests."""
+        host = request.headers.get("Host", "").split(":", 1)[0].strip("[]").lower()
+        if host not in ALLOWED_LOOPBACK_HOSTS:
+            return "Invalid Host header"
+
+        origin = request.headers.get("Origin")
+        if origin:
+            from urllib.parse import urlsplit
+            try:
+                parsed_origin = urlsplit(origin)
+                origin_port = parsed_origin.port
+            except ValueError:
+                return "Invalid Origin"
+            origin_host = (parsed_origin.hostname or "").lower()
+            if parsed_origin.scheme not in ("http", "https") or origin_host not in ALLOWED_LOOPBACK_HOSTS:
+                return "Invalid Origin"
+            if origin_port not in (None, self.port):
+                return "Origin port mismatch"
+            if origin_host != host:
+                return "Origin host mismatch"
+        return None
+
     async def handle_index(self, request: web.Request) -> web.Response:
         """Serves index.html with Content-Type text/html."""
         index_path = os.path.join(STATIC_DIR, "index.html")
@@ -881,23 +904,11 @@ class KaiaWebBridge:
         except Exception:
             return web.json_response({"success": False, "error": "Invalid JSON body"}, status=400)
 
-        # This endpoint can dispatch privileged host actions. Loopback binding alone
-        # does not prevent DNS-rebinding or cross-origin browser requests.
-        host = request.headers.get("Host", "").split(":", 1)[0].strip("[]").lower()
-        if host not in ALLOWED_LOOPBACK_HOSTS:
-            return web.json_response({"success": False, "error": "Invalid Host header"}, status=403)
-
-        origin = request.headers.get("Origin")
-        if origin:
-            from urllib.parse import urlsplit
-            parsed_origin = urlsplit(origin)
-            origin_host = (parsed_origin.hostname or "").lower()
-            if parsed_origin.scheme not in ("http", "https") or origin_host not in ALLOWED_LOOPBACK_HOSTS:
-                return web.json_response({"success": False, "error": "Invalid Origin"}, status=403)
-            if parsed_origin.port not in (None, self.port):
-                return web.json_response({"success": False, "error": "Origin port mismatch"}, status=403)
-            if origin_host != host:
-                return web.json_response({"success": False, "error": "Origin host mismatch"}, status=403)
+        # Loopback binding alone does not prevent DNS rebinding or cross-origin
+        # browser requests; apply the same origin guard used by the WebSocket.
+        request_error = self._local_request_error(request)
+        if request_error:
+            return web.json_response({"success": False, "error": request_error}, status=403)
 
         if not isinstance(body, dict):
             return web.json_response({"success": False, "error": "JSON body must be an object"}, status=400)
@@ -913,6 +924,12 @@ class KaiaWebBridge:
 
     async def handle_websocket(self, request: web.Request) -> web.WebSocketResponse:
         """Read-only outbound telemetry WebSocket broadcast."""
+        # WebSockets are not protected by the browser's same-origin policy.
+        # Without this check, any visited site can open a socket to loopback
+        # and read process, listener, and host telemetry from the local daemon.
+        request_error = self._local_request_error(request)
+        if request_error:
+            raise web.HTTPForbidden(text=request_error)
         ws = web.WebSocketResponse(heartbeat=15.0)
         await ws.prepare(request)
         self.ws_clients.add(ws)
