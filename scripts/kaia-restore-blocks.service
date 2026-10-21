@@ -10,6 +10,7 @@ Wants=network-pre.target
 
 [Service]
 Type=oneshot
+Environment=KAIA_STATE_DIR=__STATE_DIR__
 RemainAfterExit=yes
 ExecStart=/usr/bin/env python3 /opt/kaia/scripts/kaia_restore_blocks.py
 # Restoring blocks must never prevent the host from booting.
