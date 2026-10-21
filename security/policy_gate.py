@@ -120,6 +120,7 @@ class PolicyGate:
         self.is_running = False
         self._thread = None
         self._audit_lock = threading.Lock()
+        self._client_slots = threading.BoundedSemaphore(self.MAX_IPC_CLIENTS)
 
     def start(self):
         """Starts the Unix socket policy gate daemon."""
@@ -191,7 +192,20 @@ class PolicyGate:
         while self.is_running:
             try:
                 conn, _ = self.server_socket.accept()
-                threading.Thread(target=self._handle_client, args=(conn,), daemon=True).start()
+                if not self._client_slots.acquire(blocking=False):
+                    logger.warning("Policy Gate IPC client limit reached; rejecting connection")
+                    conn.close()
+                    continue
+                try:
+                    threading.Thread(
+                        target=self._handle_client_with_slot,
+                        args=(conn,),
+                        daemon=True,
+                    ).start()
+                except Exception:
+                    self._client_slots.release()
+                    conn.close()
+                    raise
             except socket.timeout:
                 continue
             except Exception as e:
@@ -200,6 +214,13 @@ class PolicyGate:
                 break
 
     MAX_IPC_FRAME_BYTES = 1024 * 1024
+    MAX_IPC_CLIENTS = 16
+
+    def _handle_client_with_slot(self, conn):
+        try:
+            self._handle_client(conn)
+        finally:
+            self._client_slots.release()
 
     def _read_frame(self, conn):
         # Bound untrusted length before attempting to read the payload.
