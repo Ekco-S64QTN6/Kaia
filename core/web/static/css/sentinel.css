@@ -725,6 +725,7 @@ header {
 .risk-fill.warn { fill: var(--yellow); }
 .risk-fill.bad { fill: var(--red); }
 .risk-score { color: var(--text); text-align: right; font-variant-numeric: tabular-nums; }
+.risk-unknown { color: var(--dim); font-size: 8px; text-align: center; }
 
 .token-ledger {
   flex: 1;
