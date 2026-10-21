@@ -37,3 +37,18 @@ def test_system_state_mode_keeps_runtime_data_outside_read_only_checkout(tmp_pat
     assert Path(data["security"]) == state
     assert Path(data["threat_intel"]) == state / "threat_intel"
     assert (state / "threat_intel").is_dir()
+
+
+def test_installed_units_use_configured_state_directory():
+    repo_root = Path(__file__).resolve().parents[1]
+    policy_unit = (repo_root / "scripts/kaia-policy-gate.service").read_text()
+    restore_unit = (repo_root / "scripts/kaia-restore-blocks.service").read_text()
+    lockdown_unit = (repo_root / "scripts/kaia-lockdown.service").read_text()
+    installer = (repo_root / "scripts/install_services.sh").read_text()
+
+    assert "Environment=KAIA_STATE_DIR=__STATE_DIR__" in policy_unit
+    assert "ReadWritePaths=/run/kaiacord __STATE_DIR__" in policy_unit
+    assert "Environment=KAIA_STATE_DIR=__STATE_DIR__" in restore_unit
+    assert "ReadOnlyPaths=__STATE_DIR__" in restore_unit
+    assert "Environment=KAIA_STATE_DIR=__STATE_DIR__" in lockdown_unit
+    assert '"s|__STATE_DIR__|\${STATE_DIR}|g"' in installer
