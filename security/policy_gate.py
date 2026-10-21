@@ -248,11 +248,17 @@ class PolicyGate:
                 raise ValueError("IPC action must be a non-empty string")
             if not isinstance(nested_payload, dict):
                 raise ValueError("IPC payload must be a JSON object")
+            reserved = {"action", "capability_token"}.intersection(nested_payload)
+            if reserved:
+                raise ValueError(
+                    "IPC payload may not override envelope fields: "
+                    + ", ".join(sorted(reserved))
+                )
 
             flat_payload = {
+                **nested_payload,
                 "action": action,
                 "capability_token": request_payload.get("capability_token"),
-                **nested_payload,
             }
 
             response = self.evaluate_and_execute(flat_payload)
