@@ -24,7 +24,7 @@ Environment=PYTHONPATH=__DEPLOY_DIR__:__DEPLOY_DIR__/core
 # Environment=KAIA_CAPABILITY_TOKEN_SECRET=... in this tracked file, which put
 # the live capability-token signing key into public git history.
 EnvironmentFile=/etc/kaia/secret.env
-ExecStart=/usr/bin/python3 /opt/kaia/security/policy_gate.py
+ExecStart=/usr/bin/python3 __DEPLOY_DIR__/security/policy_gate.py
 Restart=always
 RestartSec=1
 RuntimeDirectory=kaiacord
