@@ -18,6 +18,14 @@ COLOR_YELLOW="\033[93m"
 COLOR_CYAN="\033[96m"
 COLOR_RESET="\033[0m"
 
+# Manual recovery is outside systemd's Environment= context; load the
+# root-owned state path written by the installer when one is available.
+if [ -r /etc/kaia/state.env ]; then
+    set -a
+    . /etc/kaia/state.env
+    set +a
+fi
+
 STATE_DIR="${KAIA_STATE_DIR:-/var/lib/kaia}"
 SNAPSHOT="${STATE_DIR}/pre-lockdown.nft"
 FORCE=0
