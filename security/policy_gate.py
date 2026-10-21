@@ -90,7 +90,7 @@ def sanitize_args(args: list) -> tuple:
     return True, sanitized
 
 
-def trigger_lockdown(reason: str) -> None:
+def trigger_lockdown(reason: str) -> bool:
     logger.critical(f"EMERGENCY LOCKDOWN TRIGGERED! Reason: {reason}")
     try:
         log_security_event(
@@ -103,13 +103,42 @@ def trigger_lockdown(reason: str) -> None:
         )
     except Exception as e:
         logger.error(f"Failed to log emergency_lockdown_triggered: {e}")
-        
-    # Run the lockdown systemd service
-    res = subprocess.run(["/usr/bin/systemctl", "start", "kaia-lockdown.service"], check=False)
-    if res.returncode != 0:
-        logger.warning("Systemd service kaia-lockdown.service failed or not installed. Falling back to direct script run.")
-        script_path = os.path.join(config.WORKSPACE_DIR, "scripts", "kaia-lockdown.sh")
-        subprocess.run(["/bin/bash", script_path], check=False)
+
+    # Prefer the managed unit, but do not report success if both paths fail.
+    try:
+        res = subprocess.run(
+            ["/usr/bin/systemctl", "start", "kaia-lockdown.service"],
+            check=False,
+            timeout=30,
+        )
+    except Exception as e:
+        logger.warning("Could not start lockdown service: %s", e)
+        res = None
+
+    if res is not None and res.returncode == 0:
+        return True
+
+    logger.warning(
+        "Systemd lockdown service failed or is unavailable. "
+        "Falling back to direct script execution."
+    )
+    script_path = os.path.join(config.WORKSPACE_DIR, "scripts", "kaia-lockdown.sh")
+    try:
+        fallback = subprocess.run(
+            ["/bin/bash", script_path], check=False, timeout=30
+        )
+    except Exception as e:
+        logger.critical("Direct lockdown fallback failed: %s", e)
+        raise RuntimeError(f"Emergency lockdown failed: {e}") from e
+
+    if fallback.returncode != 0:
+        logger.critical(
+            "Direct lockdown fallback exited with status %s", fallback.returncode
+        )
+        raise RuntimeError(
+            f"Emergency lockdown failed: fallback exited with status {fallback.returncode}"
+        )
+    return True
 
 
 class PolicyGate:
