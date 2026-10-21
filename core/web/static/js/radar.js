@@ -166,7 +166,7 @@ class NetworkRadarCanvas {
     ctx.font = '7px ui-monospace, monospace';
     ctx.fillStyle = this.gateOffline ? '#ff3860' : '#7283a4';
     ctx.textAlign = 'center';
-    ctx.fillText(this.gateOffline ? 'GATE OFFLINE' : `ACTIVE BLOCKS ${this.activeBlocks}`, cx, h - 4);
+    ctx.fillText(this.gateOffline ? 'GATE OFFLINE' : `INPUT DROP RULES ${this.inputDropRules}`, cx, h - 4);
     ctx.textAlign = 'left';
   }
 }
