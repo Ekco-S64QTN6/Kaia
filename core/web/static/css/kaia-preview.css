@@ -1,0 +1,11 @@
+    :root { --g: #4dff86; --gd: #1d6b3a; --bg: #020604; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--g); font: 13px 'JetBrains Mono', 'Share Tech Mono', monospace; min-height: 100vh; display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 16px; }
+    h1 { font-size: 13px; letter-spacing: 4px; opacity: .8; }
+    .codec { position: relative; width: min(920px, 100%); aspect-ratio: 16 / 10; border: 1px solid var(--gd); box-shadow: 0 0 24px rgba(77,255,134,.12) inset; }
+    .codec canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+    .controls { width: min(920px, 100%); display: flex; flex-wrap: wrap; gap: 6px; }
+    button { background: transparent; color: var(--g); border: 1px solid var(--gd); padding: 6px 10px; font: inherit; cursor: pointer; text-transform: uppercase; letter-spacing: 1px; }
+    button:hover, button.on { background: rgba(77,255,134,.12); border-color: var(--g); }
+    input { flex: 1; min-width: 200px; background: transparent; border: 1px solid var(--gd); color: var(--g); padding: 6px 10px; font: inherit; }
+    .row-label { width: 100%; opacity: .55; font-size: 11px; letter-spacing: 2px; margin-top: 4px; }
