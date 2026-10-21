@@ -12,7 +12,7 @@ class NetworkRadarCanvas {
     this.riskEl = riskEl;
     this.assets = [];
     this.blocks = [];
-    this.activeBlocks = 0;
+    this.inputDropRules = 0;
     this.gateOffline = false;
     this.lastNow = performance.now();
     this.angle = 0;
