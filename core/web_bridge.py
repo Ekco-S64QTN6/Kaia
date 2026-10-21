@@ -810,7 +810,7 @@ class KaiaWebBridge:
         resp = await handler(request)
         resp.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline'; "
+            "script-src 'self'; "
             "style-src 'self' 'unsafe-inline'; "
             "img-src 'self' data:; "
             "connect-src 'self' ws://127.0.0.1:* http://127.0.0.1:*; "
