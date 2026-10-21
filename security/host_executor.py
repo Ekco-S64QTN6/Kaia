@@ -79,13 +79,16 @@ class HostExecutor:
         # ufw's filter hook (priority 0), and `policy accept` means it only ever
         # drops what we explicitly add. Flush/inspect with:
         #     nft list table inet kaia_block
-        ensure_table = sudo + ["nft", "add", "table", "inet", table]
+        # These commands must be idempotent: a table/chain already created
+        # by a prior block is normal, not a failure. Without nft's -exist,
+        # every block after the first fails and boot restore stops after one.
+        ensure_table = sudo + ["nft", "-exist", "add", "table", "inet", table]
         ok, _, err = HostExecutor._run_cmd(ensure_table)
         if not ok:
-            return False, "", f"Failed to create nftables table '{table}': {err}"
+            return False, "", f"Failed to ensure nftables table '{table}': {err}"
 
         ensure_chain = sudo + [
-            "nft", "add", "chain", "inet", table, chain,
+            "nft", "-exist", "add", "chain", "inet", table, chain,
             f"{{ type filter hook input priority {prio}; policy accept; }}",
         ]
         ok, _, err = HostExecutor._run_cmd(ensure_chain)
