@@ -49,8 +49,8 @@ def test_openat2_perf_buffer_reaches_the_waterfall():
     bridge = (REPO_ROOT / "core" / "web_bridge.py").read_text()
     waterfall = (STATIC / "js" / "waterfall.js").read_text()
 
-    assert 'self.bpf["open_events"].open_perf_buffer(self._handle_open_event)' in ebpf
-    assert 'data.syscall_id = 2' in ebpf
+    assert 'self.bpf["openat2_events"].open_perf_buffer(self._handle_openat2_event)' in ebpf
+    assert 'openat2_events.perf_submit(args, &data, sizeof(data))' in ebpf
     assert "def get_recent_opens" in ebpf
     assert "raw_opens = ebpf_engine.get_recent_opens(30)" in bridge
     assert '"syscall": ev.get("syscall", "sys_enter_openat")' in bridge
