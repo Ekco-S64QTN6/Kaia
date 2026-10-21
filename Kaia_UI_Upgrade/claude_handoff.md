@@ -218,7 +218,7 @@ As specified in [`2026-10-07-kaia-hardened-security-ui-upgrade-design-spec.md`](
   - Implemented the userspace process/file fallback sampler (`ProcessSyscallSampler`) when BCC kernel headers are absent.
   - Implemented the dual-mode CLI argument parser in `kaia_dashboard.py` (`--web` by default, `--tui` / `--curses` legacy terminal).
   - Designed the **Cyber-Sentinel UI Design System** (`core/web/static/css/sentinel.css`): CRT scanline overlay, 32px cyber grid, tactical corner brackets, glowing neon accents (`#00f0ff`, `#3dff8a`, `#ffe45c`, `#ff3860`, `#a259ff`), LED meters.
-  - Implemented the **process-event waterfall** (`core/web/static/js/waterfall.js`) as a Canvas timeline of actual `ebpf_waterfall` snapshot events with disposition colors and a cursor inspector. Animation is drawn at display cadence; underlying snapshot delivery remains 5 Hz, and `observed` events are not labeled safe.
+  - Implemented the **process-event waterfall** (`core/web/static/js/waterfall.js`) as a Canvas timeline of actual `ebpf_waterfall` snapshot events, including `sys_enter_execve` plus the now-wired `sys_enter_openat2` perf-buffer path, with disposition colors and a cursor inspector. It intentionally does not stream every high-volume `openat` call. Animation is drawn at display cadence; underlying snapshot delivery remains 5 Hz, and `observed` events are not labeled safe.
   - Implemented the **LPS oscillogram** in `core/web/static/js/charts.js` (there is no separate `oscillogram.js` module): rolling 60-second Canvas curve, optional gradient area fill, adaptive scale, and visible 35 LPS surge threshold. The plot can redraw at ~60 FPS, but new measurements still arrive at the bridge's 5 Hz rate.
   - Implemented the **passive-discovery network radar** (`core/web/static/js/radar.js`): rotating sweep, observed LAN asset nodes, recent blocked IP nodes, and reputation-score bars from collector data. Node placement is a visual distribution, not geographic topology; scores are omitted when source data is absent.
   - Implemented the **capability token ledger** (`core/web/static/js/tokens.js`): compact cards for token fingerprint, scope and target, with SVG TTL rings based on snapshot expiry timestamps.
@@ -230,6 +230,7 @@ As specified in [`2026-10-07-kaia-hardened-security-ui-upgrade-design-spec.md`](
   - The WebGL2 codec portrait is now mounted automatically by `SentinelAvatarController` and reacts to all seven sentinel states through `KaiaAnimator` presets. This is a rigged **portrait**, not the specified full-body transparent crystal-polymer android. Full-body artwork/mesh or a full-body sprite sequence, including limbs, optical spine and material treatment, remains unfinished; the portrait assets cannot satisfy that part of Section 5.
   - Run browser-level verification for all seven mood transitions, WebGL2 failure fallback, resize handling, resource use, and the dashboard under strict CSP.
 
+  - Orbitron and JetBrains Mono are referenced as local-first CSS font choices, but the repository has no bundled WOFF/TTF/OTF assets. It remains visually functional offline with system-font fallbacks, but Section 3's exact locally-packaged-font requirement is not met.
   - Optional Web Audio alert/tick synthesizer remains unimplemented.
 
 ---
