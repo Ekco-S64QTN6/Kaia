@@ -97,12 +97,7 @@
         </div>
         <div class="kv-line"><span class="kv-key">LATTICE</span><span id="lattice-display">--</span></div>
         <div class="kv-line"><span class="kv-key">LAST ALERT</span><span id="last-alert-path">--</span></div>
-        <div class="table-fit">
-          <table class="data-table">
-            <thead><tr><th>TOKEN</th><th>CAPABILITY</th><th>TARGET</th><th class="num">TTL</th></tr></thead>
-            <tbody id="tokens-body"></tbody>
-          </table>
-        </div>
+        <div id="token-ledger" class="token-ledger" aria-label="Active signed capability tokens"></div>
       </div>
     </section>
 
@@ -146,6 +141,11 @@
         <div class="meta" id="procs-meta"></div>
       </div>
       <div class="panel-body">
+        <div class="waterfall-wrap">
+          <div class="widget-head"><span>PROCESS EVENT WATERFALL / 60 S</span><span id="waterfall-meta">AWAITING SOURCE</span></div>
+          <canvas id="waterfall-canvas" role="img" aria-label="Recent process and file events plotted by timestamp"></canvas>
+          <div class="waterfall-inspector" id="waterfall-inspector" aria-live="polite">No process event selected.</div>
+        </div>
         <div class="table-fit">
           <table class="data-table">
             <thead><tr><th>TIME</th><th class="num">PID</th><th>PROCESS</th><th>PATH</th><th>VERDICT</th></tr></thead>
@@ -185,10 +185,17 @@
     <section class="panel" id="panel-network">
       <div class="panel-header">
         <div class="title">NETWORK</div>
-        <div class="meta">PASSIVE DISCOVERY</div>
+        <div class="meta" id="network-meta">PASSIVE DISCOVERY</div>
       </div>
       <div class="panel-body">
         <div class="status-strip" id="net-strip"></div>
+        <div class="network-radar-wrap">
+          <canvas id="network-radar" role="img" aria-label="Passive-discovery LAN assets and recently blocked IPs"></canvas>
+          <div class="radar-risk-wrap">
+            <div class="widget-head"><span>LOCAL IP REPUTATION</span><span>0–100 · HIGHER=CLEANER</span></div>
+            <div id="radar-risk" class="radar-risk" aria-label="Recent block reputation scores"></div>
+          </div>
+        </div>
         <div class="table-fit table-fit-small table-blocks">
           <table class="data-table" id="blocks-table">
             <thead><tr><th>BLOCKED</th><th>REASON</th><th>WHEN</th></tr></thead>
@@ -240,6 +247,9 @@
 
   <script src="/static/js/charts.js"></script>
   <script src="/static/js/panels.js"></script>
+  <script src="/static/js/waterfall.js"></script>
+  <script src="/static/js/radar.js"></script>
+  <script src="/static/js/tokens.js"></script>
   <script src="/static/js/kaia/kaia-shaders.js"></script>
   <script src="/static/js/kaia/kaia-renderer.js"></script>
   <script src="/static/js/kaia/kaia-animator.js"></script>
