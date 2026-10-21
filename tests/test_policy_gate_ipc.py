@@ -67,3 +67,29 @@ def test_ipc_approval_flag_is_false_when_executor_errors():
         assert response["executor_response"]["status"] == "error"
     finally:
         left.close()
+
+
+def test_ipc_payload_cannot_override_envelope_fields():
+    gate = PolicyGate()
+    left, right = socket.socketpair()
+    try:
+        left.sendall(_frame(json.dumps({
+            "request_id": "test",
+            "action": "diagnostics",
+            "capability_token": None,
+            "payload": {"action": "lockdown", "capability_token": "attacker-value"},
+        }).encode()))
+        gate.evaluate_and_execute = lambda payload: pytest.fail("invalid envelope must not be evaluated")
+        gate._handle_client(right)
+        header = bytearray()
+        while len(header) < 4:
+            header.extend(left.recv(4 - len(header)))
+        length = int.from_bytes(header, "big")
+        body = bytearray()
+        while len(body) < length:
+            body.extend(left.recv(length - len(body)))
+        response = json.loads(body.decode())
+        assert response["approved"] is False
+        assert "may not override envelope fields" in response["executor_response"]["message"]
+    finally:
+        left.close()
