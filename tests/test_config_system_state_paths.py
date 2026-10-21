@@ -63,10 +63,10 @@ def test_installer_persists_state_path_for_manual_unlock():
     assert '. /etc/kaia/state.env' in unlock
 
 
-def test_config_treats_explicit_state_path_as_system_mode():
+def test_config_treats_explicit_state_path_as_system_mode(tmp_path):
     repo_root = Path(__file__).resolve().parents[1]
-    state_dir = repo_root / "storage" / "test-explicit-state"
-    state_dir.mkdir(parents=True, exist_ok=True)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
     env = os.environ.copy()
     env["KAIA_STATE_DIR"] = str(state_dir)
     env["KAIA_CAPABILITY_TOKEN_SECRET"] = "test-only-secret"
