@@ -24,6 +24,14 @@ rsync -a --delete \
     --exclude '.pytest_cache/' --exclude 'tests/' \
     "$KAIA_PROJECT_DIR/" "$DEPLOY_DIR/"
 
+# rsync protects excluded destination files from --delete by default. Explicitly
+# remove secrets and VCS metadata left by older deployments before normalizing
+# permissions; otherwise an old .env can survive the sync and become mode 0644.
+rm -f "$DEPLOY_DIR/.env"
+rm -rf "$DEPLOY_DIR/.git" "$DEPLOY_DIR/.venv"
+find "$DEPLOY_DIR" -type d -name '__pycache__' -prune -exec rm -rf {} +
+find "$DEPLOY_DIR" -type f -name '*.pyc' -delete
+
 chown -R root:root "$DEPLOY_DIR"
 find "$DEPLOY_DIR" -type d -exec chmod 755 {} +
 find "$DEPLOY_DIR" -type f -exec chmod 644 {} +
