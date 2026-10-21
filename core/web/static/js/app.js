@@ -220,7 +220,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const rc = ti.rules_counts || {};
     const hp = ti.honeypot_status || {};
     $('net-strip').innerHTML =
-      `<span class="item">Active blocks <b>${esc(ti.active_blocks ?? '--')}</b></span>`
+      `<span class="item">Input drop/reject rules <b>${esc(ti.active_blocks ?? '--')}</b></span>`
       + `<span class="item">nft rules <b>${esc(rc.input ?? '-')}</b> in · <b>${esc(rc.forward ?? '-')}</b> fwd · <b>${esc(rc.output ?? '-')}</b> out</span>`
       + `<span class="item">Honeypot <b class="${hp.total_triggers ? 'bad' : ''}">${esc(hp.total_triggers ?? 0)}</b> trips</span>`
       + (ti.gate_offline ? '<span class="item"><b class="bad">GATE OFFLINE: firewall state unverified</b></span>' : '');
