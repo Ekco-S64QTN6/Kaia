@@ -60,7 +60,7 @@ struct open_event_t {
     char filename[256];
     u32 flags;
 };
-BPF_PERF_OUTPUT(open_events);
+BPF_PERF_OUTPUT(openat2_events);
 BPF_PERF_OUTPUT(honeypot_events);
 
 struct delete_event_t {
@@ -148,7 +148,7 @@ TRACEPOINT_PROBE(syscalls, sys_enter_openat) {
     bpf_get_current_comm(&data.comm, sizeof(data.comm));
     bpf_probe_read_user_str(&data.filename, sizeof(data.filename), args->filename);
     data.flags = args->flags;
-    
+
     struct honeypot_key_t key = {};
     __builtin_memcpy(key.path, data.filename, sizeof(key.path));
     u32 *val = honeypot_paths.lookup(&key);
@@ -156,7 +156,9 @@ TRACEPOINT_PROBE(syscalls, sys_enter_openat) {
         honeypot_events.perf_submit(args, &data, sizeof(data));
     }
     
-    open_events.perf_submit(args, &data, sizeof(data));
+    // Do not stream every openat call through Python: that event is very high
+    // volume. The dashboard specifically needs openat2, while honeypot matches
+    // from openat continue to use the dedicated honeypot_events buffer.
     return 0;
 }
 
@@ -174,7 +176,7 @@ TRACEPOINT_PROBE(syscalls, sys_enter_openat2) {
         honeypot_events.perf_submit(args, &data, sizeof(data));
     }
 
-    open_events.perf_submit(args, &data, sizeof(data));
+    openat2_events.perf_submit(args, &data, sizeof(data));
     return 0;
 }
 
@@ -205,6 +207,7 @@ class EBPFTelemetryEngine:
         self.stop_event = threading.Event()
         
         self.exec_deque = deque(maxlen=500)
+        self.open_deque = deque(maxlen=500)
         self.conn_deque = deque(maxlen=500)
         self.retrans_deque = deque(maxlen=500)
         self.priv_deque = deque(maxlen=500)
@@ -223,6 +226,7 @@ class EBPFTelemetryEngine:
             
             # Register perf buffer callbacks
             self.bpf["exec_events"].open_perf_buffer(self._handle_exec_event)
+            self.bpf["openat2_events"].open_perf_buffer(self._handle_openat2_event)
             self.bpf["tcp_connect_events"].open_perf_buffer(self._handle_tcp_connect)
             self.bpf["tcp_retransmit_events"].open_perf_buffer(self._handle_tcp_retransmit)
             self.bpf["privilege_events"].open_perf_buffer(self._handle_privilege_event)
@@ -282,6 +286,25 @@ class EBPFTelemetryEngine:
                 "comm": clean_comm,
                 "filename": clean_filename,
                 "timestamp": time.time()
+            })
+
+    def _handle_openat2_event(self, cpu, data, size):
+        event = self.bpf["openat2_events"].event(data)
+        filename = event.filename.decode("utf-8", "ignore")
+        comm = event.comm.decode("utf-8", "ignore")
+        from security.telemetry_sanitizer import sanitize_telemetry
+        clean = sanitize_telemetry({
+            "pid": str(event.pid),
+            "comm": comm,
+            "path": filename,
+        })
+        with self.lock:
+            self.open_deque.append({
+                "syscall": "sys_enter_openat2",
+                "pid": int(clean.get("pid") or event.pid),
+                "comm": clean.get("comm", ""),
+                "filename": clean.get("path", ""),
+                "timestamp": time.time(),
             })
 
     def _handle_tcp_connect(self, cpu, data, size):
@@ -384,6 +407,10 @@ class EBPFTelemetryEngine:
     def get_recent_execs(self, n=20) -> list:
         with self.lock:
             return list(self.exec_deque)[-n:]
+
+    def get_recent_opens(self, n=20) -> list:
+        with self.lock:
+            return list(self.open_deque)[-n:]
 
     def get_privilege_escalations(self, n=10) -> list:
         with self.lock:

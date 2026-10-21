@@ -25,6 +25,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const sparkGpu = spark('spark-gpu', '#00f0ff');
   const lpsChart = new LineChart($('lps-chart'), {
     color: '#3dff8a', autoMax: 5, unit: 'logs/s', label: 'log events per second (60 s)',
+    frameIntervalMs: 16, areaFill: true, threshold: 35, thresholdLabel: 'AUDIT SURGE 35 LPS',
     valueFormat: (v) => v.toFixed(1),
   });
 
@@ -32,7 +33,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const tServices = new FitTable('services-body', 5);
   const tTop = new FitTable('top-body', 5);
   const tListen = new FitTable('listen-body', 4);
-  const tTokens = new FitTable('tokens-body', 4);
+  const tokenLedger = new CapabilityTokenLedger($('token-ledger'));
+  const waterfall = new SyscallWaterfallCanvas($('waterfall-canvas'), $('waterfall-meta'), $('waterfall-inspector'));
+  const networkRadar = new NetworkRadarCanvas($('network-radar'), $('network-meta'), $('radar-risk'));
   const tProcs = new FitTable('procs-body', 5);
   const tAudit = new FitTable('audit-body', 4);
   const tBlocks = new FitTable('blocks-body', 3);
@@ -164,18 +167,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const lastAlert = con.last_alert_path && con.last_alert_path !== 'None' ? con.last_alert_path : 'none recorded';
     setText('last-alert-path', lastAlert);
 
-    const live = (sec.token_cards || []).filter((t) => !t.is_expired);
-    tTokens.render(live.map((t) => {
-      const m = Math.floor(t.ttl_seconds / 60), s = t.ttl_seconds % 60;
-      return `<tr><td class="mid">${esc(t.id)}</td><td>${esc(t.capability)}</td><td class="mid">${esc(t.target)}</td>`
-        + `<td class="num">${m}:${String(s).padStart(2, '0')}</td></tr>`;
-    }), 'No active capability tokens');
+    tokenLedger.render(sec.token_cards || []);
   }
 
   // ── Process executions ──
   const seenPids = new Set();
   function renderProcs(snap) {
     const events = snap.ebpf_waterfall || [];
+    waterfall.update(events, snap.process_source || '');
     const byPid = new Map();
     for (const ev of events) if (!byPid.has(ev.pid)) byPid.set(ev.pid, ev);   // newest first already
     const rows = [...byPid.values()];
@@ -217,10 +216,11 @@ document.addEventListener('DOMContentLoaded', () => {
   // ── Network ──
   function renderNetwork(snap) {
     const ti = snap.threat_intel || {};
+    networkRadar.update(ti);
     const rc = ti.rules_counts || {};
     const hp = ti.honeypot_status || {};
     $('net-strip').innerHTML =
-      `<span class="item">Active blocks <b>${esc(ti.active_blocks ?? '--')}</b></span>`
+      `<span class="item">Input drop/reject rules <b>${esc(ti.active_blocks ?? '--')}</b></span>`
       + `<span class="item">nft rules <b>${esc(rc.input ?? '-')}</b> in · <b>${esc(rc.forward ?? '-')}</b> fwd · <b>${esc(rc.output ?? '-')}</b> out</span>`
       + `<span class="item">Honeypot <b class="${hp.total_triggers ? 'bad' : ''}">${esc(hp.total_triggers ?? 0)}</b> trips</span>`
       + (ti.gate_offline ? '<span class="item"><b class="bad">GATE OFFLINE: firewall state unverified</b></span>' : '');

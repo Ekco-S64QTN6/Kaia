@@ -48,11 +48,22 @@ class LineChart {
       });
       canvas.addEventListener('mouseleave', () => (this.hoverX = null));
     }
-    const tick = () => {
-      this.draw();
-      setTimeout(() => requestAnimationFrame(tick), 66);
+    this.frameIntervalMs = Number.isFinite(this.o.frameIntervalMs) ? Math.max(16, this.o.frameIntervalMs) : 66;
+    this._lastDrawAt = 0;
+    const tick = (now) => {
+      if (now - this._lastDrawAt >= this.frameIntervalMs) {
+        this.draw();
+        this._lastDrawAt = now;
+      }
+      // Keep low-rate sparklines on a timer instead of waking them every
+      // display frame; only the LPS oscillogram opts into continuous 60 Hz RAF.
+      if (this.frameIntervalMs >= 60) {
+        setTimeout(() => requestAnimationFrame(tick), this.frameIntervalMs);
+      } else {
+        requestAnimationFrame(tick);
+      }
     };
-    tick();
+    requestAnimationFrame(tick);
   }
 
   _resize() {
@@ -81,7 +92,9 @@ class LineChart {
   _yRange() {
     const o = this.o;
     if (o.autoMax) {
-      const max = Math.max(0, ...this.points.map((p) => p.v));
+      const observedMax = Math.max(0, ...this.points.map((p) => p.v));
+      const threshold = Number.isFinite(o.threshold) ? o.threshold : 0;
+      const max = Math.max(observedMax, threshold);
       const top = niceMax(max * 1.08, o.autoMax);
       const steps = this.h < 110 ? [0, 0.5, 1] : [0, 0.25, 0.5, 0.75, 1];   // small charts: fewer ticks
       return { min: 0, max: top, ticks: steps.map((f) => f * top) };
@@ -138,8 +151,28 @@ class LineChart {
       }
     }
 
+    const drawThreshold = () => {
+      if (o.threshold === undefined || o.threshold < yr.min || o.threshold > yr.max) return;
+      const ty = Y(o.threshold);
+      ctx.save();
+      ctx.strokeStyle = o.thresholdColor || '#ff3860';
+      ctx.fillStyle = o.thresholdColor || '#ff3860';
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      ctx.moveTo(pad.l, Math.round(ty) + 0.5);
+      ctx.lineTo(w - pad.r, Math.round(ty) + 0.5);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'bottom';
+      ctx.font = `9px ${MONO}`;
+      ctx.fillText(o.thresholdLabel || `THRESHOLD ${o.threshold}`, w - pad.r - 2, ty - 2);
+      ctx.restore();
+    };
+
     const pts = this.points.filter((p) => p.t >= t0 - 1);
     if (pts.length < 2) {
+      drawThreshold();
       if (o.axes) {
         ctx.fillStyle = INK.muted;
         ctx.textAlign = 'center';
@@ -153,6 +186,20 @@ class LineChart {
     ctx.beginPath();
     ctx.rect(pad.l, 0, pw, h);
     ctx.clip();
+    // Optional translucent area fill for the LPS oscillogram.
+    if (o.areaFill) {
+      const grad = ctx.createLinearGradient(0, pad.t, 0, pad.t + ph);
+      grad.addColorStop(0, o.areaTop || 'rgba(61, 255, 138, 0.24)');
+      grad.addColorStop(1, o.areaBottom || 'rgba(61, 255, 138, 0.015)');
+      ctx.beginPath();
+      pts.forEach((p, i) => (i ? ctx.lineTo(X(p.t), Y(p.v)) : ctx.moveTo(X(p.t), Y(p.v))));
+      ctx.lineTo(X(pts[pts.length - 1].t), pad.t + ph);
+      ctx.lineTo(X(pts[0].t), pad.t + ph);
+      ctx.closePath();
+      ctx.fillStyle = grad;
+      ctx.fill();
+    }
+
     ctx.strokeStyle = o.color;
     ctx.lineWidth = o.axes ? 1.5 : 1.25;
     ctx.lineJoin = 'round';
@@ -160,6 +207,7 @@ class LineChart {
     pts.forEach((p, i) => (i ? ctx.lineTo(X(p.t), Y(p.v)) : ctx.moveTo(X(p.t), Y(p.v))));
     ctx.stroke();
     ctx.restore();
+    drawThreshold();
 
     // hover: crosshair + value at nearest reading
     if (this.hoverX !== null && this.hoverX > pad.l && this.hoverX < w - pad.r) {

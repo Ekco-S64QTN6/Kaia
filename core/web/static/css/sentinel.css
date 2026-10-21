@@ -645,3 +645,145 @@ header {
 .term-text { color: var(--text); }
 .term-text-bright { color: var(--text-bright); }
 .term-bold { font-weight: bold; }
+
+/* ── Real-time event / network visualization widgets ── */
+.widget-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  color: var(--dim);
+  font: 9px var(--font-disp);
+  letter-spacing: 1px;
+  white-space: nowrap;
+}
+.waterfall-wrap {
+  flex: 0 0 80px;
+  min-height: 80px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid var(--line);
+  background: rgba(2, 6, 12, 0.9);
+  padding: 4px 6px;
+  overflow: hidden;
+}
+#waterfall-canvas {
+  width: 100%;
+  height: 51px;
+  min-height: 51px;
+  display: block;
+}
+.waterfall-inspector {
+  min-width: 0;
+  color: var(--mid);
+  font-size: 9px;
+  line-height: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.network-radar-wrap {
+  flex: 0 0 91px;
+  min-height: 91px;
+  display: grid;
+  grid-template-columns: minmax(105px, 0.95fr) minmax(110px, 1.05fr);
+  gap: 8px;
+  border: 1px solid var(--line);
+  background: rgba(2, 6, 12, 0.9);
+  padding: 4px 6px;
+  overflow: hidden;
+}
+#network-radar {
+  display: block;
+  width: 100%;
+  height: 81px;
+  min-width: 0;
+}
+.radar-risk-wrap {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  overflow: hidden;
+  padding-top: 2px;
+}
+.radar-risk {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow: hidden;
+  min-height: 0;
+}
+.radar-risk-empty {
+  color: var(--dim);
+  font-size: 10px;
+  padding-top: 8px;
+}
+.risk-row {
+  display: grid;
+  grid-template-columns: minmax(48px, 0.9fr) minmax(35px, 1.2fr) 22px;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  font-size: 9px;
+}
+.risk-ip {
+  color: var(--mid);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.risk-meter { width: 100%; height: 7px; display: block; }
+.risk-track { fill: #172036; }
+.risk-fill { fill: var(--green); }
+.risk-fill.warn { fill: var(--yellow); }
+.risk-fill.bad { fill: var(--red); }
+.risk-score { color: var(--text); text-align: right; font-variant-numeric: tabular-nums; }
+.risk-unknown { color: var(--dim); font-size: 8px; text-align: center; }
+
+.token-ledger {
+  flex: 1;
+  min-height: 42px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: 44px;
+  gap: 4px;
+  overflow: auto;
+  padding-right: 2px;
+}
+.token-card {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--line-bright);
+  background: rgba(4, 8, 16, 0.72);
+  padding: 3px 5px;
+}
+.token-card-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.token-id { color: var(--cyan); font: 9px var(--font-disp); letter-spacing: .6px; }
+.token-scope { color: var(--text); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.token-target { color: var(--dim); font-size: 9px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.token-ring { width: 34px; height: 34px; flex: 0 0 34px; overflow: visible; }
+.token-ring-track { fill: none; stroke: var(--line-bright); stroke-width: 3; }
+.token-ring-progress { fill: none; stroke: var(--green); stroke-width: 3; stroke-linecap: round; }
+.token-ring-progress.warn { stroke: var(--yellow); }
+.token-ring-progress.bad { stroke: var(--red); }
+.token-ring text { fill: var(--text); font: 7px var(--font-mono); text-anchor: middle; dominant-baseline: central; }
+.token-empty { grid-column: 1 / -1; color: var(--dim); font-size: 10px; text-align: center; padding: 10px; }
+
+@media (max-width: 900px) {
+  #app {
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto;
+    grid-template-areas: "header" "host" "policy" "kaia" "procs" "audit" "network" "console";
+  }
+  html, body { height: auto; overflow: auto; }
+  header { min-height: 38px; height: auto; flex-wrap: wrap; }
+  .panel { min-height: 260px; }
+  #panel-terminal { min-height: 230px; }
+}
