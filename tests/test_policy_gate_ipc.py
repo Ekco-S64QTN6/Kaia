@@ -57,7 +57,9 @@ def test_ipc_approval_flag_is_false_when_executor_errors():
             "payload": {},
         }).encode()))
         gate._handle_client(right)
-        header = left.recv(4)
+        header = bytearray()
+        while len(header) < 4:
+            header.extend(left.recv(4 - len(header)))
         length = int.from_bytes(header, "big")
         body = bytearray()
         while len(body) < length:
