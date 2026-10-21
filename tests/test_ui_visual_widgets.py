@@ -42,6 +42,8 @@ def test_radar_uses_observed_reputation_scores():
     assert "score <= 30" in radar
     assert "score <= 65" in radar
     assert "UNRATED" in radar
+    assert "INPUT DROP RULES" in radar
+    assert "this.activeBlocks" not in radar
 
 
 def test_openat2_perf_buffer_reaches_the_waterfall():
