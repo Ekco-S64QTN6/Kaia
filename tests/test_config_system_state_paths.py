@@ -88,3 +88,14 @@ def test_installed_units_use_configured_deployment_directory():
     assert "ExecStart=/usr/bin/python3 __DEPLOY_DIR__/security/policy_gate.py" in policy_unit
     assert "ExecStart=/usr/bin/env python3 __DEPLOY_DIR__/scripts/kaia_restore_blocks.py" in restore_unit
     assert "Environment=KAIA_PROJECT_DIR=__DEPLOY_DIR__" in lockdown_unit
+
+
+def test_installer_validates_paths_before_privileged_copy():
+    repo_root = Path(__file__).resolve().parents[1]
+    installer = (repo_root / "scripts/install_services.sh").read_text()
+    validation = installer.index('DEPLOY_DIR="$(realpath -m -- "$DEPLOY_DIR")"')
+    rsync = installer.index("rsync -a --delete")
+
+    assert validation < rsync
+    assert 'must not be the filesystem root' in installer
+    assert 'must not be inside DEPLOY_DIR' in installer
