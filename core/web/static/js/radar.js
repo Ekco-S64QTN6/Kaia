@@ -42,7 +42,7 @@ class NetworkRadarCanvas {
     const data = threatIntel || {};
     this.assets = Array.isArray(data.recent_assets) ? data.recent_assets.filter((x) => x && x.ip) : [];
     this.blocks = Array.isArray(data.recent_blocks) ? data.recent_blocks.filter((x) => x && x.ip) : [];
-    this.activeBlocks = Number.isFinite(Number(data.active_blocks)) ? Number(data.active_blocks) : 0;
+    this.inputDropRules = Number.isFinite(Number(data.active_blocks)) ? Number(data.active_blocks) : 0;
     this.gateOffline = Boolean(data.gate_offline);
     if (this.metaEl) {
       const state = this.gateOffline ? ' · GATE OFFLINE' : '';
