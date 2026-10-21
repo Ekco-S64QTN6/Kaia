@@ -9,3 +9,17 @@
     button:hover, button.on { background: rgba(77,255,134,.12); border-color: var(--g); }
     input { flex: 1; min-width: 200px; background: transparent; border: 1px solid var(--gd); color: var(--g); padding: 6px 10px; font: inherit; }
     .row-label { width: 100%; opacity: .55; font-size: 11px; letter-spacing: 2px; margin-top: 4px; }
+
+
+/* Optional renderer performance overlay enabled by ?stats. */
+.stats-overlay {
+  position: fixed;
+  top: 8px;
+  right: 10px;
+  z-index: 10;
+  font-size: 11px;
+  opacity: 0.8;
+  color: var(--g);
+  background: rgba(2, 6, 4, 0.85);
+  padding: 3px 5px;
+}
