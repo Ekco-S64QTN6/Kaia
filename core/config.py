@@ -49,16 +49,17 @@ DOWNLOADS_DIR = Path.home() / "Downloads"
 LOG_DIR = BASE_DIR / "logs"
 LOG_FILE_PATH = LOG_DIR / "kaia.log"
 
-# Ensure only writable data directories are created. In system-service mode,
-# /opt/kaia/storage is not writable under ProtectSystem=strict.
-GENERAL_KNOWLEDGE_DIR.mkdir(exist_ok=True)
-PERSONAL_CONTEXT_DIR.mkdir(exist_ok=True)
-if STATE_DIR_IS_SYSTEM:
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    THREAT_INTEL_DIR.mkdir(parents=True, exist_ok=True)
-else:
+# Ensure only writable data directories are created. The installed root
+# service has a read-only /opt/kaia tree, and personal_context is not deployed
+# as a tracked directory; the policy daemon does not need to create either path.
+if not STATE_DIR_IS_SYSTEM:
+    GENERAL_KNOWLEDGE_DIR.mkdir(exist_ok=True)
+    PERSONAL_CONTEXT_DIR.mkdir(exist_ok=True)
     STORAGE_DIR.mkdir(exist_ok=True)
     SECURITY_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+    THREAT_INTEL_DIR.mkdir(parents=True, exist_ok=True)
+else:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
     THREAT_INTEL_DIR.mkdir(parents=True, exist_ok=True)
 LOG_DIR.mkdir(exist_ok=True)
 
