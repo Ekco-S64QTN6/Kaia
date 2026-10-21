@@ -76,3 +76,15 @@ def test_config_treats_explicit_state_path_as_system_mode(tmp_path):
         cwd=repo_root, env=env, capture_output=True, text=True, check=True,
     )
     assert result.stdout.strip().splitlines()[-1] == "True"
+
+
+def test_installed_units_use_configured_deployment_directory():
+    repo_root = Path(__file__).resolve().parents[1]
+    policy_unit = (repo_root / "scripts/kaia-policy-gate.service").read_text()
+    restore_unit = (repo_root / "scripts/kaia-restore-blocks.service").read_text()
+    lockdown_unit = (repo_root / "scripts/kaia-lockdown.service").read_text()
+
+    assert "WorkingDirectory=__DEPLOY_DIR__" in policy_unit
+    assert "ExecStart=/usr/bin/python3 __DEPLOY_DIR__/security/policy_gate.py" in policy_unit
+    assert "ExecStart=/usr/bin/env python3 __DEPLOY_DIR__/scripts/kaia_restore_blocks.py" in restore_unit
+    assert "Environment=KAIA_PROJECT_DIR=__DEPLOY_DIR__" in lockdown_unit
