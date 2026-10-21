@@ -8,7 +8,9 @@ from pathlib import Path
 def test_system_state_mode_keeps_runtime_data_outside_read_only_checkout(tmp_path):
     repo_root = Path(__file__).resolve().parents[1]
     env = os.environ.copy()
-    env["KAIA_STATE_DIR"] = str(tmp_path / "state")
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    env["KAIA_STATE_DIR"] = str(state_dir)
     env["KAIA_CAPABILITY_TOKEN_SECRET"] = "test-only-secret"
     env["PYTHONPATH"] = str(repo_root / "core")
     result = subprocess.run(
