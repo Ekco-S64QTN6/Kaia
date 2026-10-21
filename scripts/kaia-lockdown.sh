@@ -45,14 +45,44 @@ else
 fi
 
 # --- Contain ----------------------------------------------------------------
-nft flush ruleset
-nft add table inet filter
-# Braces are nft syntax, so quote them rather than escaping the semicolons --
-# same result, and the shell is not left guessing what is a block.
-nft add chain inet filter input   '{ type filter hook input   priority 0; policy drop; }'
-nft add chain inet filter forward '{ type filter hook forward priority 0; policy drop; }'
-nft add chain inet filter output  '{ type filter hook output  priority 0; policy drop; }' 
+# Apply the flush + replacement chains as one nftables batch transaction.
+# Running individual commands after a successful flush can leave the host
+# without a firewall if a later add fails. Syntax-check first, then apply and
+# verify every drop-policy chain before claiming lockdown is active.
+LOCKDOWN_RULES="$(mktemp /run/kaia-lockdown.XXXXXX.nft)" || {
+    logger -t kaia-lockdown "ERROR: unable to create temporary lockdown ruleset"
+    exit 1
+}
+trap 'rm -f "$LOCKDOWN_RULES"' EXIT
 
-logger -t kaia-lockdown "Lockdown ruleset applied: input/forward/output = drop"
+cat > "$LOCKDOWN_RULES" <<'NFT'
+flush ruleset
+add table inet filter
+add chain inet filter input { type filter hook input priority 0; policy drop; }
+add chain inet filter forward { type filter hook forward priority 0; policy drop; }
+add chain inet filter output { type filter hook output priority 0; policy drop; }
+NFT
+
+if ! nft -c -f "$LOCKDOWN_RULES"; then
+    logger -t kaia-lockdown "ERROR: lockdown ruleset validation failed; current firewall left unchanged"
+    echo -e "${COLOR_RED}ERROR: lockdown ruleset validation failed; current firewall left unchanged.${COLOR_RESET}" >&2
+    exit 1
+fi
+
+if ! nft -f "$LOCKDOWN_RULES"; then
+    logger -t kaia-lockdown "ERROR: atomic lockdown ruleset application failed"
+    echo -e "${COLOR_RED}ERROR: could not apply lockdown ruleset.${COLOR_RESET}" >&2
+    exit 1
+fi
+
+for chain in input forward output; do
+    if ! nft list chain inet filter "$chain" 2>/dev/null | grep -q 'policy drop'; then
+        logger -t kaia-lockdown "ERROR: lockdown verification failed for chain $chain"
+        echo -e "${COLOR_RED}ERROR: lockdown verification failed for chain $chain.${COLOR_RESET}" >&2
+        exit 1
+    fi
+done
+
+logger -t kaia-lockdown "Lockdown ruleset verified: input/forward/output = drop"
 echo -e "${COLOR_RED}EMERGENCY LOCKDOWN ACTIVE — all traffic dropped.${COLOR_RESET}"
 echo -e "${COLOR_YELLOW}Restore with: sudo ${0%/*}/kaia-unlock.sh${COLOR_RESET}"
