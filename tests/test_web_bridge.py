@@ -123,7 +123,11 @@ async def test_web_bridge_http_and_security_headers():
         text = await resp.text()
         assert "KAIA //" in text
         assert "Content-Security-Policy" in resp.headers
-        assert "default-src 'self'" in resp.headers["Content-Security-Policy"]
+        csp = resp.headers["Content-Security-Policy"]
+        assert "default-src 'self'" in csp
+        assert "script-src 'self'" in csp
+        assert "style-src 'self'" in csp
+        assert "'unsafe-inline'" not in csp
         assert resp.headers["X-Content-Type-Options"] == "nosniff"
         assert resp.headers["X-Frame-Options"] == "DENY"
 
@@ -271,3 +275,26 @@ class TestHonestTelemetry:
         assert data["process_source"]
         assert data["host"]
         assert "recent_activity" in data
+
+
+@pytest.mark.asyncio
+async def test_static_ui_has_no_inline_css_or_javascript():
+    """The CSP must protect both the primary dashboard and the avatar preview."""
+    bridge = KaiaWebBridge(host="127.0.0.1", port=8765)
+    client = TestClient(TestServer(bridge.create_app()))
+    await client.start_server()
+    try:
+        for path in ("/", "/static/kaia-preview.html"):
+            resp = await client.get(path)
+            assert resp.status == 200
+            html = await resp.text()
+            assert "<style" not in html.lower()
+            assert "<script>" not in html.lower()
+            assert " style=" not in html.lower()
+            assert "style-src 'self'" in resp.headers["Content-Security-Policy"]
+        css_resp = await client.get("/static/css/kaia-preview.css")
+        js_resp = await client.get("/static/js/kaia/kaia-preview.js")
+        assert css_resp.status == 200
+        assert js_resp.status == 200
+    finally:
+        await client.close()
