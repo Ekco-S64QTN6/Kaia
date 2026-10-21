@@ -86,7 +86,9 @@ class LineChart {
   _yRange() {
     const o = this.o;
     if (o.autoMax) {
-      const max = Math.max(0, ...this.points.map((p) => p.v));
+      const observedMax = Math.max(0, ...this.points.map((p) => p.v));
+      const threshold = Number.isFinite(o.threshold) ? o.threshold : 0;
+      const max = Math.max(observedMax, threshold);
       const top = niceMax(max * 1.08, o.autoMax);
       const steps = this.h < 110 ? [0, 0.5, 1] : [0, 0.25, 0.5, 0.75, 1];   // small charts: fewer ticks
       return { min: 0, max: top, ticks: steps.map((f) => f * top) };
@@ -143,7 +145,8 @@ class LineChart {
       }
     }
 
-    if (o.threshold !== undefined && o.threshold >= yr.min && o.threshold <= yr.max) {
+    const drawThreshold = () => {
+      if (o.threshold === undefined || o.threshold < yr.min || o.threshold > yr.max) return;
       const ty = Y(o.threshold);
       ctx.save();
       ctx.strokeStyle = o.thresholdColor || '#ff3860';
@@ -159,10 +162,11 @@ class LineChart {
       ctx.font = `9px ${MONO}`;
       ctx.fillText(o.thresholdLabel || `THRESHOLD ${o.threshold}`, w - pad.r - 2, ty - 2);
       ctx.restore();
-    }
+    };
 
     const pts = this.points.filter((p) => p.t >= t0 - 1);
     if (pts.length < 2) {
+      drawThreshold();
       if (o.axes) {
         ctx.fillStyle = INK.muted;
         ctx.textAlign = 'center';
@@ -197,6 +201,7 @@ class LineChart {
     pts.forEach((p, i) => (i ? ctx.lineTo(X(p.t), Y(p.v)) : ctx.moveTo(X(p.t), Y(p.v))));
     ctx.stroke();
     ctx.restore();
+    drawThreshold();
 
     // hover: crosshair + value at nearest reading
     if (this.hoverX !== null && this.hoverX > pad.l && this.hoverX < w - pad.r) {
