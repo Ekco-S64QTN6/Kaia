@@ -645,13 +645,13 @@ def dispatch_operator_command(cmd_line: str) -> Dict[str, Any]:
                 return {"success": False, "command": raw_cmd, "lines": output_lines}
 
         elif cmd == "unblock" and len(args) >= 1:
-            ip = args[0]
-            # Policy Gate unblock action (or direct diagnostic removal)
-            token = generate_capability_token("diagnostics", f"unblock_{ip}", duration_seconds=15)
-            payload = {"query_type": "nft_list", "args": ["unblock", ip], "justification": "operator unblock", "session_id": "sentinel_ui"}
-            approved, resp = send_policy_gate_ipc("diagnostics", payload, token)
-            output_lines.append(f"[INFO] Unblock intent dispatched for {ip}.")
-            return {"success": True, "command": raw_cmd, "lines": output_lines}
+            # Do not pretend this operation succeeded: the Policy Gate does not
+            # currently expose a dedicated, ledger-aware unblock_ip intent.
+            output_lines.append(
+                "[UNAVAILABLE] unblock_ip is not implemented in the Policy Gate. "
+                "No firewall rule was removed."
+            )
+            return {"success": False, "command": raw_cmd, "lines": output_lines}
 
         elif cmd == "show" and len(args) >= 1 and args[0] == "rules":
             approved, resp = query_gate_diagnostics("nft_list")
