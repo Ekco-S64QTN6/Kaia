@@ -24,7 +24,7 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-ReadOnlyPaths=/var/lib/kaia
+ReadOnlyPaths=__STATE_DIR__
 
 [Install]
 WantedBy=multi-user.target
