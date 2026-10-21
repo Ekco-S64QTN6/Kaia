@@ -56,7 +56,7 @@ LockPersonality=true
 
 # /var/lib/kaia holds the audit ledger and event DB (INV-008: outside the agent's
 # working tree). /opt/kaia itself stays read-only to the daemon.
-ReadWritePaths=/run/kaiacord __STATE_DIR__ /opt/kaia/logs /var/lib/secdaemon
+ReadWritePaths=/run/kaiacord __STATE_DIR__ __DEPLOY_DIR__/logs /var/lib/secdaemon
 ReadWritePaths=-/etc/api_keys.json -/var/backups/credentials.txt -/root/.ssh
 
 [Install]
