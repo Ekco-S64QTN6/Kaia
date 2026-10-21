@@ -36,6 +36,22 @@ def test_lps_chart_exposes_surge_threshold_and_area_fill():
 def test_radar_uses_observed_reputation_scores():
     dashboard = (REPO_ROOT / "kaia_dashboard.py").read_text()
     radar = (STATIC / "js" / "radar.js").read_text()
-    assert '"reputation_score": int(max(0, min(100, rep.get("score", 0))))' in dashboard
+    assert '"reputation_score": int(max(0, min(100, rep_score))) if has_rated_score else None' in dashboard
+    assert 'bool(rep.get("cached"))' in dashboard
     assert "block.reputation_score" in radar
-    assert "NO SCORE" in radar
+    assert "score <= 30" in radar
+    assert "score <= 65" in radar
+    assert "UNRATED" in radar
+
+
+def test_openat2_perf_buffer_reaches_the_waterfall():
+    ebpf = (REPO_ROOT / "security" / "ebpf_telemetry.py").read_text()
+    bridge = (REPO_ROOT / "core" / "web_bridge.py").read_text()
+    waterfall = (STATIC / "js" / "waterfall.js").read_text()
+
+    assert 'self.bpf["open_events"].open_perf_buffer(self._handle_open_event)' in ebpf
+    assert 'data.syscall_id = 2' in ebpf
+    assert "def get_recent_opens" in ebpf
+    assert "raw_opens = ebpf_engine.get_recent_opens(30)" in bridge
+    assert '"syscall": ev.get("syscall", "sys_enter_openat")' in bridge
+    assert "/openat2/i" in waterfall
