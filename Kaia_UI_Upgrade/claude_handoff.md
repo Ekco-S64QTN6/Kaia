@@ -218,32 +218,32 @@ As specified in [`2026-10-07-kaia-hardened-security-ui-upgrade-design-spec.md`](
   - Implemented the userspace process/file fallback sampler (`ProcessSyscallSampler`) when BCC kernel headers are absent.
   - Implemented the dual-mode CLI argument parser in `kaia_dashboard.py` (`--web` by default, `--tui` / `--curses` legacy terminal).
   - Designed the **Cyber-Sentinel UI Design System** (`core/web/static/css/sentinel.css`): CRT scanline overlay, 32px cyber grid, tactical corner brackets, glowing neon accents (`#00f0ff`, `#3dff8a`, `#ffe45c`, `#ff3860`, `#a259ff`), LED meters.
-  - Built the **eBPF Syscall Waterfall Spectrogram Widget** (`core/web/static/js/waterfall.js`): 60 FPS HTML5 Canvas cascading `sys_enter_execve` and `sys_enter_openat2` tracepoints with color-coded disposition bursts and live event inspector.
-  - Built the **Logs Per Second (LPS) Oscillogram Widget** (`core/web/static/js/oscillogram.js`): 60 FPS HTML5 Canvas rolling event velocity curve with adaptive peak scaling, gradient laser fill, and threshold breach markers.
-  - Built the **Threat Intelligence & Network Radar Widget** (`core/web/static/js/radar.js`): 360° tactical rotating radar sweep with phosphor persistence, LAN discovery blips, blocked threat nodes, and Shodan risk gauges.
-  - Built the **Capability Token Ledger Widget** (`core/web/static/js/tokens.js`): Glowing hexagonal cards rendering cryptographic token ID, permission scope (`READ_LOGS`, `block_ip`, `write_file`, etc.), target, and **circular SVG countdown rings** indicating TTL seconds remaining.
+  - Implemented the **process-event waterfall** (`core/web/static/js/waterfall.js`) as a Canvas timeline of actual `ebpf_waterfall` snapshot events with disposition colors and a cursor inspector. Animation is drawn at display cadence; underlying snapshot delivery remains 5 Hz, and `observed` events are not labeled safe.
+  - Implemented the **LPS oscillogram** in `core/web/static/js/charts.js` (there is no separate `oscillogram.js` module): rolling 60-second Canvas curve, optional gradient area fill, adaptive scale, and visible 35 LPS surge threshold. The plot can redraw at ~60 FPS, but new measurements still arrive at the bridge's 5 Hz rate.
+  - Implemented the **passive-discovery network radar** (`core/web/static/js/radar.js`): rotating sweep, observed LAN asset nodes, recent blocked IP nodes, and reputation-score bars from collector data. Node placement is a visual distribution, not geographic topology; scores are omitted when source data is absent.
+  - Implemented the **capability token ledger** (`core/web/static/js/tokens.js`): compact cards for token fingerprint, scope and target, with SVG TTL rings based on snapshot expiry timestamps.
   - Built the **Interactive Command Terminal Console** (`core/web/static/js/terminal.js`): Monospace terminal prompt (`KAIA_SENTINEL:~$ `) with quick-action buttons, command history, and structured response rendering.
   - Built the **Sentinel Avatar State Machine Controller** (`core/web/static/js/operative.js`): Manages the 7 security states (`SentinelWatch`, `PolicyEvaluating`, `AnomalyDetected`, `ContainmentAlert`, `LockdownMode`, `AuditSurge`, `SleepyIdle`), updating biometric HUD (Pulse BPM, Conduit Glow, Defense Stance), and exposing the clean mount hook for Opus 5.5.
-  - Added comprehensive automated test suite (`tests/test_web_bridge.py`) with 6/6 tests passing. All 55 repo tests passing.
+  - The original 55-test result was recorded at handoff time; it has not been re-established by this UI audit.
 
-* **Claude Opus 5.5 (Assigned Tasks Remaining)**:
-  - **Kaia 2D/3D Character Animation Viewport**: Build and mount the character visual animation pipeline inside the dedicated Operative stage.
-  - Connect the character animation controller to Kaia's 7 reactive security states via `window.KaiaAvatar.mountAnimationViewport()` and `onStateTransition()`.
-  - Render Kaia's transparent crystal-polymer android body, glowing emerald fiber-optic hair strands, glowing optical spine, and tactical ocular reticles as specified in Section 5 of the design spec.
-  - Optional: Web Audio synthesizer sound FX for tactical alert pings and token countdown ticks.
+* **Still Remaining / Not Yet Verified**:
+  - The WebGL2 codec portrait is now mounted automatically by `SentinelAvatarController` and reacts to all seven sentinel states through `KaiaAnimator` presets. This is a rigged **portrait**, not the specified full-body transparent crystal-polymer android. Full-body artwork/mesh or a full-body sprite sequence, including limbs, optical spine and material treatment, remains unfinished; the portrait assets cannot satisfy that part of Section 5.
+  - Run browser-level verification for all seven mood transitions, WebGL2 failure fallback, resize handling, resource use, and the dashboard under strict CSP.
+
+  - Optional Web Audio alert/tick synthesizer remains unimplemented.
 
 ---
 
 ### 2. Integration Hooks Ready for Claude Opus 5.5
 
 #### DOM Mounting Target:
-Inside [`core/web/static/index.html`](../core/web/static/index.html):
+Inside [`core/web/static/index.html`](../core/web/static/index.html). The image fallback from the original example has since been removed; the current default renderer is a rigged portrait mounted into this container:
 ```html
 <div class="operative-stage" id="kaia-operative-stage">
-  <img src="/static/assets/kaia_sentinel.jpg" alt="Kaia Tactical Sentinel" class="avatar-preview-img" id="avatar-preview-img">
+
   
   <!-- DEDICATED OPUS 5.5 RENDER MOUNT -->
-  <div id="kaia-character-container" style="position:absolute;inset:0;pointer-events:none;z-index:2"></div>
+  <div id="kaia-character-container"></div>
 
   <div class="reticle-hud"><div class="reticle-center"></div></div>
   <div class="conduit-glow-border" id="conduit-glow"></div>
