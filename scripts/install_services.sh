@@ -8,6 +8,32 @@ STATE_DIR="${KAIA_STATE_DIR:-/var/lib/kaia}"
 
 [ "$EUID" -eq 0 ] || { echo "Run with sudo." >&2; exit 1; }
 
+# These paths are substituted into systemd unit files and used by recursive
+# chown/chmod/rsync operations. Canonicalize and reject unsafe/root/overlapping
+# destinations before any privileged filesystem changes.
+DEPLOY_DIR="$(realpath -m -- "$DEPLOY_DIR")"
+STATE_DIR="$(realpath -m -- "$STATE_DIR")"
+for path_name in DEPLOY_DIR STATE_DIR; do
+    path_value="${!path_name}"
+    case "$path_value" in
+        /*) ;;
+        *) echo "$path_name must be an absolute path." >&2; exit 1 ;;
+    esac
+    case "$path_value" in
+        /) echo "$path_name must not be the filesystem root." >&2; exit 1 ;;
+        *[!A-Za-z0-9_./-]*)
+            echo "$path_name contains unsupported characters: $path_value" >&2
+            exit 1
+            ;;
+    esac
+done
+case "$STATE_DIR/" in
+    "$DEPLOY_DIR/"*) echo "STATE_DIR must not be inside DEPLOY_DIR." >&2; exit 1 ;;
+esac
+case "$DEPLOY_DIR/" in
+    "$STATE_DIR/"*) echo "DEPLOY_DIR must not be inside STATE_DIR." >&2; exit 1 ;;
+esac
+
 # --- Deploy a root-owned copy of the code ------------------------------------
 #
 # The daemon runs as root. Running it directly out of a checkout under $HOME
