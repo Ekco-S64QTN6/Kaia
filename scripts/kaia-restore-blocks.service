@@ -12,7 +12,7 @@ Wants=network-pre.target
 Type=oneshot
 Environment=KAIA_STATE_DIR=__STATE_DIR__
 RemainAfterExit=yes
-ExecStart=/usr/bin/env python3 /opt/kaia/scripts/kaia_restore_blocks.py
+ExecStart=/usr/bin/env python3 __DEPLOY_DIR__/scripts/kaia_restore_blocks.py
 # Restoring blocks must never prevent the host from booting.
 SuccessExitStatus=0
 TimeoutStartSec=120
