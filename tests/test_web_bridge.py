@@ -127,6 +127,8 @@ async def test_web_bridge_http_and_security_headers():
         assert "default-src 'self'" in csp
         assert "script-src 'self'" in csp
         assert "style-src 'self'" in csp
+        assert "font-src 'self'" in csp
+        assert "font-src 'self' data:" not in csp
         assert "'unsafe-inline'" not in csp
         assert resp.headers["X-Content-Type-Options"] == "nosniff"
         assert resp.headers["X-Frame-Options"] == "DENY"
