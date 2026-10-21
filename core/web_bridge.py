@@ -814,7 +814,7 @@ class KaiaWebBridge:
             "style-src 'self'; "
             "img-src 'self' data:; "
             "connect-src 'self' ws://127.0.0.1:* http://127.0.0.1:*; "
-            "font-src 'self' data:;"
+            "font-src 'self';"
         )
         resp.headers["X-Content-Type-Options"] = "nosniff"
         resp.headers["X-Frame-Options"] = "DENY"
