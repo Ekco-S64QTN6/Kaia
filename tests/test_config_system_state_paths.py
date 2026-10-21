@@ -61,3 +61,18 @@ def test_installer_persists_state_path_for_manual_unlock():
 
     assert 'printf \'KAIA_STATE_DIR=%q\\n\' "$STATE_DIR" > /etc/kaia/state.env' in installer
     assert '. /etc/kaia/state.env' in unlock
+
+
+def test_config_treats_explicit_state_path_as_system_mode():
+    repo_root = Path(__file__).resolve().parents[1]
+    state_dir = repo_root / "storage" / "test-explicit-state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    env = os.environ.copy()
+    env["KAIA_STATE_DIR"] = str(state_dir)
+    env["KAIA_CAPABILITY_TOKEN_SECRET"] = "test-only-secret"
+    env["PYTHONPATH"] = str(repo_root / "core")
+    result = subprocess.run(
+        [sys.executable, "-c", "import config; print(config.STATE_DIR_IS_SYSTEM)"],
+        cwd=repo_root, env=env, capture_output=True, text=True, check=True,
+    )
+    assert result.stdout.strip().splitlines()[-1] == "True"
