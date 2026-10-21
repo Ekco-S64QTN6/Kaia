@@ -9,12 +9,33 @@ logger = logging.getLogger(__name__)
 class HostExecutor:
     @staticmethod
     def execute_diagnostics(query_type: str, args: list) -> tuple:
-        """Runs diagnostics commands without shell."""
+        """Runs strictly read-only diagnostics commands without a shell."""
+        import re
+
+        if not isinstance(args, list) or any(not isinstance(arg, str) for arg in args):
+            return False, "", "Diagnostics arguments must be a list of strings"
+
         if query_type == "ss":
+            # ss has mutating modes (notably -K/--kill). Accept only compact
+            # read-only display flags, with no operands or option-value flags.
+            if any(not re.fullmatch(r"-[Hntulaprome46]+", arg) for arg in args):
+                return False, "", "Unsupported ss diagnostics option; only read-only display flags are allowed"
             cmd = ["ss"] + args
         elif query_type == "ip_route":
+            # Passing arbitrary arguments here would expose route mutation
+            # operations such as add, del, change, replace, and flush. Keep
+            # this endpoint to default/show/list reads, optionally family-scoped.
+            allowed_args = {
+                (), ("show",), ("list",), ("-4",), ("-6",),
+                ("-4", "show"), ("-6", "show"),
+                ("-4", "list"), ("-6", "list"),
+            }
+            if tuple(args) not in allowed_args:
+                return False, "", "Unsupported ip route diagnostics arguments; route mutations are forbidden"
             cmd = ["ip", "route"] + args
         elif query_type == "nft_list":
+            if args:
+                return False, "", "nft_list does not accept arguments"
             cmd = ["nft", "list", "ruleset"]
         else:
             return False, "", "Invalid diagnostics query type"
