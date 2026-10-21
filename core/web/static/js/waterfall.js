@@ -101,7 +101,6 @@ class SyscallWaterfallCanvas {
       ctx.fillText(labels[i], i === 4 ? x - 1 : x, h - 5);
     }
     ctx.textAlign = 'left';
-    }
 
     const lanes = [
       { label: 'EXECVE', match: /execve/i },
