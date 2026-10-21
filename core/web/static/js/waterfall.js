@@ -96,7 +96,11 @@ class SyscallWaterfallCanvas {
       ctx.moveTo(x, top);
       ctx.lineTo(x, bottom);
       ctx.stroke();
-      if (i < 4) ctx.fillText(i === 0 ? '-60s' : i === 2 ? '-30s' : i === 3 ? '-15s' : '', x + 2, h - 5);
+      const labels = ['-60s', '-45s', '-30s', '-15s', 'NOW'];
+      ctx.textAlign = i === 4 ? 'right' : i === 0 ? 'left' : 'center';
+      ctx.fillText(labels[i], i === 4 ? x - 1 : x, h - 5);
+    }
+    ctx.textAlign = 'left';
     }
 
     const lanes = [
