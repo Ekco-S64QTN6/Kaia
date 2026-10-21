@@ -32,6 +32,10 @@ rm -rf "$DEPLOY_DIR/.git" "$DEPLOY_DIR/.venv"
 find "$DEPLOY_DIR" -type d -name '__pycache__' -prune -exec rm -rf {} +
 find "$DEPLOY_DIR" -type f -name '*.pyc' -delete
 
+# The systemd unit explicitly grants this log directory write access; create it
+# during installation so config import never has to mkdir under ProtectSystem.
+mkdir -p "$DEPLOY_DIR/logs"
+
 chown -R root:root "$DEPLOY_DIR"
 find "$DEPLOY_DIR" -type d -exec chmod 755 {} +
 find "$DEPLOY_DIR" -type f -exec chmod 644 {} +
