@@ -881,9 +881,31 @@ class KaiaWebBridge:
         except Exception:
             return web.json_response({"success": False, "error": "Invalid JSON body"}, status=400)
 
+        # This endpoint can dispatch privileged host actions. Loopback binding alone
+        # does not prevent DNS-rebinding or cross-origin browser requests.
+        host = request.headers.get("Host", "").split(":", 1)[0].strip("[]").lower()
+        if host not in ALLOWED_LOOPBACK_HOSTS:
+            return web.json_response({"success": False, "error": "Invalid Host header"}, status=403)
+
+        origin = request.headers.get("Origin")
+        if origin:
+            from urllib.parse import urlsplit
+            parsed_origin = urlsplit(origin)
+            origin_host = (parsed_origin.hostname or "").lower()
+            if parsed_origin.scheme not in ("http", "https") or origin_host not in ALLOWED_LOOPBACK_HOSTS:
+                return web.json_response({"success": False, "error": "Invalid Origin"}, status=403)
+            if parsed_origin.port not in (None, self.port):
+                return web.json_response({"success": False, "error": "Origin port mismatch"}, status=403)
+            if origin_host != host:
+                return web.json_response({"success": False, "error": "Origin host mismatch"}, status=403)
+
+        if not isinstance(body, dict):
+            return web.json_response({"success": False, "error": "JSON body must be an object"}, status=400)
         cmd_line = body.get("command", "")
         if not isinstance(cmd_line, str):
             return web.json_response({"success": False, "error": "Command must be string"}, status=400)
+        if len(cmd_line) > 2048:
+            return web.json_response({"success": False, "error": "Command exceeds 2048 characters"}, status=413)
 
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(None, dispatch_operator_command, cmd_line)
