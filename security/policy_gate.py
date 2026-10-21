@@ -281,10 +281,32 @@ class PolicyGate:
         cap_token = payload.get("capability_token")
 
         if action == "lockdown":
+            # Lockdown is destructive and can disrupt all network traffic. The
+            # web bridge issues a short-lived diagnostics token scoped to this
+            # exact emergency action; do not let socket access alone trigger it.
+            if not cap_token:
+                self._log_audit(payload, "denied", reason="Missing capability token for lockdown.")
+                return {"status": "denied", "message": "Missing capability token for lockdown."}
+            ok_tok, err_tok = verify_capability_token(
+                cap_token, "diagnostics", "lockdown_confirm"
+            )
+            if not ok_tok:
+                self._log_audit(
+                    payload, "denied",
+                    reason=f"Invalid lockdown capability token: {err_tok}",
+                )
+                log_security_event(
+                    "invalid_capability_token", "policy_gate", "kaiacord",
+                    hashlib.sha256(str(payload).encode()).hexdigest(),
+                    "blocked", session_id,
+                )
+                return {
+                    "status": "denied",
+                    "message": f"Invalid lockdown capability token: {err_tok}",
+                }
             trigger_lockdown("operator_command")
+            self._log_audit(payload, "approved", reason="Valid lockdown capability token.")
             return {"status": "success", "message": "Emergency lockdown activated."}
-
-
 
         # Restrictiveness Lattice and Capability Intersection Checks
         try:
