@@ -8,6 +8,7 @@ Before=network.target shutdown.target
 [Service]
 Type=oneshot
 Environment=KAIA_PROJECT_DIR=/home/ekco/github/Kaia
+Environment=KAIA_STATE_DIR=__STATE_DIR__
 ExecStart=/bin/bash ${KAIA_PROJECT_DIR}/scripts/kaia-lockdown.sh
 RemainAfterExit=no
 
