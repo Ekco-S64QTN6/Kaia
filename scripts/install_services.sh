@@ -36,9 +36,11 @@ find "$DEPLOY_DIR" -type f -name '*.pyc' -delete
 # during installation so config import never has to mkdir under ProtectSystem.
 mkdir -p "$DEPLOY_DIR/logs"
 
-chown -R root:root "$DEPLOY_DIR"
-find "$DEPLOY_DIR" -type d -exec chmod 755 {} +
-find "$DEPLOY_DIR" -type f -exec chmod 644 {} +
+# The excluded storage/ tree is runtime data, not deployed code. Preserve its
+# ownership and modes rather than recursively making old databases world-readable.
+find "$DEPLOY_DIR" -path "$DEPLOY_DIR/storage" -prune -o -exec chown root:root {} +
+find "$DEPLOY_DIR" -path "$DEPLOY_DIR/storage" -prune -o -type d -exec chmod 755 {} +
+find "$DEPLOY_DIR" -path "$DEPLOY_DIR/storage" -prune -o -type f -exec chmod 644 {} +
 chmod 755 "$DEPLOY_DIR"/scripts/*.sh "$DEPLOY_DIR"/scripts/*.py 2>/dev/null || true
 echo "    $(find "$DEPLOY_DIR" -type f | wc -l) files, root:root, not writable by any other user"
 
