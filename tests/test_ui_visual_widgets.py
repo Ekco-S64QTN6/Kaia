@@ -55,3 +55,32 @@ def test_openat2_perf_buffer_reaches_the_waterfall():
     assert "raw_opens = ebpf_engine.get_recent_opens(30)" in bridge
     assert '"syscall": ev.get("syscall", "sys_enter_openat")' in bridge
     assert "/openat2/i" in waterfall
+
+
+def test_snapshot_contains_openat2_events_from_telemetry_engine():
+    from core.web_bridge import serialize_snapshot
+    from kaia_dashboard import CollectorManager
+    import time
+
+    class FakeEBPFEngine:
+        bpf = object()
+
+        def get_recent_execs(self, n=20):
+            return []
+
+        def get_recent_opens(self, n=20):
+            return [{
+                "syscall": "sys_enter_openat2",
+                "pid": 4321,
+                "comm": "test-process",
+                "filename": "/tmp/test-file",
+                "timestamp": time.time(),
+            }]
+
+    snapshot = CollectorManager().take_snapshot()
+    data = serialize_snapshot(snapshot, ebpf_engine=FakeEBPFEngine(), proc_sampler=None)
+    event = next(item for item in data["ebpf_waterfall"] if item["syscall"] == "sys_enter_openat2")
+
+    assert event["pid"] == 4321
+    assert event["filename"] == "/tmp/test-file"
+    assert event["disposition"] == "observed"
