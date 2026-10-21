@@ -59,5 +59,5 @@ def test_installer_persists_state_path_for_manual_unlock():
     installer = (repo_root / "scripts/install_services.sh").read_text()
     unlock = (repo_root / "scripts/kaia-unlock.sh").read_text()
 
-    assert 'printf \'KAIA_STATE_DIR=%s\\n\' "$STATE_DIR" > /etc/kaia/state.env' in installer
+    assert 'printf \'KAIA_STATE_DIR=%q\\n\' "$STATE_DIR" > /etc/kaia/state.env' in installer
     assert '. /etc/kaia/state.env' in unlock
