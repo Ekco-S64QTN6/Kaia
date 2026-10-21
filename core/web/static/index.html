@@ -61,7 +61,7 @@
             <canvas class="kpi-spark" id="spark-gpu"></canvas>
           </div>
         </div>
-        <div class="table-fit table-fit-small" style="--rows: 4">
+        <div class="table-fit table-fit-small table-services">
           <table class="data-table">
             <thead><tr><th>SERVICE</th><th>STATE</th><th class="num">PID</th><th class="num">CPU</th><th class="num">MEM</th></tr></thead>
             <tbody id="services-body"></tbody>
@@ -189,7 +189,7 @@
       </div>
       <div class="panel-body">
         <div class="status-strip" id="net-strip"></div>
-        <div class="table-fit table-fit-small" style="--rows: 2">
+        <div class="table-fit table-fit-small table-blocks">
           <table class="data-table" id="blocks-table">
             <thead><tr><th>BLOCKED</th><th>REASON</th><th>WHEN</th></tr></thead>
             <tbody id="blocks-body"></tbody>
@@ -226,7 +226,7 @@
           <button class="cmd-btn" data-cmd="clear">[CLEAR]</button>
         </div>
       </div>
-      <div class="panel-body" style="padding:6px 10px">
+      <div class="panel-body">
         <div class="terminal-split">
           <div class="terminal-console-output" id="terminal-output"></div>
           <div class="terminal-input-bar">
