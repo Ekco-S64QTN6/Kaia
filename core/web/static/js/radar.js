@@ -58,13 +58,22 @@ class NetworkRadarCanvas {
       const score = typeof raw === 'number' && Number.isFinite(raw)
         ? Math.max(0, Math.min(100, raw))
         : null;
+      const detailParts = [];
+      if (Array.isArray(block.reputation_tags) && block.reputation_tags.length) {
+        detailParts.push(`Local reputation: ${block.reputation_tags.join(', ')}`);
+      }
+      if (Array.isArray(block.tags) && block.tags.length) {
+        detailParts.push(`InternetDB tags: ${block.tags.join(', ')}`);
+      }
+      if (Array.isArray(block.ports) && block.ports.length) {
+        detailParts.push(`InternetDB ports: ${block.ports.join(', ')}`);
+      }
+      const tagText = detailParts.join(' | ') || 'No additional reputation details';
       if (score === null) {
-        const tagText = Array.isArray(block.reputation_tags) ? block.reputation_tags.join(', ') : 'Unrated';
         return `<div class="risk-row" title="${window.esc(tagText)}"><span class="risk-ip" title="${window.esc(block.ip)}">${window.esc(block.ip)}</span><span class="risk-unknown">UNRATED</span><b class="risk-score">--</b></div>`;
       }
       // Reputation scale is 0=malicious and 100=clean (see threat_intel.py).
       const cls = score <= 30 ? 'bad' : score <= 65 ? 'warn' : '';
-      const tagText = Array.isArray(block.reputation_tags) ? block.reputation_tags.join(', ') : 'Cached reputation';
       return `<div class="risk-row" title="${window.esc(tagText)}">`
         + `<span class="risk-ip">${window.esc(block.ip)}</span>`
         + `<svg class="risk-meter" viewBox="0 0 100 8" preserveAspectRatio="none" role="img" aria-label="IP reputation score ${score} out of 100; higher is cleaner">`
