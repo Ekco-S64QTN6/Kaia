@@ -215,6 +215,10 @@ header {
   overflow: hidden;
 }
 
+/* Small tables get fixed row budgets from semantic variants. */
+.table-services { --rows: 4; }
+.table-blocks { --rows: 2; }
+
 /* Small tables get a fixed row budget (set --rows on the element). */
 .table-fit-small {
   flex: 0 0 auto;
@@ -629,3 +633,15 @@ header {
   from { box-shadow: inset 0 0 15px var(--red-dim); }
   to { box-shadow: inset 0 0 30px var(--red-glow); }
 }
+
+
+/* Terminal ANSI-like colors are classes, not inline styles, for strict CSP. */
+.term-cyan { color: var(--cyan); }
+.term-dim { color: var(--dim); }
+.term-line-bright { color: var(--line-bright); }
+.term-green { color: var(--green); }
+.term-red { color: var(--red); }
+.term-yellow { color: var(--yellow); }
+.term-text { color: var(--text); }
+.term-text-bright { color: var(--text-bright); }
+.term-bold { font-weight: bold; }
