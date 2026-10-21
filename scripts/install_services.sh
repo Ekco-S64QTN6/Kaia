@@ -35,9 +35,10 @@ echo "    $(find "$DEPLOY_DIR" -type f | wc -l) files, root:root, not writable b
 # the kaiacord group gets read access so the dashboard can poll it unprivileged.
 echo "==> Provisioning $STATE_DIR"
 getent group kaiacord >/dev/null || groupadd --system kaiacord
-mkdir -p "$STATE_DIR"
-chown root:kaiacord "$STATE_DIR"
+mkdir -p "$STATE_DIR/threat_intel"
+chown root:kaiacord "$STATE_DIR" "$STATE_DIR/threat_intel"
 chmod 750 "$STATE_DIR"
+chmod 750 "$STATE_DIR/threat_intel"
 
 # Migrate any existing in-repo ledger/database exactly once.
 for f in audit_ledger.json security_events.db; do
