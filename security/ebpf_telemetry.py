@@ -59,9 +59,8 @@ struct open_event_t {
     char comm[16];
     char filename[256];
     u32 flags;
-    u8 syscall_id;  // 1=openat, 2=openat2
 };
-BPF_PERF_OUTPUT(open_events);
+BPF_PERF_OUTPUT(openat2_events);
 BPF_PERF_OUTPUT(honeypot_events);
 
 struct delete_event_t {
@@ -149,8 +148,7 @@ TRACEPOINT_PROBE(syscalls, sys_enter_openat) {
     bpf_get_current_comm(&data.comm, sizeof(data.comm));
     bpf_probe_read_user_str(&data.filename, sizeof(data.filename), args->filename);
     data.flags = args->flags;
-    data.syscall_id = 1;
-    
+
     struct honeypot_key_t key = {};
     __builtin_memcpy(key.path, data.filename, sizeof(key.path));
     u32 *val = honeypot_paths.lookup(&key);
@@ -158,7 +156,9 @@ TRACEPOINT_PROBE(syscalls, sys_enter_openat) {
         honeypot_events.perf_submit(args, &data, sizeof(data));
     }
     
-    open_events.perf_submit(args, &data, sizeof(data));
+    // Do not stream every openat call through Python: that event is very high
+    // volume. The dashboard specifically needs openat2, while honeypot matches
+    // from openat continue to use the dedicated honeypot_events buffer.
     return 0;
 }
 
@@ -168,7 +168,6 @@ TRACEPOINT_PROBE(syscalls, sys_enter_openat2) {
     bpf_get_current_comm(&data.comm, sizeof(data.comm));
     bpf_probe_read_user_str(&data.filename, sizeof(data.filename), args->filename);
     data.flags = 0;  // openat2 flags are in a struct, not a flat int — set 0 as safe default
-    data.syscall_id = 2;
 
     struct honeypot_key_t key = {};
     __builtin_memcpy(key.path, data.filename, sizeof(key.path));
@@ -177,7 +176,7 @@ TRACEPOINT_PROBE(syscalls, sys_enter_openat2) {
         honeypot_events.perf_submit(args, &data, sizeof(data));
     }
 
-    open_events.perf_submit(args, &data, sizeof(data));
+    openat2_events.perf_submit(args, &data, sizeof(data));
     return 0;
 }
 
@@ -227,7 +226,7 @@ class EBPFTelemetryEngine:
             
             # Register perf buffer callbacks
             self.bpf["exec_events"].open_perf_buffer(self._handle_exec_event)
-            self.bpf["open_events"].open_perf_buffer(self._handle_open_event)
+            self.bpf["openat2_events"].open_perf_buffer(self._handle_openat2_event)
             self.bpf["tcp_connect_events"].open_perf_buffer(self._handle_tcp_connect)
             self.bpf["tcp_retransmit_events"].open_perf_buffer(self._handle_tcp_retransmit)
             self.bpf["privilege_events"].open_perf_buffer(self._handle_privilege_event)
@@ -289,8 +288,8 @@ class EBPFTelemetryEngine:
                 "timestamp": time.time()
             })
 
-    def _handle_open_event(self, cpu, data, size):
-        event = self.bpf["open_events"].event(data)
+    def _handle_openat2_event(self, cpu, data, size):
+        event = self.bpf["openat2_events"].event(data)
         filename = event.filename.decode("utf-8", "ignore")
         comm = event.comm.decode("utf-8", "ignore")
         from security.telemetry_sanitizer import sanitize_telemetry
@@ -299,10 +298,9 @@ class EBPFTelemetryEngine:
             "comm": comm,
             "path": filename,
         })
-        syscall = "sys_enter_openat2" if event.syscall_id == 2 else "sys_enter_openat"
         with self.lock:
             self.open_deque.append({
-                "syscall": syscall,
+                "syscall": "sys_enter_openat2",
                 "pid": int(clean.get("pid") or event.pid),
                 "comm": clean.get("comm", ""),
                 "filename": clean.get("path", ""),
