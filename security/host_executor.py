@@ -93,11 +93,21 @@ class HostExecutor:
     @staticmethod
     def execute_state_modification(filepath: str, content: str) -> tuple:
         """Writes to a file, verifying it is within the workspace and not modifying protected files/directories."""
-        abs_path = os.path.abspath(os.path.expanduser(filepath))
-        workspace_abs = os.path.abspath(config.WORKSPACE_DIR)
+        # Resolve symlinks before checking containment. A lexical prefix check
+        # accepts sibling paths such as /opt/kaia-evil and follows symlinks
+        # inside the workspace to destinations outside it.
+        workspace_abs = os.path.realpath(os.path.abspath(config.WORKSPACE_DIR))
+        abs_path = os.path.realpath(os.path.abspath(os.path.expanduser(filepath)))
 
-        if not abs_path.startswith(workspace_abs):
-            return False, "", f"Path modification violation: target path {abs_path} is outside workspace {workspace_abs}."
+        try:
+            contained = os.path.commonpath((workspace_abs, abs_path)) == workspace_abs
+        except ValueError:
+            contained = False
+        if not contained or abs_path == workspace_abs:
+            return False, "", (
+                f"Path modification violation: target path {abs_path} is outside "
+                f"workspace {workspace_abs} or is not a file path beneath it."
+            )
 
         # Prevent overwriting scripts, python source files, or hidden configuration files
         filename = os.path.basename(abs_path)
