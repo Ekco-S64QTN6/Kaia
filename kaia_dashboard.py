@@ -406,13 +406,27 @@ class ThreatIntelCollector(threading.Thread):
                         rep = threat_intel.get_ip_reputation(ip)
                         shodan = threat_intel.lookup_internetdb(ip)
                         geo = threat_intel.lookup_geoip(ip)
+                        rep_tags = rep.get("tags", [])
+                        if not isinstance(rep_tags, list):
+                            rep_tags = []
+                        rep_score = rep.get("score")
+                        # get_ip_reputation returns score=100/tags=["unrated"] when
+                        # no cache entry exists. Never render that fallback as a
+                        # verified clean reputation.
+                        has_rated_score = (
+                            bool(rep.get("cached"))
+                            and "unrated" not in {str(tag).lower() for tag in rep_tags}
+                            and isinstance(rep_score, (int, float))
+                            and not isinstance(rep_score, bool)
+                        )
                         recent_blocks.append({
                             "ip": ip,
                             "geo": geo.get("country", "Unknown"),
                             "tags": shodan.get("tags", []),
                             "ports": shodan.get("ports", []),
-                            "reputation_score": int(max(0, min(100, rep.get("score", 0)))),
-                            "threat_level": str(rep.get("threat_level", "unknown")),
+                            "reputation_score": int(max(0, min(100, rep_score))) if has_rated_score else None,
+                            "reputation_tags": [str(tag) for tag in rep_tags],
+                            "reputation_source": "cache" if has_rated_score else "unrated",
                         })
                 except Exception:
                     pass
