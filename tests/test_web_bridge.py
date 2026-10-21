@@ -298,3 +298,18 @@ async def test_static_ui_has_no_inline_css_or_javascript():
         assert js_resp.status == 200
     finally:
         await client.close()
+
+
+def test_terminal_colors_use_stylesheet_classes_under_strict_csp():
+    from pathlib import Path
+    static = Path(__file__).resolve().parents[1] / "core" / "web" / "static"
+    terminal_js = (static / "js" / "terminal.js").read_text()
+    stylesheet = (static / "css" / "sentinel.css").read_text()
+
+    assert "style=" not in terminal_js
+    for class_name in (
+        "term-cyan", "term-dim", "term-line-bright", "term-green",
+        "term-red", "term-yellow", "term-text", "term-text-bright", "term-bold",
+    ):
+        assert f".{class_name}" in stylesheet
+        assert f'class="{class_name}' in terminal_js or class_name == "term-bold"
