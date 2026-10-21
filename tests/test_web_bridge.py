@@ -164,6 +164,19 @@ async def test_web_bridge_http_and_security_headers():
 
 
 @pytest.mark.asyncio
+async def test_websocket_rejects_cross_origin_browser_connection():
+    """A foreign site must not be able to read local host telemetry over WS."""
+    bridge = KaiaWebBridge(host="127.0.0.1", port=8765)
+    client = TestClient(TestServer(bridge.create_app()))
+    await client.start_server()
+    try:
+        with pytest.raises(Exception):
+            await client.ws_connect("/ws", headers={"Origin": "https://attacker.example"})
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
 async def test_websocket_telemetry_stream():
     """Verify WebSocket connection receives live JSON telemetry snapshots."""
     bridge = KaiaWebBridge(host="127.0.0.1", port=8765)
