@@ -107,7 +107,7 @@ chmod 600 /etc/kaia/secret.env
 
 # The interactive unlock script is not launched by systemd, so persist the
 # configured state path separately for manual recovery commands.
-printf 'KAIA_STATE_DIR=%s\n' "$STATE_DIR" > /etc/kaia/state.env
+printf 'KAIA_STATE_DIR=%q\n' "$STATE_DIR" > /etc/kaia/state.env
 chmod 600 /etc/kaia/state.env
 
 # The secret file is read by the daemon at startup; root-only is correct since
