@@ -55,7 +55,13 @@ class LineChart {
         this.draw();
         this._lastDrawAt = now;
       }
-      requestAnimationFrame(tick);
+      // Keep low-rate sparklines on a timer instead of waking them every
+      // display frame; only the LPS oscillogram opts into continuous 60 Hz RAF.
+      if (this.frameIntervalMs >= 60) {
+        setTimeout(() => requestAnimationFrame(tick), this.frameIntervalMs);
+      } else {
+        requestAnimationFrame(tick);
+      }
     };
     requestAnimationFrame(tick);
   }
