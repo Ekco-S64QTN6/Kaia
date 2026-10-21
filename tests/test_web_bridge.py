@@ -10,6 +10,7 @@ import os
 import sys
 import json
 import pytest
+from aiohttp.client_exceptions import WSServerHandshakeError
 import asyncio
 from aiohttp import web
 from aiohttp.test_utils import AioHTTPTestCase, unittest_run_loop, TestClient, TestServer
@@ -170,7 +171,7 @@ async def test_websocket_rejects_cross_origin_browser_connection():
     client = TestClient(TestServer(bridge.create_app()))
     await client.start_server()
     try:
-        with pytest.raises(Exception):
+        with pytest.raises(WSServerHandshakeError):
             await client.ws_connect("/ws", headers={"Origin": "https://attacker.example"})
     finally:
         await client.close()
