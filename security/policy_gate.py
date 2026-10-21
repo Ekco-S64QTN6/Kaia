@@ -199,25 +199,34 @@ class PolicyGate:
                     logger.error(f"Error accepting socket connection: {e}")
                 break
 
+    MAX_IPC_FRAME_BYTES = 1024 * 1024
+
     def _read_frame(self, conn):
-        # Read 4-byte big-endian length header
+        # Bound untrusted length before attempting to read the payload.
         header = bytearray()
         while len(header) < 4:
             packet = conn.recv(4 - len(header))
             if not packet:
                 return None
             header.extend(packet)
-        length = int.from_bytes(header, byteorder='big')
-        
-        # Read payload
+        length = int.from_bytes(header, byteorder="big")
+        if length <= 0 or length > self.MAX_IPC_FRAME_BYTES:
+            raise ValueError(
+                f"Invalid IPC frame length {length}; maximum is "
+                f"{self.MAX_IPC_FRAME_BYTES} bytes"
+            )
+
         payload_data = bytearray()
         while len(payload_data) < length:
-            packet = conn.recv(length - len(payload_data))
+            packet = conn.recv(min(65536, length - len(payload_data)))
             if not packet:
                 return None
             payload_data.extend(packet)
-            
-        return json.loads(payload_data.decode('utf-8'))
+
+        payload = json.loads(payload_data.decode("utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("IPC request must be a JSON object")
+        return payload
 
     def _write_frame(self, conn, response_dict):
         payload_bytes = json.dumps(response_dict).encode('utf-8')
@@ -232,19 +241,25 @@ class PolicyGate:
             if not request_payload:
                 return
             
-            # Unwrap the nested request payload to a flat dictionary
+            # Validate the envelope before flattening untrusted local IPC data.
+            action = request_payload.get("action")
+            nested_payload = request_payload.get("payload", {})
+            if not isinstance(action, str) or not action:
+                raise ValueError("IPC action must be a non-empty string")
+            if not isinstance(nested_payload, dict):
+                raise ValueError("IPC payload must be a JSON object")
+
             flat_payload = {
-                "action": request_payload["action"],
+                "action": action,
                 "capability_token": request_payload.get("capability_token"),
-                **request_payload.get("payload", {})
+                **nested_payload,
             }
 
-            # Evaluate and execute flat payload
             response = self.evaluate_and_execute(flat_payload)
-            
-            # Wrap flat response into nested Response Schema
+
+            # The bridge consumes this boolean as operation success.
             import uuid
-            approved = response.get("status") in ["success", "error"]
+            approved = response.get("status") == "success"
             audit_id = "audit_" + str(uuid.uuid4())
             nested_response = {
                 "request_id": request_payload.get("request_id", str(uuid.uuid4())),
