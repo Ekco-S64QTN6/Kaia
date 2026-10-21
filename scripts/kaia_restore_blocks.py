@@ -16,6 +16,7 @@ with its blocks in place.
 
 Exit: 0 (always -- failure to restore is logged, never fatal at boot)
 """
+import ipaddress
 import json
 import logging
 import os
@@ -49,17 +50,42 @@ def collect_blocks(ledger_path: str) -> list:
             except (ValueError, TypeError):
                 malformed += 1
                 continue
+            # Valid JSON is not necessarily a valid ledger record. Keep a single
+            # malformed object from aborting the root boot-time restore service.
+            if not isinstance(rec, dict):
+                malformed += 1
+                continue
             if rec.get("result") != "approved":
                 continue
-            req = rec.get("request") or {}
+            req = rec.get("request")
+            if not isinstance(req, dict):
+                malformed += 1
+                continue
             if req.get("action") != "block_ip":
                 continue
+
             ip = req.get("target_ip")
-            if not ip:
+            protocol = req.get("protocol", "all")
+            port = req.get("port")
+            try:
+                if not isinstance(ip, str):
+                    raise ValueError("target_ip must be a string")
+                ipaddress.ip_address(ip)
+                if protocol not in ("all", "tcp", "udp"):
+                    raise ValueError("unsupported protocol")
+                if port is not None and (
+                    isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535
+                ):
+                    raise ValueError("invalid port")
+            except ValueError:
+                malformed += 1
                 continue
-            # Keyed by the full tuple so a later, narrower block does not silently
-            # replace a broader one for the same address.
-            blocks[(ip, req.get("protocol", "all"), req.get("port"))] = req
+
+            # Reinsert duplicate keys so their newest record also has newest
+            # ordering; this matters when the restore cap is reached.
+            key = (ip, protocol, port)
+            blocks.pop(key, None)
+            blocks[key] = req
 
     if malformed:
         logger.warning("Skipped %d malformed ledger line(s).", malformed)
@@ -82,12 +108,16 @@ def main() -> int:
         logger.info("No approved block_ip entries to restore.")
         return 0
 
+    if MAX_BLOCKS < 1:
+        logger.error("KAIA_MAX_RESTORED_BLOCKS must be at least 1; refusing to restore.")
+        return 1
+
     if len(blocks) > MAX_BLOCKS:
         logger.warning(
-            "Ledger holds %d distinct blocks; restoring the first %d "
+            "Ledger holds %d distinct blocks; restoring the newest %d "
             "(raise KAIA_MAX_RESTORED_BLOCKS to change).", len(blocks), MAX_BLOCKS
         )
-        blocks = blocks[:MAX_BLOCKS]
+        blocks = blocks[-MAX_BLOCKS:]
 
     ok = failed = 0
     for req in blocks:
