@@ -51,4 +51,4 @@ def test_installed_units_use_configured_state_directory():
     assert "Environment=KAIA_STATE_DIR=__STATE_DIR__" in restore_unit
     assert "ReadOnlyPaths=__STATE_DIR__" in restore_unit
     assert "Environment=KAIA_STATE_DIR=__STATE_DIR__" in lockdown_unit
-    assert '"s|__STATE_DIR__|\${STATE_DIR}|g"' in installer
+    assert '"s|__STATE_DIR__|${STATE_DIR}|g"' in installer
