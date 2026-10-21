@@ -16,9 +16,9 @@ class SentinelTerminalConsole {
 
   printBanner() {
     this.appendLines([
-      '<span style="color:var(--cyan);font-weight:bold">KAIA ZERO-TRUST CYBER-SENTINEL OPERATIONS CENTER</span>',
-      '<span style="color:var(--dim)">Deterministic Policy Gate active on 127.0.0.1. Type <b>help</b> for command list.</span>',
-      '<span style="color:var(--line-bright)">─────────────────────────────────────────────────────────────────────────────</span>',
+      '<span class="term-cyan term-bold">KAIA ZERO-TRUST CYBER-SENTINEL OPERATIONS CENTER</span>',
+      '<span class="term-dim">Deterministic Policy Gate active on 127.0.0.1. Type <b>help</b> for command list.</span>',
+      '<span class="term-line-bright">─────────────────────────────────────────────────────────────────────────────</span>',
     ]);
   }
 
@@ -64,7 +64,7 @@ class SentinelTerminalConsole {
   }
 
   async executeCommand(cmdLine) {
-    this.appendLines([`<span style="color:var(--green)">KAIA_SENTINEL:~$</span> <span style="color:var(--text-bright)">${esc(cmdLine)}</span>`]);
+    this.appendLines([`<span class="term-green">KAIA_SENTINEL:~$</span> <span class="term-text-bright">${esc(cmdLine)}</span>`]);
 
     if (cmdLine.toLowerCase() === 'clear') {
       this.clear();
@@ -84,20 +84,20 @@ class SentinelTerminalConsole {
         const colorized = data.lines.map((raw) => {
           const l = esc(raw);
           if (l.includes('[APPROVED]') || l.includes('✓')) {
-            return `<span style="color:var(--green)">${l}</span>`;
+            return `<span class="term-green">${l}</span>`;
           } else if (l.includes('[DENIED]') || l.includes('[ERROR]') || l.includes('✗')) {
-            return `<span style="color:var(--red)">${l}</span>`;
+            return `<span class="term-red">${l}</span>`;
           } else if (l.includes('[CRITICAL]') || l.includes('⚠')) {
-            return `<span style="color:var(--yellow);font-weight:bold">${l}</span>`;
+            return `<span class="term-yellow term-bold">${l}</span>`;
           } else if (l.startsWith('===') || l.startsWith('---')) {
-            return `<span style="color:var(--dim)">${l}</span>`;
+            return `<span class="term-dim">${l}</span>`;
           }
-          return `<span style="color:var(--text)">${l}</span>`;
+          return `<span class="term-text">${l}</span>`;
         });
         this.appendLines(colorized);
       }
     } catch (err) {
-      this.appendLines([`<span style="color:var(--red)">Command transport error: ${esc(err.message)}</span>`]);
+      this.appendLines([`<span class="term-red">Command transport error: ${esc(err.message)}</span>`]);
     }
   }
 
