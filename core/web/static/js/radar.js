@@ -54,15 +54,20 @@ class NetworkRadarCanvas {
   renderRisk() {
     if (!this.riskEl) return;
     const rows = this.blocks.slice(0, 4).map((block) => {
-      const raw = Number(block.reputation_score);
-      const score = Number.isFinite(raw) ? Math.max(0, Math.min(100, raw)) : null;
+      const raw = block.reputation_score;
+      const score = typeof raw === 'number' && Number.isFinite(raw)
+        ? Math.max(0, Math.min(100, raw))
+        : null;
       if (score === null) {
-        return `<div class="risk-row"><span class="risk-ip" title="${window.esc(block.ip)}">${window.esc(block.ip)}</span><span class="risk-unknown">NO SCORE</span><b class="risk-score">--</b></div>`;
+        const tagText = Array.isArray(block.reputation_tags) ? block.reputation_tags.join(', ') : 'Unrated';
+        return `<div class="risk-row" title="${window.esc(tagText)}"><span class="risk-ip" title="${window.esc(block.ip)}">${window.esc(block.ip)}</span><span class="risk-unknown">UNRATED</span><b class="risk-score">--</b></div>`;
       }
-      const cls = score >= 70 ? 'bad' : score >= 35 ? 'warn' : '';
-      return `<div class="risk-row" title="${window.esc(block.threat_level || 'IP reputation')}">`
+      // Reputation scale is 0=malicious and 100=clean (see threat_intel.py).
+      const cls = score <= 30 ? 'bad' : score <= 65 ? 'warn' : '';
+      const tagText = Array.isArray(block.reputation_tags) ? block.reputation_tags.join(', ') : 'Cached reputation';
+      return `<div class="risk-row" title="${window.esc(tagText)}">`
         + `<span class="risk-ip">${window.esc(block.ip)}</span>`
-        + `<svg class="risk-meter" viewBox="0 0 100 8" preserveAspectRatio="none" role="img" aria-label="IP reputation ${score} out of 100">`
+        + `<svg class="risk-meter" viewBox="0 0 100 8" preserveAspectRatio="none" role="img" aria-label="IP reputation score ${score} out of 100; higher is cleaner">`
         + `<rect class="risk-track" x="0" y="0" width="100" height="8" rx="2"></rect>`
         + `<rect class="risk-fill ${cls}" x="0" y="0" width="${score}" height="8" rx="2"></rect></svg>`
         + `<b class="risk-score">${score}</b></div>`;
