@@ -24,37 +24,42 @@ load_dotenv(BASE_DIR / ".env")
 GENERAL_KNOWLEDGE_DIR = BASE_DIR / "core" / "data"
 PERSONAL_CONTEXT_DIR = BASE_DIR / "core" / "personal_context"
 PERSONA_DIR = BASE_DIR / "core" / "data"
-STORAGE_DIR = BASE_DIR / "storage"
+_REPO_STORAGE_DIR = BASE_DIR / "storage"
 
 # --- System state directory ---------------------------------------------------
-# INV-008 requires the audit ledger to live "completely outside the directory
-# mapping bounds of the agent's sandboxed working tree". It was inside the repo
-# at storage/security/, mode 0644 and owned by the invoking user, so anything
-# running as that user could rewrite the administration trail.
-#
-# Prefer /var/lib/kaia (root-owned, group-readable by kaiacord). Fall back to the
-# in-repo location when that is not usable -- unprivileged development, CI, and
-# the test suite all need to run without root.
+# In the installed root service, code under /opt/kaia is intentionally read-only.
+# All runtime data must therefore live in the writable state directory, not in
+# the excluded /opt/kaia/storage tree. Unprivileged development falls back to
+# repository-local storage.
 _SYSTEM_STATE_DIR = Path(os.environ.get("KAIA_STATE_DIR", "/var/lib/kaia"))
 if os.access(_SYSTEM_STATE_DIR, os.W_OK):
     STATE_DIR = _SYSTEM_STATE_DIR
     STATE_DIR_IS_SYSTEM = True
+    STORAGE_DIR = STATE_DIR
+    SECURITY_STORAGE_DIR = STATE_DIR
 else:
+    STORAGE_DIR = _REPO_STORAGE_DIR
     STATE_DIR = STORAGE_DIR / "security"
     STATE_DIR_IS_SYSTEM = False
+    SECURITY_STORAGE_DIR = STORAGE_DIR / "security"
+
 PERSIST_DIR = STORAGE_DIR
-SECURITY_STORAGE_DIR = STORAGE_DIR / "security"
 THREAT_INTEL_DIR = STORAGE_DIR / "threat_intel"
 DOWNLOADS_DIR = Path.home() / "Downloads"
 LOG_DIR = BASE_DIR / "logs"
 LOG_FILE_PATH = LOG_DIR / "kaia.log"
 
-# Ensure directories exist
+# Ensure only writable data directories are created. In system-service mode,
+# /opt/kaia/storage is not writable under ProtectSystem=strict.
 GENERAL_KNOWLEDGE_DIR.mkdir(exist_ok=True)
 PERSONAL_CONTEXT_DIR.mkdir(exist_ok=True)
-STORAGE_DIR.mkdir(exist_ok=True)
-SECURITY_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
-THREAT_INTEL_DIR.mkdir(parents=True, exist_ok=True)
+if STATE_DIR_IS_SYSTEM:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    THREAT_INTEL_DIR.mkdir(parents=True, exist_ok=True)
+else:
+    STORAGE_DIR.mkdir(exist_ok=True)
+    SECURITY_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+    THREAT_INTEL_DIR.mkdir(parents=True, exist_ok=True)
 LOG_DIR.mkdir(exist_ok=True)
 
 # ChromaDB Configuration
