@@ -18,7 +18,7 @@ COLOR_YELLOW="\033[93m"
 COLOR_CYAN="\033[96m"
 COLOR_RESET="\033[0m"
 
-STATE_DIR="/var/lib/kaia"
+STATE_DIR="${KAIA_STATE_DIR:-/var/lib/kaia}"
 SNAPSHOT="${STATE_DIR}/pre-lockdown.nft"
 FORCE=0
 FROM_SNAPSHOT=0
