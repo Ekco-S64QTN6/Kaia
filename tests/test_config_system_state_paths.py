@@ -52,3 +52,12 @@ def test_installed_units_use_configured_state_directory():
     assert "ReadOnlyPaths=__STATE_DIR__" in restore_unit
     assert "Environment=KAIA_STATE_DIR=__STATE_DIR__" in lockdown_unit
     assert '"s|__STATE_DIR__|${STATE_DIR}|g"' in installer
+
+
+def test_installer_persists_state_path_for_manual_unlock():
+    repo_root = Path(__file__).resolve().parents[1]
+    installer = (repo_root / "scripts/install_services.sh").read_text()
+    unlock = (repo_root / "scripts/kaia-unlock.sh").read_text()
+
+    assert 'printf \'KAIA_STATE_DIR=%s\\n\' "$STATE_DIR" > /etc/kaia/state.env' in installer
+    assert '. /etc/kaia/state.env' in unlock
