@@ -449,6 +449,23 @@ def serialize_snapshot(
         except Exception:
             pass
 
+        # openat/openat2 probes existed in the BPF program but their perf buffer
+        # was never registered, so file activity was silently absent from the HUD.
+        try:
+            raw_opens = ebpf_engine.get_recent_opens(30)
+            for ev in raw_opens:
+                waterfall_events.append({
+                    "syscall": ev.get("syscall", "sys_enter_openat"),
+                    "pid": ev.get("pid", 0),
+                    "comm": ev.get("comm", ""),
+                    "filename": ev.get("filename", ""),
+                    "disposition": "observed",
+                    "source": "ebpf",
+                    "timestamp": ev.get("timestamp", time.time()),
+                })
+        except Exception:
+            pass
+
     if proc_sampler:
         try:
             sampled = proc_sampler.sample()
