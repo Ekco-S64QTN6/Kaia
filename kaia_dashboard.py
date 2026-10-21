@@ -410,7 +410,9 @@ class ThreatIntelCollector(threading.Thread):
                             "ip": ip,
                             "geo": geo.get("country", "Unknown"),
                             "tags": shodan.get("tags", []),
-                            "ports": shodan.get("ports", [])
+                            "ports": shodan.get("ports", []),
+                            "reputation_score": int(max(0, min(100, rep.get("score", 0)))),
+                            "threat_level": str(rep.get("threat_level", "unknown")),
                         })
                 except Exception:
                     pass
