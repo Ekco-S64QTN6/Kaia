@@ -215,6 +215,10 @@ header {
   overflow: hidden;
 }
 
+/* Small tables get fixed row budgets from semantic variants. */
+.table-services { --rows: 4; }
+.table-blocks { --rows: 2; }
+
 /* Small tables get a fixed row budget (set --rows on the element). */
 .table-fit-small {
   flex: 0 0 auto;
