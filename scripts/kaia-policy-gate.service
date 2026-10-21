@@ -16,14 +16,15 @@ StartLimitBurst=3
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/kaia
-Environment=KAIA_PROJECT_DIR=/opt/kaia
-Environment=PYTHONPATH=/opt/kaia:/opt/kaia/core
+WorkingDirectory=__DEPLOY_DIR__
+Environment=KAIA_PROJECT_DIR=__DEPLOY_DIR__
+Environment=KAIA_STATE_DIR=__STATE_DIR__
+Environment=PYTHONPATH=__DEPLOY_DIR__:__DEPLOY_DIR__/core
 # Signing secret, root-owned 0600. Never inline it here: an earlier version set
 # Environment=KAIA_CAPABILITY_TOKEN_SECRET=... in this tracked file, which put
 # the live capability-token signing key into public git history.
 EnvironmentFile=/etc/kaia/secret.env
-ExecStart=/usr/bin/python3 /opt/kaia/security/policy_gate.py
+ExecStart=/usr/bin/python3 __DEPLOY_DIR__/security/policy_gate.py
 Restart=always
 RestartSec=1
 RuntimeDirectory=kaiacord
@@ -55,7 +56,7 @@ LockPersonality=true
 
 # /var/lib/kaia holds the audit ledger and event DB (INV-008: outside the agent's
 # working tree). /opt/kaia itself stays read-only to the daemon.
-ReadWritePaths=/run/kaiacord /var/lib/kaia /opt/kaia/logs /var/lib/secdaemon
+ReadWritePaths=/run/kaiacord __STATE_DIR__ __DEPLOY_DIR__/logs /var/lib/secdaemon
 ReadWritePaths=-/etc/api_keys.json -/var/backups/credentials.txt -/root/.ssh
 
 [Install]

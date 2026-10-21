@@ -15,7 +15,7 @@ COLOR_RED="\033[91m"
 COLOR_YELLOW="\033[93m"
 COLOR_RESET="\033[0m"
 
-STATE_DIR="/var/lib/kaia"
+STATE_DIR="${KAIA_STATE_DIR:-/var/lib/kaia}"
 SNAPSHOT="${STATE_DIR}/pre-lockdown.nft"
 
 if [ "$EUID" -ne 0 ]; then
