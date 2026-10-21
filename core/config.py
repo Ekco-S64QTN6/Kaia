@@ -32,7 +32,7 @@ _REPO_STORAGE_DIR = BASE_DIR / "storage"
 # the excluded /opt/kaia/storage tree. Unprivileged development falls back to
 # repository-local storage.
 _SYSTEM_STATE_DIR = Path(os.environ.get("KAIA_STATE_DIR", "/var/lib/kaia"))
-if os.access(_SYSTEM_STATE_DIR, os.W_OK):
+if "KAIA_STATE_DIR" in os.environ or os.access(_SYSTEM_STATE_DIR, os.W_OK):
     STATE_DIR = _SYSTEM_STATE_DIR
     STATE_DIR_IS_SYSTEM = True
     STORAGE_DIR = STATE_DIR
