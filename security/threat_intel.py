@@ -1,4 +1,6 @@
 import sqlite3
+import ipaddress
+import threading
 import os
 import logging
 import time
@@ -19,7 +21,8 @@ CVE_DB_PATH = os.path.join(THREAT_INTEL_DIR, "cvedb", "cve.db")
 # InternetDB API configuration
 INTERNETDB_API_URL = "https://internetdb.shodan.io"
 INTERNETDB_CACHE_TTL_DAYS = 7
-_last_api_call_time = 0.0  # Module-level rate limiter state
+_last_api_call_time = 0.0  # Monotonic start time for the most recent request
+_api_rate_limit_lock = threading.Lock()
 
 def initialize_intel():
     """Initializes local threat intelligence directories and SQLite databases with mock values for testing."""
@@ -52,14 +55,19 @@ def initialize_intel():
             tags TEXT, -- comma-separated list
             vulns TEXT, -- comma-separated list of CVEs
             cpes TEXT, -- comma-separated list
-            last_updated TEXT NOT NULL DEFAULT ''
+            last_updated TEXT NOT NULL DEFAULT '',
+            found INTEGER NOT NULL DEFAULT 1
         )
     """)
-    # Migration: add last_updated column if missing from an older schema
+    # Migrations for caches created by older versions.
     try:
         cursor.execute("SELECT last_updated FROM data LIMIT 1")
     except sqlite3.OperationalError:
         cursor.execute("ALTER TABLE data ADD COLUMN last_updated TEXT NOT NULL DEFAULT ''")
+    try:
+        cursor.execute("SELECT found FROM data LIMIT 1")
+    except sqlite3.OperationalError:
+        cursor.execute("ALTER TABLE data ADD COLUMN found INTEGER NOT NULL DEFAULT 1")
     conn.commit()
     conn.close()
 
@@ -202,62 +210,75 @@ def _is_cache_stale(last_updated_str: str) -> bool:
 
 def _fetch_internetdb_api(ip: str) -> dict:
     """
-    Fetches IP enrichment data from the free Shodan InternetDB API.
-    https://internetdb.shodan.io/{ip} — no API key required, free for non-commercial use.
-    Rate-limited to ~1 request/second.
-    Returns parsed dict on success, empty dict on failure.
+    Fetch InternetDB while enforcing the per-process start-rate limit.
+
+    Requests are serialized through completion. This is deliberately conservative:
+    a slow response reduces throughput, but two threads cannot reserve a slot and
+    then be scheduled together into requests.get().
     """
     global _last_api_call_time
-
-    # Enforce ~1 req/sec rate limit
-    elapsed = time.monotonic() - _last_api_call_time
-    if elapsed < 1.0:
-        time.sleep(1.0 - elapsed)
-
-    url = f"{INTERNETDB_API_URL}/{ip}"
     try:
-        resp = requests.get(url, timeout=10)
-        _last_api_call_time = time.monotonic()
-
-        if resp.status_code == 404:
-            # Shodan returns 404 for IPs with no data — this is expected, not an error
-            logger.debug(f"InternetDB: No data for IP {ip} (404)")
-            return {}
-        resp.raise_for_status()
-        return resp.json()
-    except requests.RequestException as e:
-        _last_api_call_time = time.monotonic()
-        logger.warning(f"InternetDB API request failed for {ip}: {e}")
+        ip = ipaddress.ip_address(str(ip)).compressed
+    except (ValueError, TypeError):
         return {}
 
+    url = f"{INTERNETDB_API_URL}/{ip}"
+    with _api_rate_limit_lock:
+        elapsed = time.monotonic() - _last_api_call_time
+        if elapsed < 1.0:
+            time.sleep(1.0 - elapsed)
+        _last_api_call_time = time.monotonic()
 
-def _cache_internetdb_result(ip: str, api_data: dict):
-    """Writes an InternetDB API response into the local SQLite cache."""
+        try:
+            # Keep request initiation within the serialized critical section.
+            # requests.get is bounded by timeout and returns only after receiving
+            # the response body with the default non-streaming behavior.
+            resp = requests.get(url, timeout=10)
+            if resp.status_code == 404:
+                logger.debug("InternetDB: No data for %s (404)", ip)
+                return {"_kaia_not_found": True}
+            resp.raise_for_status()
+            data = resp.json()
+            if not isinstance(data, dict):
+                logger.warning("InternetDB returned a non-object payload for %s", ip)
+                return {}
+            return data
+        except (requests.RequestException, ValueError, TypeError) as e:
+            logger.warning("InternetDB API request failed for %s: %s", ip, e)
+            return {}
+
+def _cache_internetdb_result(ip: str, api_data: dict, found: bool = True):
+    """Cache a validated InternetDB result, including authoritative 404/no-data results."""
+    conn = None
     try:
-        conn = sqlite3.connect(INTERNETDB_PATH)
+        conn = sqlite3.connect(INTERNETDB_PATH, timeout=2.0)
         cursor = conn.cursor()
-        cursor.execute("""
-            INSERT OR REPLACE INTO data (ip, ports, hostnames, tags, vulns, cpes, last_updated)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (
-            ip,
-            ",".join(str(p) for p in api_data.get("ports", [])),
-            ",".join(api_data.get("hostnames", [])),
-            ",".join(api_data.get("tags", [])),
-            ",".join(api_data.get("vulns", [])),
-            ",".join(api_data.get("cpes", [])),
-            datetime.now(UTC).isoformat().replace("+00:00", "Z")
-        ))
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO data
+                (ip, ports, hostnames, tags, vulns, cpes, last_updated, found)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                ip,
+                ",".join(str(p) for p in api_data.get("ports", []) if isinstance(p, (int, str))),
+                ",".join(str(h) for h in api_data.get("hostnames", []) if isinstance(h, str)),
+                ",".join(str(t) for t in api_data.get("tags", []) if isinstance(t, str)),
+                ",".join(str(v) for v in api_data.get("vulns", []) if isinstance(v, str)),
+                ",".join(str(c) for c in api_data.get("cpes", []) if isinstance(c, str)),
+                datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                1 if found else 0,
+            ),
+        )
         conn.commit()
     except Exception as e:
-        logger.error(f"Failed to cache InternetDB result for {ip}: {e}")
+        logger.error("Failed to cache InternetDB result for %s: %s", ip, e)
     finally:
-        if 'conn' in locals():
+        if conn:
             conn.close()
 
-
-def _parse_internetdb_row(ip: str, row: tuple, source: str = "cache") -> dict:
-    """Parses a raw SQLite row into the standard InternetDB result dict."""
+def _parse_internetdb_row(ip: str, row: tuple, source: str = "cache", found: bool = True) -> dict:
+    """Parse cached fields while preserving whether the API reported a match."""
     return {
         "ip": ip,
         "ports": [int(p) for p in row[0].split(",") if p.strip().isdigit()] if row[0] else [],
@@ -265,68 +286,85 @@ def _parse_internetdb_row(ip: str, row: tuple, source: str = "cache") -> dict:
         "tags": [t for t in row[2].split(",") if t] if row[2] else [],
         "vulns": [v for v in row[3].split(",") if v] if row[3] else [],
         "cpes": [c for c in row[4].split(",") if c] if row[4] else [],
-        "found": True,
-        "source": source
+        "found": bool(found),
+        "source": source,
     }
-
 
 def lookup_internetdb(ip: str) -> dict:
     """
-    Queries Shodan InternetDB for open ports, hostnames, tags, vulns, and CPEs.
+    Cache-first InternetDB lookup with bounded input and negative caching.
 
-    Strategy: cache-first with lazy on-demand API fallback.
-    1. Check local SQLite cache.
-    2. On cache miss or stale entry (>7 days), call the free InternetDB API.
-    3. Cache the API result locally for future lookups.
-    4. On API error, return the stale cache if available, otherwise empty result.
+    Authoritative 404 results are cached for the same TTL as positive results;
+    transient request/parse failures are never cached as authoritative misses.
     """
+    try:
+        ip = ipaddress.ip_address(str(ip)).compressed
+    except (ValueError, TypeError):
+        logger.warning("Refusing invalid InternetDB IP address: %r", ip)
+        return {
+            "ip": str(ip)[:64], "ports": [], "hostnames": [], "tags": [],
+            "vulns": [], "cpes": [], "found": False, "source": "invalid",
+        }
+
     initialize_intel()
-    _NOT_FOUND = {
+    not_found = {
         "ip": ip, "ports": [], "hostnames": [], "tags": [],
-        "vulns": [], "cpes": [], "found": False, "source": "none"
+        "vulns": [], "cpes": [], "found": False, "source": "none",
     }
 
-    # Step 1: Check local cache
     cached_row = None
     cached_timestamp = ""
+    cached_found = True
+    conn = None
     try:
-        conn = sqlite3.connect(INTERNETDB_PATH)
+        conn = sqlite3.connect(INTERNETDB_PATH, timeout=2.0)
         cursor = conn.cursor()
-        cursor.execute("SELECT ports, hostnames, tags, vulns, cpes, last_updated FROM data WHERE ip = ?", (ip,))
+        cursor.execute(
+            "SELECT ports, hostnames, tags, vulns, cpes, last_updated, found FROM data WHERE ip = ?",
+            (ip,),
+        )
         row = cursor.fetchone()
         if row:
             cached_row = row[:5]
-            cached_timestamp = row[5] if row[5] else ""
+            cached_timestamp = row[5] or ""
+            cached_found = bool(row[6])
     except Exception as e:
-        logger.error(f"Failed to query InternetDB cache: {e}")
+        logger.error("Failed to query InternetDB cache: %s", e)
     finally:
-        if 'conn' in locals():
+        if conn:
             conn.close()
 
-    # Step 2: Return fresh cache hit immediately
-    if cached_row and not _is_cache_stale(cached_timestamp):
-        return _parse_internetdb_row(ip, cached_row, source="cache")
+    if cached_row is not None and not _is_cache_stale(cached_timestamp):
+        return _parse_internetdb_row(ip, cached_row, source="cache", found=cached_found)
 
-    # Step 3: Cache miss or stale — call the API
     api_data = _fetch_internetdb_api(ip)
 
+    # Only a real HTTP 404 is a negative cache entry. Network, TLS, status and
+    # JSON parsing errors return {}, which must not erase or poison older data.
+    if api_data.get("_kaia_not_found") is True:
+        _cache_internetdb_result(ip, {}, found=False)
+        return {**not_found, "source": "api-not-found"}
+
     if api_data:
-        # Cache the fresh result
-        _cache_internetdb_result(ip, api_data)
+        normalized = {}
+        for field in ("ports", "hostnames", "tags", "vulns", "cpes"):
+            value = api_data.get(field, [])
+            if not isinstance(value, list):
+                logger.warning("Ignoring malformed InternetDB field %s for %s", field, ip)
+                value = []
+            normalized[field] = value[:256]
+        _cache_internetdb_result(ip, normalized, found=True)
         return {
             "ip": ip,
-            "ports": api_data.get("ports", []),
-            "hostnames": api_data.get("hostnames", []),
-            "tags": api_data.get("tags", []),
-            "vulns": api_data.get("vulns", []),
-            "cpes": api_data.get("cpes", []),
+            **normalized,
             "found": True,
-            "source": "api"
+            "source": "api",
         }
 
-    # Step 4: API failed — return stale cache if available
-    if cached_row:
-        logger.info(f"InternetDB API unavailable for {ip}, returning stale cache")
-        return _parse_internetdb_row(ip, cached_row, source="stale_cache")
+    if cached_row is not None:
+        logger.info("InternetDB API unavailable for %s, returning stale cache", ip)
+        return _parse_internetdb_row(
+            ip, cached_row, source="stale_cache", found=cached_found
+        )
 
-    return _NOT_FOUND
+    return not_found
