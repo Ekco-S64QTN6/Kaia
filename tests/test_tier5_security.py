@@ -58,17 +58,29 @@ def test_rule_compilation():
     )
     assert "rule test_rule" in rule
     assert "bad_indicator" in rule
-    # YARA metacharacters must be stripped
-    assert "{" not in rule.split("strings:")[1].split("condition:")[0]
+    # IOC and metadata are quoted literals; metacharacters must not escape into rule syntax.
+    assert '$ioc = "bad_indicator{}[/]"' in rule
+    assert "condition:\\n        any of them" in rule
+    assert "rule bad_indicator" not in rule
 
 
-def test_yara_rule_validation():
+def test_yara_rule_validation(monkeypatch):
+    from types import SimpleNamespace
+    from pathlib import Path
     from security import rule_engine
-    if not rule_engine.HAS_YARA:
-        pytest.skip("yara binary and yara-python not installed on host")
+
     engine = RuleEngine.get_instance()
-    # A standard valid rule text
-    rule_text = """
+    calls = []
+
+    def fake_sandbox(argv, **kwargs):
+        calls.append((argv, kwargs))
+        rule_path = Path(argv[-2])
+        source = rule_path.read_text(encoding="utf-8")
+        stdout = "/tmp/kaia_benign_corpus/benign_0.txt\\n" if "Lorem ipsum" in source else ""
+        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(rule_engine.subprocess, "run", fake_sandbox)
+    valid = """
 rule test_valid_syntax {
     meta:
         author = "Tester"
@@ -79,12 +91,10 @@ rule test_valid_syntax {
         any of them
 }
 """
-    # Validation should succeed (and not match benign lorem ipsum files)
-    is_ok, err = engine.validate_rule(rule_text)
-    assert is_ok, f"Validation failed with: {err}"
+    is_ok, err = engine.validate_rule(valid)
+    assert is_ok, err
 
-    # False positive test: rule that matches lorem ipsum
-    false_positive_rule = """
+    false_positive = """
 rule test_false_positive {
     meta:
         author = "Tester"
@@ -95,9 +105,57 @@ rule test_false_positive {
         any of them
 }
 """
-    is_ok, err = engine.validate_rule(false_positive_rule)
+    is_ok, err = engine.validate_rule(false_positive)
     assert not is_ok
-    assert "False positive" in err or "validation syntax error" in err # fallbacks can return syntax or false positive depending on local yara installation
+    assert "False positive" in err
+    argv, kwargs = calls[0]
+    assert argv[0] == "/usr/bin/systemd-run"
+    assert "/usr/bin/yara" in argv
+    assert "--wait" in argv and "--pipe" in argv and "--collect" in argv
+    assert "-p" in argv and "PrivateNetwork=yes" in argv
+    assert kwargs["shell"] is False
+    assert "KAIA_CAPABILITY_TOKEN_SECRET" not in kwargs["env"]
+
+
+def test_yara_validation_fails_closed_when_sandbox_runner_is_missing(monkeypatch):
+    from security import rule_engine
+
+    engine = RuleEngine.get_instance()
+    monkeypatch.setattr(
+        rule_engine.subprocess, "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(FileNotFoundError("systemd-run unavailable")),
+    )
+    ok, error = engine.validate_rule('rule test_missing_runner { condition: true }')
+    assert not ok
+    assert "refusing to activate" in error.lower()
+
+
+def test_rule_engine_rejects_path_traversal_and_duplicate_names(tmp_path, monkeypatch):
+    from security import rule_engine
+
+    engine = RuleEngine.get_instance()
+    engine.rules_dir = str(tmp_path)
+    monkeypatch.setattr(rule_engine, "HAS_YARA", True)
+
+    ok, error = engine.add_rule("../escape", "Tester", "A valid threat description", "indicator")
+    assert not ok and "rule name" in error.lower()
+    assert not (tmp_path.parent / "escape.yar").exists()
+
+    (tmp_path / "existing_rule.yar").write_text('rule existing_rule { condition: true }', encoding="utf-8")
+    ok, error = engine.add_rule("existing_rule", "Tester", "A valid threat description", "indicator")
+    assert not ok and "already exists" in error.lower()
+
+
+def test_rule_engine_refuses_to_store_rule_without_python_yara(tmp_path, monkeypatch):
+    from security import rule_engine
+
+    engine = RuleEngine.get_instance()
+    engine.rules_dir = str(tmp_path)
+    monkeypatch.setattr(rule_engine, "HAS_YARA", False)
+
+    ok, error = engine.add_rule("new_rule", "Tester", "A valid threat description", "indicator")
+    assert not ok and "yara-python is required" in error.lower()
+    assert not (tmp_path / "new_rule.yar").exists()
 
 
 def test_fim_daemon_db_query(tmp_path):
