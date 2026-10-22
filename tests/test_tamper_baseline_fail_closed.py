@@ -88,3 +88,28 @@ def test_installed_signing_secret_is_in_the_integrity_watchlist(monkeypatch):
     )
     detector = td.TamperDetector()
     assert "/etc/kaia/secret.env" in detector.immutable_files
+
+
+def test_missing_trusted_protected_file_alerts_before_startup_aborts(tmp_path, monkeypatch):
+    target = tmp_path / "security" / "missing.py"
+    target.parent.mkdir()
+    baseline = tmp_path / "baseline.sha256"
+    baseline.write_text(f"{'0' * 64}  {target}\n", encoding="utf-8")
+    monkeypatch.setattr(config, "TRUSTED_BASELINE_PATH", str(baseline))
+    monkeypatch.setattr(config, "WORKSPACE_DIR", str(tmp_path))
+
+    detector = td.TamperDetector()
+    detector.immutable_files = [str(target)]
+    detector.append_only_files = []
+    detector.sqlite_append_only_files = []
+    events = []
+    monkeypatch.setattr(td, "log_security_event", lambda **kwargs: events.append(kwargs))
+    import security.policy_gate as policy_gate_module
+    lockdowns = []
+    monkeypatch.setattr(policy_gate_module, "trigger_lockdown", lambda reason: lockdowns.append(reason))
+
+    with pytest.raises(RuntimeError, match="missing"):
+        detector.start()
+
+    assert events and events[0]["event_type"] == "tamper_detected"
+    assert lockdowns
