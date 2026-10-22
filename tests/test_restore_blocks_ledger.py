@@ -114,14 +114,16 @@ def test_collect_blocks_canonicalizes_ip_and_keeps_protocol_scopes_separate(tmp_
     ]
 
 
-def test_collect_blocks_rejects_ambiguous_protocol_port_shapes(tmp_path):
+def test_collect_blocks_preserves_legacy_block_rule_semantics(tmp_path):
     ledger = tmp_path / "ledger.json"
     ledger.write_text(
+        # Both of these shapes historically produced an IP-wide rule.
         json.dumps(_record(protocol="all", port=53)) + "\n" +
         json.dumps(_record(protocol="tcp")) + "\n" +
         json.dumps(_record("198.51.100.5", "tcp", 443)) + "\n"
     )
 
     assert collect_blocks(str(ledger)) == [
+        {"target_ip": "192.0.2.10", "protocol": "all", "port": None},
         {"target_ip": "198.51.100.5", "protocol": "tcp", "port": 443}
     ]
