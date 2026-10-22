@@ -6,6 +6,7 @@ import hashlib
 import logging
 import threading
 import re
+import stat
 from pathlib import Path
 import config
 from security.db import log_security_event
@@ -122,17 +123,48 @@ class TamperDetector:
         return trusted
 
     def _compute_sha256(self, filepath: str, limit: int = None) -> str:
-        h = hashlib.sha256()
-        try:
-            with open(filepath, "rb") as f:
-                if limit is not None:
-                    h.update(f.read(limit))
-                else:
-                    h.update(f.read())
-            return h.hexdigest()
-        except Exception as e:
-            logger.error(f"Error computing hash for {filepath}: {e}")
+        """Hash a regular file via a no-follow descriptor with bounded memory."""
+        if limit is not None and limit < 0:
+            logger.error("Invalid negative SHA-256 byte limit %r for %s", limit, filepath)
             return ""
+
+        digest = hashlib.sha256()
+        chunk_size = 1024 * 1024
+        fd = None
+        try:
+            flags = (
+                os.O_RDONLY
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_NONBLOCK", 0)
+            )
+            fd = os.open(filepath, flags)
+            metadata = os.fstat(fd)
+            if not stat.S_ISREG(metadata.st_mode):
+                raise OSError(f"protected path is not a regular file: {filepath}")
+
+            if limit is not None:
+                remaining = limit
+                while remaining > 0:
+                    chunk = os.read(fd, min(chunk_size, remaining))
+                    if not chunk:
+                        break
+                    digest.update(chunk)
+                    remaining -= len(chunk)
+            else:
+                while True:
+                    chunk = os.read(fd, chunk_size)
+                    if not chunk:
+                        break
+                    digest.update(chunk)
+            return digest.hexdigest()
+        except Exception as e:
+            logger.error("Error computing SHA-256 for %s: %s", filepath, e)
+            return ""
+        finally:
+            if fd is not None:
+                os.close(fd)
+
 
     def _compute_sqlite_prefix_hash(self, db_path: str, row_count: int) -> str:
         """Hash a logical prefix of the SQLite ledger with unambiguous fields."""
