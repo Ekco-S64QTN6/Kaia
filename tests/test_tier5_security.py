@@ -223,11 +223,13 @@ def test_lockdown_trigger_uses_managed_unit_then_mocked_fallback(tmp_path):
     scripts = tmp_path / "scripts"
     scripts.mkdir()
     lockdown_script = scripts / "kaia-lockdown.sh"
-    lockdown_script.write_text("#!/bin/bash\\necho 'Lockdown running'", encoding="utf-8")
+    lockdown_script.write_text("#!/bin/bash\necho 'Lockdown running'", encoding="utf-8")
 
-    with mock.patch("config.WORKSPACE_DIR", str(tmp_path)), \\
-         mock.patch("security.policy_gate.log_security_event") as log_event, \\
-         mock.patch("security.policy_gate.subprocess.run") as mock_run:
+    with (
+        mock.patch("config.WORKSPACE_DIR", str(tmp_path)),
+        mock.patch("security.policy_gate.log_security_event") as log_event,
+        mock.patch("security.policy_gate.subprocess.run") as mock_run,
+    ):
         mock_run.side_effect = [mock.Mock(returncode=1), mock.Mock(returncode=0)]
         assert trigger_lockdown("test_tamper") is True
 
@@ -236,7 +238,6 @@ def test_lockdown_trigger_uses_managed_unit_then_mocked_fallback(tmp_path):
             mock.call(["/bin/bash", str(lockdown_script)], check=False, timeout=30),
         ]
         log_event.assert_called_once()
-
 def test_tamper_detector_sqlite_hash(tmp_path):
     from security.tamper_detection import TamperDetector
     import sqlite3
