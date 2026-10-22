@@ -10,7 +10,7 @@
 #
 # Exit: 0 restored, 1 error/aborted
 # ============================================================
-set -uo pipefail
+set -euo pipefail
 
 COLOR_RED="\033[91m"
 COLOR_GREEN="\033[92m"
@@ -18,15 +18,73 @@ COLOR_YELLOW="\033[93m"
 COLOR_CYAN="\033[96m"
 COLOR_RESET="\033[0m"
 
-# Manual recovery is outside systemd's Environment= context; load the
-# root-owned state path written by the installer when one is available.
-if [ -r /etc/kaia/state.env ]; then
-    set -a
-    . /etc/kaia/state.env
-    set +a
+if [ "$EUID" -ne 0 ]; then
+    echo -e "${COLOR_RED}Error: unlock must be executed as root.${COLOR_RESET}" >&2
+    exit 1
 fi
 
-STATE_DIR="${KAIA_STATE_DIR:-/var/lib/kaia}"
+# Do not source a root-run recovery configuration as shell code. Parse only the
+# single expected path assignment, and refuse an untrusted configuration file.
+STATE_DIR="/var/lib/kaia"
+STATE_CONFIG="/etc/kaia/state.env"
+if [ -e "$STATE_CONFIG" ] || [ -L "$STATE_CONFIG" ]; then
+    if [ -L "$STATE_CONFIG" ] || [ ! -f "$STATE_CONFIG" ]; then
+        echo "ERROR: refusing non-regular installed state configuration: $STATE_CONFIG" >&2
+        exit 1
+    fi
+    config_owner="$(stat -c '%u' -- "$STATE_CONFIG")"
+    config_mode="$(stat -c '%a' -- "$STATE_CONFIG")"
+    config_links="$(stat -c '%h' -- "$STATE_CONFIG")"
+    if [ "$config_owner" != "0" ] || (( (8#$config_mode & 0077) != 0 )) || [ "$config_links" != "1" ]; then
+        echo "ERROR: installed state configuration must be root-owned, private and single-link." >&2
+        exit 1
+    fi
+    state_line="$(grep -E '^KAIA_STATE_DIR=' "$STATE_CONFIG" || true)"
+    if [ "$(printf '%s\n' "$state_line" | grep -c '^KAIA_STATE_DIR=/' || true)" -ne 1 ] || \
+       [ "$(grep -c '^KAIA_STATE_DIR=' "$STATE_CONFIG" || true)" -ne 1 ]; then
+        echo "ERROR: installed state configuration must contain exactly one absolute KAIA_STATE_DIR." >&2
+        exit 1
+    fi
+    state_value="${state_line#*=}"
+    if [[ ! "$state_value" =~ ^/[A-Za-z0-9_./-]+$ ]]; then
+        echo "ERROR: installed KAIA_STATE_DIR contains unsupported characters." >&2
+        exit 1
+    fi
+    STATE_DIR="$state_value"
+fi
+
+state_dir_real="$(realpath -e -- "$STATE_DIR")" || {
+    echo "ERROR: configured state directory does not exist." >&2
+    exit 1
+}
+state_input="${STATE_DIR%/}"
+if [ "$state_dir_real" != "$state_input" ]; then
+    echo "ERROR: state directory must be canonical and must not use symlinks." >&2
+    exit 1
+fi
+STATE_DIR="$state_dir_real"
+case "$STATE_DIR" in
+    /var/lib/*|/srv/*|/mnt/*) ;;
+    *) echo "ERROR: state directory must be below /var/lib, /srv, or /mnt." >&2; exit 1 ;;
+esac
+if [ ! -d "$STATE_DIR" ]; then
+    echo "ERROR: configured state path is not a directory." >&2
+    exit 1
+fi
+
+# Prevent unprivileged users from replacing any directory in the trusted path.
+current="$STATE_DIR"
+while :; do
+    current_owner="$(stat -c '%u' -- "$current")"
+    current_mode="$(stat -c '%a' -- "$current")"
+    if [ "$current_owner" != "0" ] || (( (8#$current_mode & 0022) != 0 )); then
+        echo "ERROR: state path component must be root-owned and not group/world-writable: $current" >&2
+        exit 1
+    fi
+    [ "$current" = "/" ] && break
+    current="$(dirname -- "$current")"
+done
+
 SNAPSHOT="${STATE_DIR}/pre-lockdown.nft"
 FORCE=0
 FROM_SNAPSHOT=0
@@ -47,15 +105,53 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-if [ "$EUID" -ne 0 ]; then
-    echo -e "${COLOR_RED}Error: unlock must be executed as root.${COLOR_RESET}"
-    exit 1
-fi
-
 echo -e "${COLOR_CYAN}═══════════════════════════════════════${COLOR_RESET}"
 echo -e "${COLOR_CYAN}  Kaia lockdown release${COLOR_RESET}"
 echo -e "${COLOR_CYAN}═══════════════════════════════════════${COLOR_RESET}"
 echo
+
+# --- Validate restore point before any destructive firewall operation ---------
+if ! command -v nft >/dev/null 2>&1; then
+    echo "ERROR: nft command is unavailable; refusing to modify the ruleset." >&2
+    exit 1
+fi
+
+UFW_ACTIVE=0
+if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi '^Status: active'; then
+    UFW_ACTIVE=1
+fi
+
+SNAPSHOT_READY=0
+if [ -L "$SNAPSHOT" ]; then
+    echo "ERROR: refusing a symlinked pre-lockdown snapshot: $SNAPSHOT" >&2
+    exit 1
+elif [ -e "$SNAPSHOT" ]; then
+    if [ ! -f "$SNAPSHOT" ]; then
+        echo "ERROR: pre-lockdown snapshot is not a regular file: $SNAPSHOT" >&2
+        exit 1
+    fi
+    snapshot_owner="$(stat -c '%u' -- "$SNAPSHOT")"
+    snapshot_mode="$(stat -c '%a' -- "$SNAPSHOT")"
+    snapshot_links="$(stat -c '%h' -- "$SNAPSHOT")"
+    if [ "$snapshot_owner" != "0" ] || (( (8#$snapshot_mode & 0077) != 0 )) || [ "$snapshot_links" != "1" ]; then
+        echo "ERROR: pre-lockdown snapshot must be root-owned, private and single-link." >&2
+        exit 1
+    fi
+    if [ ! -s "$SNAPSHOT" ] || ! nft -c -f "$SNAPSHOT" >/dev/null 2>&1; then
+        echo "ERROR: pre-lockdown snapshot is empty or fails nftables validation." >&2
+        exit 1
+    fi
+    SNAPSHOT_READY=1
+fi
+
+if [ "$FROM_SNAPSHOT" -eq 1 ] && [ "$SNAPSHOT_READY" -ne 1 ]; then
+    echo "ERROR: snapshot restore was requested, but there is no validated snapshot." >&2
+    exit 1
+fi
+if [ "$UFW_ACTIVE" -ne 1 ] && [ "$SNAPSHOT_READY" -ne 1 ]; then
+    echo "ERROR: no active UFW manager or validated snapshot is available; firewall unchanged." >&2
+    exit 1
+fi
 
 # --- Show what we are about to undo -----------------------------------------
 if nft list table inet filter >/dev/null 2>&1; then
@@ -63,7 +159,7 @@ if nft list table inet filter >/dev/null 2>&1; then
 else
     echo -e "  ${COLOR_YELLOW}No lockdown table found — the lockdown may already be lifted.${COLOR_RESET}"
 fi
-if [ -f "$SNAPSHOT" ]; then
+if [ "$SNAPSHOT_READY" -eq 1 ]; then
     echo "  Pre-lockdown snapshot: $SNAPSHOT ($(date -r "$SNAPSHOT" '+%Y-%m-%d %H:%M:%S'))"
 else
     echo -e "  ${COLOR_YELLOW}No snapshot found at $SNAPSHOT${COLOR_RESET}"
@@ -90,7 +186,7 @@ nft flush ruleset
 
 restored=""
 if [ "$FROM_SNAPSHOT" -eq 1 ]; then
-    if [ -f "$SNAPSHOT" ]; then
+    if [ "$SNAPSHOT_READY" -eq 1 ]; then
         if nft -f "$SNAPSHOT" 2>/dev/null; then
             restored="raw snapshot"
         else
@@ -99,7 +195,7 @@ if [ "$FROM_SNAPSHOT" -eq 1 ]; then
     else
         echo -e "${COLOR_RED}No snapshot to restore from.${COLOR_RESET}"
     fi
-elif command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi '^Status: active'; then
+elif [ "$UFW_ACTIVE" -eq 1 ]; then
     # Preferred path when ufw manages the firewall: let ufw regenerate its own
     # ruleset authoritatively rather than replaying a captured snapshot, which
     # would leave ufw's userspace state and the kernel ruleset out of sync.
@@ -108,7 +204,7 @@ elif command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi '^Statu
     fi
 fi
 
-if [ -z "$restored" ] && [ -f "$SNAPSHOT" ]; then
+if [ -z "$restored" ] && [ "$SNAPSHOT_READY" -eq 1 ]; then
     nft -f "$SNAPSHOT" 2>/dev/null && restored="raw snapshot (fallback)"
 fi
 
