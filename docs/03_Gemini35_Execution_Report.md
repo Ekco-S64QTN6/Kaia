@@ -4,6 +4,10 @@
 **Target Repository:** `Ekco-S64QTN6/Kaia`  
 **OS/Python Version:** Arch Linux (Python 3.14)  
 **Author:** Gemini 3.5 Flash Agent  
+**Report type:** Historical execution snapshot, written 2026-07-09.  
+**Current authority:** See [`docs/master_plan.md` §10.5](master_plan.md) and [`docs/NEXT_STEPS.md`](NEXT_STEPS.md). No host state, service PID, database contents, test count, or live kernel behavior asserted below should be treated as current without a fresh run.
+
+> This report describes what an earlier agent reported on its then-current host. Its absolute local file links and host observations are historical; they are not deployment instructions or current acceptance evidence.
 
 ---
 
@@ -11,7 +15,7 @@
 
 This report documents the security audit findings, technical corrections, and implementation verification completed today. 
 
-All 34 automated unit and integration tests are passing successfully, and all local deprecation warnings from the Kaia codebase have been eliminated. The primary vulnerabilities associated with the SQLite database tamper detection (false positives) and systemd privilege escalation (failed lockdowns) have been completely resolved.
+At the time of this report, the author reported 34 passing automated tests. This historical result is superseded by the current GitHub Actions regression workflow and must not be read as today's test count. The primary vulnerabilities associated with the SQLite database tamper detection (false positives) and systemd privilege escalation (failed lockdowns) have been completely resolved.
 
 Furthermore, several integration issues observed in the daemon's startup logs (`kaia.log`) have been successfully resolved, making honeypot deployments, default network route discovery, and FIM mount tracking fully robust when running inside the hardened systemd container.
 
@@ -111,13 +115,13 @@ A second-pass audit was conducted by cross-referencing the codebase with [master
 
 ---
 
-## 5. Security Ledgers Purge & Fresh Verification
+## 5. Historical Host Actions Reported on 2026-07-09 (Not Re-verified)
 
 To ensure that the next agent starts with a completely clean and pristine environment, all historical audit logs (including the ~9,000 false positive events and the simulated attack events from the test suite) have been fully purged from:
 - SQLite Audit Database: `storage/security/security_events.db` (Table `security_events` truncated to 0 rows)
 - JSON Ledger: `storage/security/audit_ledger.json` (File size truncated to 0 bytes)
 
-The `kaia-policy-gate.service` was successfully re-installed and restarted on the host as **PID 22927**. It is running completely clean with **0 false positives**, **0.0 events-per-second**, and is successfully monitoring file integrity fallbacks, raw packet interfaces, and active decoy honeypot files.
+The original report stated that the service had been reinstalled and restarted as PID 22927 and reported clean monitoring at that time. PIDs, ledger contents, runtime permissions, and service health are ephemeral host state; none of these statements confirms the current system.
 
 To view the running status, verify using:
 ```bash

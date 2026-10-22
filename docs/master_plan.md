@@ -1,7 +1,7 @@
-# Kaia: Unified Architectural Specification & Implementation Blueprint (v7.5 – Final Corrected)
+# Kaia: Unified Architectural Specification & Implementation Blueprint (v7.6 — Living Specification)
 
-**Document Version:** 7.5 (Full Consolidation with Security Review Integrations and Missing Mechanics Codified)  
-**Status:** Authoritative Source of Truth – **Declarative Only, No Implementation Code**  
+**Document Version:** 7.6 (Current Architecture, Implementation Status and Verification Boundaries; audit snapshot 2026-10-22)  
+**Status:** Authoritative, living specification and roadmap — **declarative architecture plus dated implementation/verification status**  
 **Target Environment:** Arch Linux, Systemd, eBPF, Kitty Terminal  
 **Intended Reader:** Automated Coding Agents, Systems Engineers, Security Architects
 
@@ -17,7 +17,7 @@
 
 ## 0. Authoritative Source of Truth Clause
 
-This document constitutes the **absolute, unalterable constitution** of the Kaia project. It supersedes all individual design reports, legacy walkthroughs, code reviews, text transcripts, and research notes. Every subsequent modification, branch refactor, or agent action must align with the architectural constraints, system invariants, and implementation standards defined herein.
+This document is Kaia's **authoritative architectural specification and roadmap**. Its target requirements and invariants take precedence over individual design reports, legacy walkthroughs, reviews, transcripts and research notes. The implementation-status section is dated evidence about repository code and tests, not a declaration that a particular host is deployed or verified. Update this living specification when requirements or implementation change; retain obsolete source material only as clearly identified history.
 
 **The following six documents are now fully superseded and should be archived:**
 
@@ -234,7 +234,7 @@ The discovery layer must open an unprivileged network frame interceptor bound to
 
 ### 5.2 Broadcast Protocol Extraction
 
-The following protocols are target requirements; the NetBIOS item below is still unimplemented as of the 2026-10-22 review. The currently supported parser set should be checked in security/network_discovery.py before claiming complete protocol coverage.
+NetBIOS Name Service handling now includes a limited response parser for first-level encoded QNAMEs (source UDP port 137, response flag set). Queries are deliberately not treated as the querier's hostname. This does not yet cover every NBNS/NBSTAT answer form or establish full network visibility; see §10.5.
 
 The following protocols must be parsed from captured packets:
 
@@ -574,7 +574,7 @@ rather than the work being outstanding:
 - [x] **eBPF unlinkat visibility:** the sys_enter_unlinkat perf buffer and waterfall lane were wired in October 2026. It records attempts at syscall entry, not confirmed successful deletions.
 - [x] **FIM/YARA hardening:** scanning now uses the original event descriptor's bounded byte snapshot; rule validation fails closed when isolated prerequisites are unavailable, and generated string literals are escaped.
 - [x] **Basic package monitoring:** a passive pacman.log monitor records completed transactions; AUR/repository/dependency attestation remains future work.
-- [ ] **Still outstanding:** expanded eBPF/FIM breadth, NetBIOS parsing, broader offline threat-intelligence stores, true execution-blocking FIM, response streaming and the other Tier 5 extensions in §11.
+- [ ] **Still outstanding:** expanded eBPF/FIM breadth, broader NBNS/NBSTAT coverage, broader offline threat-intelligence stores, true execution-blocking FIM, response streaming and the other Tier 5 extensions in §11.
 
 
 
@@ -644,7 +644,7 @@ baseline and firewall checks; do not assume the recorded state is unchanged.
    is observational. A permission-event design needs explicit timeout, deadlock,
    process-response and fail-open/fail-closed semantics plus kernel tests.
 4. **Complete telemetry coverage.** Validate available BCC probes on the target kernel;
-   implement and test missing NetBIOS parsing, broader file/process/network hooks and
+   extend and test NBNS/NBSTAT response parsing, broader file/process/network hooks and
    required event-to-detection correlation.
 5. **Finish remaining Tier 5 work incrementally:** command-response streaming, broader
    supply-chain attestation, behavioral baselines, alert-confidence scoring, secrets
@@ -692,7 +692,7 @@ This is the current repository status as of the audit date. It describes impleme
 - [ ] **Complete kernel telemetry.** Probe availability depends on BCC, kernel version/symbols, capabilities and successful registration. Current unlinkat records attempts, not successful deletions; additional coverage/correlation remains.
 - [ ] **End-to-end FIM/YARA response.** Source generation, isolated validation and same-FD scanning exist, but kernel event availability and the complete event-to-verdict-to-response path require controlled host tests.
 - [ ] **Incremental command-response streaming** for long-running diagnostics/sandbox execution. Interactive command entry and one-shot responses are already implemented.
-- [ ] **Network discovery gap:** NetBIOS Name Service parsing is still listed in the spec but is not yet implemented.
+- [ ] **Network discovery limitation:** a basic NetBIOS Name Service response parser handles first-level encoded QNAMEs. Queries are ignored to avoid attributing a requested name to the querier. NBSTAT records, alternate/compressed name forms and broader edge-case coverage remain unfinished.
 - [ ] **Broader supply-chain integrity:** AUR build tracking, repository/metadata changes, dependency graph shifts and package signature/installed-content attestation are not implemented.
 - [ ] **Other Tier 5 capabilities:** process/network/file behavioral baselines, alert-confidence framework, secrets exposure scanning, backup existence/recency/restorability, independent health and data-freshness supervision, historical threat-intel snapshots, local GeoLite2/CVE/passive-DNS datasets and DuckDB-backed expansion.
 - [ ] **Target-host validation:** verify the actual systemd deployment, trusted baseline, live block/unblock, UFW reload survival, boot replay/tombstones, fanotify marks and BCC probe compilation on the deployed Arch Linux host.
@@ -718,7 +718,7 @@ This section is the backlog of capabilities not yet complete after the 2026-10-2
 - **Backup awareness:** validate configured backup existence, recency and restorability; do not infer restore readiness from file presence alone.
 - **Threat-intelligence expansion:** InternetDB validation, throttling and negative cache are implemented. Local GeoLite2, richer local CVE tables, passive DNS maps, historical snapshots and optional DuckDB analysis remain future work.
 - **Self-health monitoring:** provide independent service supervision and explicit freshness/availability signals for the Policy Gate, collectors, databases, FIM, eBPF and threat-intel cache.
-- **Telemetry expansion:** implement missing NetBIOS parsing and broader kernel hook/correlation coverage. unlinkat telemetry currently records syscall-entry attempts, not completed deletions.
+- **Telemetry expansion:** extend NBNS/NBSTAT parsing and broader kernel hook/correlation coverage. unlinkat telemetry currently records syscall-entry attempts, not completed deletions.
 - **Execution-blocking FIM:** separately design and test permission-event enforcement; notification-mode fanotify remains observational.
 
 These are the remaining Tier 5 or beyond items. See §10.5 for priority order and current implementation evidence.

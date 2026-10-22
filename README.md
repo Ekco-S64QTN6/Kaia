@@ -44,6 +44,7 @@ This describes capabilities present in the repository. It is not proof that priv
 - **Integrity monitoring:** trusted-baseline validation, watchlist discovery, tamper alerts and lockdown circuit breaking are implemented. Startup without a trusted baseline still has a weaker bootstrap path; review and establish the baseline before relying on integrity guarantees.
 - **File event handling:** the fanotify handler keeps the original event descriptor open, scans and hashes the same captured bytes, and caps the snapshot at 64 MiB. YARA validation now fails closed when the isolated validator is unavailable, and generated IOC strings are escaped as literals.
 - **eBPF telemetry:** the probe source includes execve, openat2, network-connect/retransmit, privilege-transition and unlinkat events. Unlinkat records are surfaced in the waterfall as syscall-entry attempts, not proof a deletion succeeded.
+- **Passive discovery:** ARP, IPv4/UDP mDNS, LLMNR and SSDP observations are recorded from traffic on the selected interface; basic NetBIOS Name Service response QNAME decoding is included. It is not a complete inventory and query names are not attributed to queriers.
 - **Threat intelligence:** InternetDB input validation, per-process serialized requests and negative caching for authoritative 404 responses are implemented alongside the existing reputation/CVE lookup paths.
 - **Package transactions:** a passive pacman-log monitor records install/upgrade/downgrade/reinstall/remove events after successful ALPM transaction completion. It is a first increment, not full supply-chain attestation.
 - **Operator UI:** the loopback-only web HUD has interactive command entry, bounded command dispatch through the Policy Gate, telemetry WebSocket updates and strict self-hosted CSP. Command results are returned after the request completes; incremental response streaming for long-running operations remains unfinished.
@@ -54,7 +55,7 @@ This describes capabilities present in the repository. It is not proof that priv
 - **Execution-blocking FIM:** the current implementation uses FAN_CLASS_NOTIF. It observes file events but does not hold the originating process for a scan verdict.
 - **Effective kernel telemetry:** full eBPF visibility depends on BCC, kernel support, available capabilities and successful probe registration. Empty telemetry is not a benign verdict.
 - **End-to-end detection enforcement:** YARA rule validation and event scanning code exist, but the whole event-to-verdict-to-response path still requires target-host verification.
-- **Broader roadmap:** NetBIOS discovery; expanded eBPF/FIM coverage; AUR/repository/dependency graph monitoring; behavioral baselines; alert-confidence scoring; secrets-exposure scanning; backup restorability checks; independent service/data-freshness supervision; and expanded offline GeoLite2/CVE/passive-DNS threat intelligence remain unfinished.
+- **Broader roadmap:** expanded eBPF/FIM coverage; broader NBNS/NBSTAT parsing and edge-case coverage; AUR/repository/dependency graph monitoring; behavioral baselines; alert-confidence scoring; secrets-exposure scanning; backup restorability checks; independent service/data-freshness supervision; and expanded offline GeoLite2/CVE/passive-DNS threat intelligence remain unfinished.
 - **Production proof:** the installed systemd units, trusted baseline, firewall block/unblock behavior, UFW reload survival and reboot replay must be verified on the actual Arch Linux host.
 
 For the full implementation/verification matrix and remaining priorities, see docs/master_plan.md. The deployment checklist is a dated historical checkpoint and must be reconciled with the current host before running privileged commands.
@@ -125,7 +126,7 @@ Runtime databases, caches, audit ledgers and secrets are configuration-dependent
 
 ## Project source of truth
 
-`docs/master_plan.md` is the authoritative architectural specification and roadmap. This README is the user-facing overview. Archived reviews and secondary design documents are historical inputs; reconcile them against the master plan and actual implementation before treating them as current requirements.
+`docs/README.md` explains the documentation hierarchy. `docs/master_plan.md` is the authoritative architecture and current repository-status record; `docs/NEXT_STEPS.md` is the target-host acceptance checklist. This README is the user-facing overview. Files under `docs/archived/` and dated execution reports are historical evidence, not current requirements or proof of present host state.
 ---
 
 > **Deployment state requires local verification.** The last recorded setup checklist is dated 2026-09-08. This repository cannot determine whether the services have since been installed or tested on the target host. Verify the active unit, deployment path, state directory, trusted baseline and firewall recovery before relying on them. See **[docs/NEXT_STEPS.md](docs/NEXT_STEPS.md)**.

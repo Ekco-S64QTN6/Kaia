@@ -139,9 +139,11 @@ against the deployed kernel/BCC/toolchain remain unfinished.
 
 ### 4. Network discovery gaps
 
-NetBIOS Name Service parsing is still a target requirement and is not implemented.
-The existing passive discovery only sees traffic actually observed on the configured
-interface; it is not a complete asset inventory or active scanner.
+Basic NetBIOS Name Service response parsing is implemented and covered by packet-level
+regression tests. It decodes first-level encoded QNAMEs from responses whose source
+port is 137; it ignores queries to avoid misattributing the requested name to the
+querier. NBSTAT/compressed-name coverage is incomplete. Passive discovery only sees
+traffic observed on the configured interface and is not a complete asset inventory.
 
 ### 5. Broader supply-chain and resilience features
 
