@@ -70,35 +70,51 @@ def test_malformed_api_payload_is_not_cached_as_authoritative_data(monkeypatch, 
     assert result["source"] == "none"
 
 
-def test_rate_limit_lock_serializes_request_start_slots(monkeypatch):
-    starts = []
-    lock = threading.Lock()
-    ticks = iter([100.0, 100.0, 101.0, 101.0, 102.0, 102.0])
+def test_rate_limit_serializes_real_request_calls_across_threads(monkeypatch):
+    """Exercise _fetch_internetdb_api itself, not a copy of its scheduling code."""
+    clock_lock = threading.Lock()
+    clock = {"now": 100.0}
+    request_starts = []
+    request_lock = threading.Lock()
 
     def monotonic():
-        with lock:
-            return next(ticks)
+        with clock_lock:
+            return clock["now"]
 
-    sleeps = []
+    def sleep(seconds):
+        with clock_lock:
+            clock["now"] += seconds
+
+    def fake_get(url, timeout):
+        with request_lock:
+            request_starts.append(monotonic())
+        return SimpleNamespace(
+            status_code=200,
+            raise_for_status=lambda: None,
+            json=lambda: {"ports": []},
+        )
+
     monkeypatch.setattr(threat_intel.time, "monotonic", monotonic)
-    monkeypatch.setattr(threat_intel.time, "sleep", lambda delay: sleeps.append(delay))
+    monkeypatch.setattr(threat_intel.time, "sleep", sleep)
     monkeypatch.setattr(threat_intel, "_last_api_call_time", 99.0)
+    monkeypatch.setattr(threat_intel.requests, "get", fake_get)
 
-    # Exercise the scheduling boundary directly without network I/O.
-    def reserve_slot():
-        with threat_intel._api_rate_limit_lock:
-            now = threat_intel.time.monotonic()
-            delay = 1.0 - (now - threat_intel._last_api_call_time)
-            if delay > 0:
-                threat_intel.time.sleep(delay)
-            threat_intel._last_api_call_time = threat_intel.time.monotonic()
-            starts.append(threat_intel._last_api_call_time)
-
-    threads = [threading.Thread(target=reserve_slot) for _ in range(3)]
+    threads = [
+        threading.Thread(
+            target=threat_intel._fetch_internetdb_api,
+            args=(f"192.0.2.{i}",),
+        )
+        for i in (1, 2, 3)
+    ]
     for thread in threads:
         thread.start()
     for thread in threads:
-        thread.join()
+        thread.join(timeout=3.0)
 
-    assert len(starts) == 3
-    assert starts == sorted(starts)
+    assert all(not thread.is_alive() for thread in threads)
+    assert len(request_starts) == 3
+    assert request_starts == sorted(request_starts)
+    assert all(
+        right - left >= 1.0
+        for left, right in zip(request_starts, request_starts[1:])
+    )
