@@ -155,4 +155,27 @@ def test_geoip_updater_uses_installed_state_path_without_sourcing_config():
     assert 'GEOIP_DIR="${STATE_DIR}/threat_intel/geoip"' in script
     assert 'GEOIP_DIR="${PROJECT_DIR}/storage/threat_intel/geoip"' in script
     assert 'chown root:kaiacord -- "$MMDB_FILE"' in script
-    assert 'chmod 640 -- "$MMDB_FILE"' in script
+    assert 'chmod 640 -- "$MMDB_FILE"' in scriptdef test_decoy_network_setup_does_not_suppress_failures_or_enable_global_forwarding():
+    script = Path("scripts/setup_decoys.sh").read_text()
+
+    assert "set -euo pipefail" in script
+    assert "|| true" not in script
+    assert "echo 1 > /proc/sys/net/ipv4/ip_forward" not in script
+    assert "ip netns add ns_decoy" in script
+    assert "ip link add veth_host type veth peer name veth_decoy" in script
+    assert "post-setup verification failed" in script
+    assert "rolling back resources created by this invocation" in script
+    assert "external exposure is not configured" in script
+
+
+def test_decoy_network_setup_refuses_partial_state_and_verifies_existing_state():
+    script = Path("scripts/setup_decoys.sh").read_text()
+
+    assert "existing or partial decoy namespace/interface state detected" in script
+    assert "expected_host_addr" in script
+    assert "expected_namespace_addr" in script
+    assert "verify_host_peer_binding" in script
+    assert "verify_link_up veth_host" in script
+    assert "verify_namespace_link_up" in script
+    assert "verify_namespace_loopback_up" in script
+
