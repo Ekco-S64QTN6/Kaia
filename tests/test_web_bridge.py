@@ -370,3 +370,34 @@ def test_block_command_rejects_extra_arguments(monkeypatch):
     result = bridge_module.dispatch_operator_command("block 192.0.2.55 extra")
     assert result["success"] is False
     assert any("Usage: block <ip>" in line for line in result["lines"])
+
+
+def test_dashboard_dynamic_status_colours_use_css_classes_under_strict_csp():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    app = (root / "core" / "web" / "static" / "js" / "app.js").read_text()
+    css = (root / "core" / "web" / "static" / "css" / "sentinel.css").read_text()
+
+    assert ".style" not in app
+    assert "state-good" in app and "state-bad" in app
+    assert "#policy-gate-badge.state-good" in css
+    assert "#policy-gate-badge.state-bad" in css
+    assert "#host-meta.state-bad" in css
+
+
+@pytest.mark.asyncio
+async def test_csp_allows_only_supported_loopback_websocket_hosts():
+    bridge = KaiaWebBridge(host="127.0.0.1", port=8765)
+    client = TestClient(TestServer(bridge.create_app()))
+    await client.start_server()
+    try:
+        resp = await client.get("/")
+        csp = resp.headers["Content-Security-Policy"]
+        assert "style-src 'self'" in csp
+        assert "'unsafe-inline'" not in csp
+        assert "font-src 'self';" in csp
+        assert "ws://127.0.0.1:*" in csp
+        assert "ws://localhost:*" in csp
+        assert "http://127.0.0.1:*" not in csp
+    finally:
+        await client.close()
