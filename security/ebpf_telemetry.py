@@ -3,6 +3,7 @@ import sys
 import time
 import socket
 import struct
+import ctypes
 import logging
 import threading
 from collections import deque
@@ -208,6 +209,7 @@ class EBPFTelemetryEngine:
         
         self.exec_deque = deque(maxlen=500)
         self.open_deque = deque(maxlen=500)
+        self.delete_deque = deque(maxlen=500)
         self.conn_deque = deque(maxlen=500)
         self.retrans_deque = deque(maxlen=500)
         self.priv_deque = deque(maxlen=500)
@@ -227,6 +229,7 @@ class EBPFTelemetryEngine:
             # Register perf buffer callbacks
             self.bpf["exec_events"].open_perf_buffer(self._handle_exec_event)
             self.bpf["openat2_events"].open_perf_buffer(self._handle_openat2_event)
+            self.bpf["delete_events"].open_perf_buffer(self._handle_delete_event)
             self.bpf["tcp_connect_events"].open_perf_buffer(self._handle_tcp_connect)
             self.bpf["tcp_retransmit_events"].open_perf_buffer(self._handle_tcp_retransmit)
             self.bpf["privilege_events"].open_perf_buffer(self._handle_privilege_event)
@@ -306,6 +309,28 @@ class EBPFTelemetryEngine:
                 "filename": clean.get("path", ""),
                 "timestamp": time.time(),
             })
+
+    def _handle_delete_event(self, cpu, data, size):
+        """Record an unlinkat syscall attempt; sys_enter does not prove deletion succeeded."""
+        event = self.bpf["delete_events"].event(data)
+        filename = event.filename.decode("utf-8", "ignore")
+        comm = event.comm.decode("utf-8", "ignore")
+        from security.telemetry_sanitizer import sanitize_telemetry
+        clean = sanitize_telemetry({
+            "pid": str(event.pid),
+            "comm": comm,
+            "path": filename,
+        })
+        record = {
+            "syscall": "sys_enter_unlinkat",
+            "pid": int(clean.get("pid") or event.pid),
+            "comm": clean.get("comm", ""),
+            "filename": clean.get("path", ""),
+            "disposition": "observed",
+            "timestamp": time.time(),
+        }
+        with self.lock:
+            self.delete_deque.append(record)
 
     def _handle_tcp_connect(self, cpu, data, size):
         event = self.bpf["tcp_connect_events"].event(data)
@@ -411,6 +436,10 @@ class EBPFTelemetryEngine:
     def get_recent_opens(self, n=20) -> list:
         with self.lock:
             return list(self.open_deque)[-n:]
+
+    def get_recent_deletes(self, n=20) -> list:
+        with self.lock:
+            return list(self.delete_deque)[-n:]
 
     def get_privilege_escalations(self, n=10) -> list:
         with self.lock:

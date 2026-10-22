@@ -466,6 +466,23 @@ def serialize_snapshot(
         except Exception:
             pass
 
+        # unlinkat is a syscall-entry observation: it records an attempt, not
+        # proof that the kernel completed the deletion.
+        try:
+            raw_deletes = ebpf_engine.get_recent_deletes(30)
+            for ev in raw_deletes:
+                waterfall_events.append({
+                    "syscall": ev.get("syscall", "sys_enter_unlinkat"),
+                    "pid": ev.get("pid", 0),
+                    "comm": ev.get("comm", ""),
+                    "filename": ev.get("filename", ""),
+                    "disposition": "observed",
+                    "source": "ebpf",
+                    "timestamp": ev.get("timestamp", time.time()),
+                })
+        except Exception:
+            pass
+
     if proc_sampler:
         try:
             sampled = proc_sampler.sample()
