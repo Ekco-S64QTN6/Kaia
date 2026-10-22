@@ -315,3 +315,16 @@ def test_terminal_colors_use_stylesheet_classes_under_strict_csp():
     ):
         assert f".{class_name}" in stylesheet
         assert f'class="{class_name}' in terminal_js or class_name == "term-bold"
+
+
+def test_dashboard_dynamic_status_colours_use_css_classes_under_strict_csp():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    app = (root / "core" / "web" / "static" / "js" / "app.js").read_text()
+    css = (root / "core" / "web" / "static" / "css" / "sentinel.css").read_text()
+
+    assert ".style" not in app
+    assert "state-good" in app and "state-bad" in app
+    assert "#policy-gate-badge.state-good" in css
+    assert "#policy-gate-badge.state-bad" in css
+    assert "#host-meta.state-bad" in css
