@@ -33,3 +33,14 @@ Evidence at one level does not imply the next. In particular, notification-mode 
 ## Maintenance rule
 
 When code or a subsystem contract changes, update the README summary if user-visible behavior changes, `master_plan.md` §10.5 and the relevant architecture section, and this checklist if a target-host command or acceptance criterion changes. Mark dated reports as historical instead of silently rewriting what they originally observed. Never claim host installation, baseline trust or privileged behavior without fresh host evidence.
+
+
+## Automated regression suite
+
+Run `python -m pip install -r requirements-test.txt` then
+`bash scripts/run_ci_tests.sh`. This runner is also called by the GitHub Actions
+workflow, so local and CI suite membership stays synchronized. It is a focused,
+deterministic suite, not every Python file under `tests/`: legacy scripts such as
+`verify_security.py` are manual/integration tools, and `test_advanced_security.py`
+contains host/database-backed tests that need isolation before it is safe for CI.
+Target-host checks remain separate.
