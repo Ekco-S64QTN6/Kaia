@@ -86,6 +86,16 @@ case "$STATE_DIR" in
     /var/lib/*|/srv/*|/mnt/*) ;;
     *) echo "ERROR: KAIA_STATE_DIR must be below /var/lib, /srv, or /mnt." >&2; exit 1 ;;
 esac
+
+# The trusted baseline must not be placed in or above the tree it authenticates.
+# Otherwise a writable parent can replace the state directory, or the baseline
+# lives inside the same deployment whose contents it is meant to validate.
+case "$PROJECT_DIR/" in
+    "$STATE_DIR/"*) echo "ERROR: KAIA_STATE_DIR must not contain the project checkout." >&2; exit 1 ;;
+esac
+case "$STATE_DIR/" in
+    "$PROJECT_DIR/"*) echo "ERROR: KAIA_STATE_DIR must not be inside the project checkout." >&2; exit 1 ;;
+esac
 BASELINE="${STATE_DIR}/baseline.sha256"
 
 echo -e "${CYAN}═══════════════════════════════════════${NC}"
