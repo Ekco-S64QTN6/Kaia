@@ -31,3 +31,22 @@ def test_installer_normalizes_both_quote_styles_and_writes_real_newlines():
     assert 'secret_val="${secret_val:1:${#secret_val}-2}"' in script
     assert 'printf \'%s\\n\' "KAIA_CAPABILITY_TOKEN_SECRET=$secret_val"' in script
     assert 'printf \'%s\\n\' "KAIA_STATE_DIR=$STATE_DIR"' in script
+
+
+
+def test_installer_restricts_privileged_destinations_and_checkout_overlap():
+    script = Path("scripts/install_services.sh").read_text()
+
+    assert "DEPLOY_DIR must be a dedicated directory below /opt." in script
+    assert "STATE_DIR must be a dedicated directory below /var/lib, /srv, or /mnt." in script
+    assert "DEPLOY_DIR must not be inside the source checkout." in script
+    assert "DEPLOY_DIR must not contain the source checkout." in script
+    assert "STATE_DIR must not be inside the source checkout." in script
+    assert "STATE_DIR must not contain the source checkout." in script
+
+
+def test_installer_rejects_symlinked_fim_history_migration():
+    script = Path("scripts/install_services.sh").read_text()
+
+    assert '[ -L "$fim_db_destination" ]' in script
+    assert '[ -L "$legacy_fim_db" ]' in script
