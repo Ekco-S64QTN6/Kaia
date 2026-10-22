@@ -225,7 +225,7 @@ NFT_BLOCK_PRIORITY = -10
 # than against whatever happens to be on disk.
 #
 # Generate/refresh after legitimate changes:  sudo ./scripts/kaia-baseline.sh
-TRUSTED_BASELINE_PATH = "/var/lib/kaia/baseline.sha256"
+TRUSTED_BASELINE_PATH = str(STATE_DIR / "baseline.sha256")
 
 # Circuit breaker. Latching already prevents one unchanged file from re-firing,
 # but several files changing in sequence could still trigger a burst. Cap the
