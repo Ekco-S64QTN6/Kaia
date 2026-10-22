@@ -315,3 +315,25 @@ def test_terminal_colors_use_stylesheet_classes_under_strict_csp():
     ):
         assert f".{class_name}" in stylesheet
         assert f'class="{class_name}' in terminal_js or class_name == "term-bold"
+
+
+def test_unblock_command_routes_through_policy_gate(monkeypatch):
+    import core.web_bridge as bridge_module
+    calls = []
+    monkeypatch.setattr(
+        bridge_module, "generate_capability_token",
+        lambda capability, target, duration_seconds: calls.append(("token", capability, target)) or "signed",
+    )
+    monkeypatch.setattr(
+        bridge_module, "send_policy_gate_ipc",
+        lambda action, payload, token: calls.append(("ipc", action, payload, token)) or
+        (True, {"status": "success", "stdout": "No matching Kaia firewall rule existed."}),
+    )
+
+    result = bridge_module.dispatch_operator_command("unblock 192.0.2.55")
+
+    assert result["success"]
+    assert calls[0] == ("token", "unblock_ip", "192.0.2.55")
+    assert calls[1][1] == "unblock_ip"
+    assert calls[1][2]["target_ip"] == "192.0.2.55"
+    assert calls[1][2]["protocol"] == "all"
