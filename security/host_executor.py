@@ -296,6 +296,15 @@ class HostExecutor:
             # different path through string re-resolution.
             root_fd = os.open(workspace_abs, directory_flags)
             parent_fd = os.dup(root_fd)
+            root_metadata = os.fstat(root_fd)
+            enforce_root_tree = os.geteuid() == 0
+            if enforce_root_tree and (
+                root_metadata.st_uid != 0 or root_metadata.st_mode & 0o022
+            ):
+                raise PermissionError(
+                    "root executor requires a root-owned workspace not writable by group/others"
+                )
+
             for component in parts[:-1]:
                 try:
                     child_fd = os.open(component, directory_flags, dir_fd=parent_fd)
@@ -311,6 +320,13 @@ class HostExecutor:
                 if not stat.S_ISDIR(child_stat.st_mode):
                     os.close(child_fd)
                     raise OSError(f"target parent is not a directory: {component}")
+                if enforce_root_tree and (
+                    child_stat.st_uid != 0 or child_stat.st_mode & 0o022
+                ):
+                    os.close(child_fd)
+                    raise PermissionError(
+                        f"root executor refuses non-root-controlled parent directory: {component}"
+                    )
                 os.close(parent_fd)
                 parent_fd = child_fd
 
