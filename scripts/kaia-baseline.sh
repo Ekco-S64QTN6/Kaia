@@ -3,7 +3,7 @@
 # RECORD TRUSTED INTEGRITY BASELINE
 #
 # Writes SHA-256 hashes of every tamper-protected file to
-# /var/lib/kaia/baseline.sha256 (root-owned, 0600).
+# ${KAIA_STATE_DIR}/baseline.sha256 (root-owned, 0600; default /var/lib/kaia).
 #
 # WHY: tamper detection otherwise hashes whatever is on disk when it
 # starts, so a file edited while the daemon was stopped simply becomes
