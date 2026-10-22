@@ -163,12 +163,12 @@ pip install -r requirements.txt
 
 ### 4. Running Verification Tests
 
-Install the focused test dependencies and run the regression suite from the repository root:
+Install the focused test dependencies and run the same deterministic regression suite used by GitHub Actions:
 
     python -m pip install -r requirements-test.txt
-    pytest -q
+    bash scripts/run_ci_tests.sh
 
-The suite does not replace target-host checks for BCC/eBPF, fanotify, live nftables, systemd transient services or privileged recovery.
+The runner explicitly selects deterministic, non-privileged tests. Legacy and live-host integration scripts are not part of this suite because some require installed systemd services, populated runtime databases, or heavyweight optional application dependencies. The regression suite does not replace target-host checks for BCC/eBPF, fanotify, live nftables, systemd transient services or privileged recovery.
 
 
 
