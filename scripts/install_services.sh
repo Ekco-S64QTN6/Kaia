@@ -39,6 +39,40 @@ case "$STATE_DIR" in
     *) echo "STATE_DIR must be a dedicated directory below /var/lib, /srv, or /mnt." >&2; exit 1 ;;
 esac
 
+validate_root_controlled_path() {
+    local target="$1" label="$2" current="$1" owner mode
+    while :; do
+        if [ -L "$current" ]; then
+            echo "$label has a symlinked path component: $current" >&2
+            return 1
+        fi
+        if [ -e "$current" ]; then
+            if [ ! -d "$current" ]; then
+                echo "$label path component is not a directory: $current" >&2
+                return 1
+            fi
+            owner="$(stat -c '%u' -- "$current")" || return 1
+            mode="$(stat -c '%a' -- "$current")" || return 1
+            if [ "$owner" != "0" ] || (( (8#$mode & 0022) != 0 )); then
+                echo "$label path component must be root-owned and not group/world-writable: $current" >&2
+                return 1
+            fi
+        fi
+        [ "$current" = "/" ] && break
+        current="$(dirname -- "$current")"
+    done
+}
+
+# Root later syncs code and writes integrity/audit state to these destinations.
+# Every existing path component must be root-controlled, including custom /srv
+# or /mnt ancestors, so a non-root user cannot swap the destination after checks.
+if ! validate_root_controlled_path "$DEPLOY_DIR" DEPLOY_DIR; then
+    exit 1
+fi
+if ! validate_root_controlled_path "$STATE_DIR" STATE_DIR; then
+    exit 1
+fi
+
 PROJECT_REAL="$(realpath -e -- "$KAIA_PROJECT_DIR")"
 case "$DEPLOY_DIR/" in
     "$PROJECT_REAL/"*) echo "DEPLOY_DIR must not be inside the source checkout." >&2; exit 1 ;;
