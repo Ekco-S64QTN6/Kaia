@@ -243,6 +243,7 @@ TAMPER_ENFORCE = os.environ.get("KAIA_TAMPER_ENFORCE", "1").strip().lower() not 
 # Both live in STATE_DIR (see above): /var/lib/kaia in production, the in-repo
 # storage/security/ when running unprivileged.
 SECURITY_DB_PATH = str(STATE_DIR / "security_events.db")
+FIM_DB_PATH = str(STATE_DIR / "fim_audit.db")
 AUDIT_LOG_PATH = str(STATE_DIR / "audit_ledger.json")
 POLICY_GATE_SOCKET = "/run/kaiacord/policy_gate.sock"
 POLICY_GATE_SOCKET_FALLBACK = "/tmp/policy_gate.sock"
