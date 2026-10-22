@@ -471,7 +471,7 @@ The curses dashboard is designed to be responsive to terminal resizing and works
   - `Up/Down` – scroll through command history
 
 ### 9.5 Multi‑Terminal Environment Integration
-The dashboard is designed to run in one terminal of a **4‑terminal grid** (e.g., using Kitty with a custom launch script). Typical screen geometry: 1920×1080 with OS taskbar, four terminals arranged in a 2×2 grid. The dashboard occupies one of these terminals (e.g., top‑left). The other terminals may be used for system monitoring, log tailing, or other projects. **Kaia itself has only this one frontend.** There is no separate CLI interaction; all user input and output go through the dashboard. The `main.py` script exists as a fallback for debugging or headless operation but is not part of the intended user experience.
+The curses dashboard can occupy one terminal in a multi-terminal workstation. The loopback-only web HUD is a second presentation of the shared collector snapshot; it does not own an independent telemetry or authorization pipeline. The `main.py` script remains a debugging/headless fallback.
 
 ---
 
