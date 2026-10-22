@@ -105,6 +105,7 @@ class SyscallWaterfallCanvas {
     const lanes = [
       { label: 'EXECVE', match: /execve/i },
       { label: 'OPENAT2', match: /openat2/i },
+      { label: 'UNLINKAT', match: /unlinkat/i },
       { label: 'OTHER', match: /.*/ },
     ];
     lanes.forEach((lane, idx) => {
@@ -123,7 +124,9 @@ class SyscallWaterfallCanvas {
       const age = now - event.timestamp;
       if (age < 0 || age > 60) continue;
       const syscall = String(event.syscall || '');
-      const laneIndex = /execve/i.test(syscall) ? 0 : /openat2/i.test(syscall) ? 1 : 2;
+      const laneIndex = /execve/i.test(syscall) ? 0
+        : /openat2/i.test(syscall) ? 1
+        : /unlinkat/i.test(syscall) ? 2 : 3;
       const y = top + (plotH * (laneIndex + 0.5)) / lanes.length;
       const x = left + ((event.timestamp - minTime) / 60) * plotW;
       const disposition = String(event.disposition || 'observed').toLowerCase();
