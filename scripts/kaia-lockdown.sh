@@ -30,7 +30,14 @@ logger -t kaia-lockdown "EMERGENCY LOCKDOWN ACTIVATED"
 # Without this snapshot a lockdown leaves the host both cut off AND firewall-less
 # once it is lifted, which is the worst possible state to investigate from.
 # A snapshot failure must NOT prevent containment -- log loudly and continue.
-mkdir -p "$STATE_DIR" 2>/dev/null && chmod 700 "$STATE_DIR" 2>/dev/null
+# Keep operator-readable ledger/database traversal intact. Snapshot files are
+# separately restricted to root-only mode; lockdown must not change the whole
+# state directory to 0700 and break group-readable operator tools.
+umask 077
+if mkdir -p "$STATE_DIR" 2>/dev/null && getent group kaiacord >/dev/null 2>&1; then
+    chown root:kaiacord "$STATE_DIR" 2>/dev/null || true
+    chmod 750 "$STATE_DIR" 2>/dev/null || true
+fi
 if nft list ruleset > "${SNAPSHOT}.tmp" 2>/dev/null && [ -s "${SNAPSHOT}.tmp" ]; then
     # Keep one timestamped copy for forensics, plus a stable name to restore from.
     cp -a "${SNAPSHOT}.tmp" "${STATE_DIR}/pre-lockdown-$(date +%Y%m%d-%H%M%S).nft" 2>/dev/null
