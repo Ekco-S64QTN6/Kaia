@@ -156,27 +156,28 @@ class PacmanLogMonitor:
             session_id=session_id[:128] or "pacman_transaction",
         )
 
-    def _consume_line(self, raw_line: bytes):
+    def _consume_line(self, raw_line: bytes) -> int:
+        """Update transaction state and return count of committed package events."""
         if len(raw_line) > MAX_LINE_BYTES:
             logger.warning("Skipping overlong pacman log line (%d bytes)", len(raw_line))
-            return
+            return 0
 
         text = raw_line.decode("utf-8", "replace").rstrip("\r\n")
         match = _ALPM_PREFIX.match(text)
         if not match:
-            return
+            return 0
         timestamp, message = match.groups()
         timestamp = timestamp[:64]
 
         if message == "transaction started":
             self._cursor["transaction_start"] = timestamp
             self._cursor["pending"] = []
-            return
+            return 0
 
         if "transaction failed" in message.lower() or "failed to commit transaction" in message.lower():
             self._cursor["transaction_start"] = None
             self._cursor["pending"] = []
-            return
+            return 0
 
         if message == "transaction completed":
             pending = list(self._cursor["pending"])
@@ -192,27 +193,31 @@ class PacmanLogMonitor:
                 )
             self._cursor["transaction_start"] = None
             self._cursor["pending"] = []
-            return
+            return len(pending)
 
         if not self._cursor["transaction_start"]:
-            return
+            return 0
         action = _PACKAGE_ACTION.match(message)
         if not action:
-            return
+            return 0
         operation, package, version = action.groups()
         pending = self._cursor["pending"]
         if len(pending) >= MAX_PENDING_PACKAGES:
             # Do not silently commit a partial transaction as complete evidence.
-            logger.error("Pacman transaction exceeds %d package actions; discarding pending audit batch", MAX_PENDING_PACKAGES)
+            logger.error(
+                "Pacman transaction exceeds %d package actions; discarding pending audit batch",
+                MAX_PENDING_PACKAGES,
+            )
             self._cursor["transaction_start"] = None
             self._cursor["pending"] = []
-            return
+            return 0
         pending.append({
             "operation": operation,
             "package": package,
             "version": version[:256],
             "payload_hash": hashlib.sha256(raw_line).hexdigest(),
         })
+        return 0
 
     def poll_once(self) -> int:
         """Consume a bounded log slice and return the number of package events emitted."""
@@ -296,14 +301,14 @@ class PacmanLogMonitor:
                     return 0
                 complete = data[:final_newline + 1]
                 lines = complete.splitlines(keepends=True)
-                emitted_before = getattr(self, "_emitted_counter", 0)
+                emitted = 0
                 for raw_line in lines:
-                    self._consume_line(raw_line)
+                    emitted += self._consume_line(raw_line)
                 self._cursor["offset"] = fd_offset + len(complete)
                 self._cursor["device"] = current.st_dev
                 self._cursor["inode"] = current.st_ino
                 self._save_cursor()
-                return getattr(self, "_emitted_counter", 0) - emitted_before
+                return emitted
             except Exception:
                 logger.exception("Pacman log poll failed")
                 return 0
