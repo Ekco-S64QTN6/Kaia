@@ -306,7 +306,7 @@ def test_yara_literal_escaping_preserves_data_without_injecting_rule_syntax():
     assert '\\\"' in escaped
     assert "\\\\ " in escaped or escaped.endswith("\\\\")
     assert "\\n" in escaped
-    rule = RuleEngine().compile_rule_text(
+    rule = RuleEngine.compile_rule_text(None,
         "literal_escape_test",
         "Unit test",
         "Valid description with enough characters",
