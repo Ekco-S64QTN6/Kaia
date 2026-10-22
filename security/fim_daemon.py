@@ -56,7 +56,7 @@ class FIMDaemon:
         self._stop_event = threading.Event()
         self._thread = None
         self.fan_fd = -1
-        self.db_path = "/var/lib/secdaemon/fim_audit.db"
+        self.db_path = config.FIM_DB_PATH
         self._alerts_cache = []
         self._alerts_lock = threading.Lock()
         
