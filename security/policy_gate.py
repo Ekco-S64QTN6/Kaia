@@ -152,6 +152,96 @@ class PolicyGate:
         self._audit_lock = threading.Lock()
         self._client_slots = threading.BoundedSemaphore(self.MAX_IPC_CLIENTS)
 
+    def _reserve_service_restart(self, service_name: str, session_id: str, payload: dict) -> tuple:
+        """Atomically enforce the restart rate limit and record the reservation.
+
+        BEGIN IMMEDIATE serializes the count-and-insert across IPC worker threads
+        and even across multiple processes sharing the SQLite ledger. Any storage
+        or query failure denies the restart rather than silently resetting the count.
+        Returns (reserved, limit_exceeded, message).
+        """
+        import sqlite3
+        import uuid
+
+        conn = None
+        try:
+            conn = sqlite3.connect(config.SECURITY_DB_PATH, timeout=2.0)
+            cursor = conn.cursor()
+            cursor.execute("BEGIN IMMEDIATE")
+            time_threshold = (
+                datetime.now(UTC) - timedelta(
+                    seconds=config.RESTART_MAX_FREQUENCY_WINDOW_SECONDS
+                )
+            ).isoformat().replace("+00:00", "Z")
+            cursor.execute(
+                """
+                SELECT COUNT(*) FROM security_events
+                WHERE type = 'service_restart_event' AND timestamp >= ?
+                """,
+                (time_threshold,),
+            )
+            row = cursor.fetchone()
+            if (
+                not row
+                or isinstance(row[0], bool)
+                or not isinstance(row[0], int)
+                or row[0] < 0
+            ):
+                raise ValueError("restart event count query returned an invalid result")
+
+            restart_count = row[0]
+            if restart_count >= config.RESTART_MAX_FREQUENCY_COUNT:
+                conn.rollback()
+                return (
+                    False,
+                    True,
+                    "Restart frequency threshold exceeded "
+                    f"(max {config.RESTART_MAX_FREQUENCY_COUNT} per "
+                    f"{config.RESTART_MAX_FREQUENCY_WINDOW_SECONDS}s).",
+                )
+
+            timestamp = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+            event_id = f"evt_{uuid.uuid4().hex[:8]}"
+            payload_hash = hashlib.sha256(str(payload).encode()).hexdigest()
+            cursor.execute(
+                """
+                INSERT INTO security_events
+                    (event_id, timestamp, type, source, actor, payload_hash, disposition, session_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event_id,
+                    timestamp,
+                    "service_restart_event",
+                    "policy_gate",
+                    "kaiacord",
+                    payload_hash,
+                    "approved",
+                    str(session_id)[:128],
+                ),
+            )
+            conn.commit()
+            return True, False, ""
+        except Exception as exc:
+            if conn is not None:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+            logger.error(
+                "Could not enforce/reserve service restart frequency for %s; denying restart: %s",
+                service_name,
+                exc,
+            )
+            return (
+                False,
+                False,
+                "Unable to verify restart frequency; service restart denied.",
+            )
+        finally:
+            if conn is not None:
+                conn.close()
+
     def start(self):
         """Starts the Unix socket policy gate daemon."""
         self.is_running = True
@@ -555,34 +645,39 @@ class PolicyGate:
                     log_security_event("unauthorized_service_restart_attempt", "policy_gate", "kaiacord", hashlib.sha256(str(payload).encode()).hexdigest(), "blocked", session_id)
                     return {"status": "denied", "message": f"Service '{req.service_name}' is not in the allowed services list."}
 
-                # Check restart frequency threshold policies
-                import sqlite3
-                from datetime import datetime, timedelta, UTC
-                time_threshold = (datetime.now(UTC) - timedelta(seconds=config.RESTART_MAX_FREQUENCY_WINDOW_SECONDS)).isoformat().replace("+00:00", "Z")
-                conn = sqlite3.connect(config.SECURITY_DB_PATH)
-                cursor = conn.cursor()
-                try:
-                    cursor.execute("""
-                        SELECT COUNT(*) FROM security_events
-                        WHERE type = 'service_restart_event' AND timestamp >= ?
-                    """, (time_threshold,))
-                    restart_count = cursor.fetchone()[0]
-                except Exception as e:
-                    logger.error(f"Error querying security events for restart count: {e}")
-                    restart_count = 0
-                finally:
-                    conn.close()
-
-                if restart_count >= config.RESTART_MAX_FREQUENCY_COUNT:
-                    self._log_audit(req, "denied", reason=f"Restart frequency threshold exceeded for {req.service_name}")
-                    log_security_event("restart_frequency_exceeded", "policy_gate", "kaiacord", hashlib.sha256(str(payload).encode()).hexdigest(), "blocked", session_id)
-                    return {"status": "denied", "message": f"Restart frequency threshold exceeded (max {config.RESTART_MAX_FREQUENCY_COUNT} per {config.RESTART_MAX_FREQUENCY_WINDOW_SECONDS}s)."}
-
                 # Check service health status via D-Bus / telemetry
                 from security.telemetry_daemon import get_systemd_unit_status
                 status = get_systemd_unit_status(f"{req.service_name}.service")
-                
-                is_degraded = (status.get("active_state") != "active" or status.get("sub_state") != "running")
+
+                # A missing/malformed status is not evidence that the service is
+                # degraded. Fail closed rather than turning a telemetry failure
+                # into permission to restart a potentially healthy service.
+                if (
+                    not isinstance(status, dict)
+                    or not isinstance(status.get("active_state"), str)
+                    or not status.get("active_state")
+                    or not isinstance(status.get("sub_state"), str)
+                    or not status.get("sub_state")
+                ):
+                    message = (
+                        f"Cannot determine health of {req.service_name}; "
+                        "service restart denied."
+                    )
+                    self._log_audit(req, "denied", reason=message)
+                    log_security_event(
+                        "service_restart_health_unknown",
+                        "policy_gate",
+                        "kaiacord",
+                        hashlib.sha256(str(payload).encode()).hexdigest(),
+                        "blocked",
+                        session_id,
+                    )
+                    return {"status": "denied", "message": message}
+
+                is_degraded = (
+                    status["active_state"] != "active"
+                    or status["sub_state"] != "running"
+                )
 
                 # Session IDs are caller-controlled correlation metadata, not a
                 # security boundary. A "test" label must never bypass this guard.
@@ -591,8 +686,26 @@ class PolicyGate:
                     log_security_event("restart_healthy_service_blocked", "policy_gate", "kaiacord", hashlib.sha256(str(payload).encode()).hexdigest(), "blocked", session_id)
                     return {"status": "denied", "message": f"Service '{req.service_name}' is healthy. Restart denied."}
 
-                # Approved and logged to count frequency
-                log_security_event("service_restart_event", "policy_gate", "kaiacord", hashlib.sha256(str(payload).encode()).hexdigest(), "approved", session_id)
+                # Reserve the restart slot only after the service is confirmed degraded.
+                # Reservation is atomic with the count query; if the audit DB is
+                # unavailable, deny instead of bypassing the configured restart limit.
+                reserved, limit_exceeded, reservation_error = self._reserve_service_restart(
+                    req.service_name, session_id, payload
+                )
+                if not reserved:
+                    self._log_audit(req, "denied", reason=reservation_error)
+                    if limit_exceeded:
+                        log_security_event(
+                            "restart_frequency_exceeded",
+                            "policy_gate",
+                            "kaiacord",
+                            hashlib.sha256(str(payload).encode()).hexdigest(),
+                            "blocked",
+                            session_id,
+                        )
+                        return {"status": "denied", "message": reservation_error}
+                    return {"status": "error", "message": reservation_error}
+
                 success, stdout, stderr = HostExecutor.execute_service_control(req.service_name)
                 self._log_audit(req, "approved" if success else "denied", executor="HostExecutor.execute_service_control")
                 return {"status": "success" if success else "error", "stdout": stdout, "stderr": stderr}
