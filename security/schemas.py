@@ -28,6 +28,23 @@ class MitigationRequest(BaseModel):
     capability_token: str
     session_id: str
 
+    @field_validator("target_ip")
+    @classmethod
+    def validate_target_ip(cls, value: str) -> str:
+        try:
+            ipaddress.ip_address(value)
+        except ValueError as exc:
+            raise ValueError("target_ip must be a valid IPv4 or IPv6 address") from exc
+        return value
+
+    @model_validator(mode="after")
+    def validate_protocol_port(self):
+        if self.protocol == "all" and self.port is not None:
+            raise ValueError("port may only be specified with tcp or udp")
+        if self.protocol in ("tcp", "udp") and self.port is None:
+            raise ValueError("a port is required when protocol is tcp or udp")
+        return self
+
 class UnblockRequest(BaseModel):
     """Request to remove an exact Kaia-managed firewall rule."""
     action: Literal["unblock_ip"] = "unblock_ip"
