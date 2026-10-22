@@ -365,9 +365,11 @@ baseline only after every protected file is successfully hashed; failure preserv
 the previous baseline. The baseline is root-only, while the state directory remains
 `root:kaiacord` mode `0750` for group-readable operator data.
 
-System mode refuses to start without a valid trusted baseline. Only unprivileged
-development mode may bootstrap from the current disk state, where changes made while
-the daemon was stopped cannot be detected. Record a baseline only after reviewing
+The baseline writer fails closed when watchlist enumeration fails or a protected
+path is missing, symlinked or non-regular (the intentionally absent deployed `.env`
+is the only exception). System mode refuses to start without a valid trusted baseline.
+Only unprivileged development mode may bootstrap from the current disk state, where
+changes made while the daemon was stopped cannot be detected. Record a baseline only after reviewing
 the deployed source and deployment state; never treat bootstrap hashing as equivalent
 to verification against a previously trusted baseline.
 
