@@ -226,6 +226,10 @@ class HoneypotCoordinator:
 
     def start(self, ebpf_engine=None):
         logger.info("Starting Honeypot Coordinator...")
+        if any(thread.is_alive() for thread in self.threads):
+            logger.error("Honeypot workers from an earlier lifecycle are still active; refusing to start again.")
+            return False
+        self.threads.clear()
         self.stop_event.clear()
         self.active_decoy_paths = []
         self.decoy_hashes = {}
@@ -333,6 +337,18 @@ class HoneypotCoordinator:
         for thread in list(self.threads):
             if thread is not threading.current_thread():
                 thread.join(timeout=2.0)
+        still_alive = [
+            thread for thread in self.threads
+            if thread is not threading.current_thread() and thread.is_alive()
+        ]
+        if still_alive:
+            # A worker may still be reading/logging an event. Preserve all files
+            # rather than unlinking under a live consumer; a later stop can retry.
+            logger.error(
+                "Preserving managed honeypots because %d worker thread(s) did not stop.",
+                len(still_alive),
+            )
+            return
         self.threads.clear()
 
         for path, metadata in list(self._managed_decoys.items()):
