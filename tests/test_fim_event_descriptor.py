@@ -95,5 +95,5 @@ def test_fim_bounds_memory_for_large_file_and_records_scan_skip(tmp_path, monkey
         event_type, sha = conn.execute("SELECT event_type, sha256 FROM fim_events").fetchone()
     finally:
         conn.close()
-    assert event_type == "scan_skipped_size_limit"
+    assert event_type == "scan_skipped_size_limit_exceeded"
     assert sha == ""
