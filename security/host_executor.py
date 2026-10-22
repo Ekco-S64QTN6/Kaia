@@ -3,6 +3,8 @@ import os
 import pwd
 import ipaddress
 import re
+import stat
+import uuid
 
 SYSTEM_BINARIES = {
     "ss": "/usr/bin/ss",
@@ -227,54 +229,150 @@ class HostExecutor:
 
     @staticmethod
     def execute_state_modification(filepath: str, content: str) -> tuple:
-        """Writes to a file, verifying it is within the workspace and not modifying protected files/directories."""
-        # Resolve symlinks before checking containment. A lexical prefix check
-        # accepts sibling paths such as /opt/kaia-evil and follows symlinks
-        # inside the workspace to destinations outside it.
+        """Atomically write an allowed workspace file without following symlink races."""
+        if not isinstance(filepath, str) or not filepath:
+            return False, "", "Path modification violation: filepath must be a non-empty string."
+        if not isinstance(content, str):
+            return False, "", "Path modification violation: file content must be a string."
+
         workspace_abs = os.path.realpath(os.path.abspath(config.WORKSPACE_DIR))
-        abs_path = os.path.realpath(os.path.abspath(os.path.expanduser(filepath)))
+        requested_abs = os.path.abspath(os.path.expanduser(filepath))
 
         try:
-            contained = os.path.commonpath((workspace_abs, abs_path)) == workspace_abs
-        except ValueError:
+            contained = os.path.commonpath((workspace_abs, requested_abs)) == workspace_abs
+        except (ValueError, TypeError):
             contained = False
-        if not contained or abs_path == workspace_abs:
+        if not contained or requested_abs == workspace_abs:
             return False, "", (
-                f"Path modification violation: target path {abs_path} is outside "
+                f"Path modification violation: target path {requested_abs} is outside "
                 f"workspace {workspace_abs} or is not a file path beneath it."
             )
 
-        # Prevent overwriting scripts, python source files, or hidden configuration files
-        filename = os.path.basename(abs_path)
-        if filename.endswith(".py") or filename.endswith(".sh"):
+        # Preserve the policy allowlist on the lexical path. The actual filesystem
+        # walk below uses directory descriptors and O_NOFOLLOW instead of resolving
+        # symlinks and reopening a mutable path string later.
+        rel_path = os.path.relpath(requested_abs, workspace_abs)
+        parts = rel_path.split(os.sep)
+        if not parts or any(part in ("", ".", "..") for part in parts):
+            return False, "", "Path modification violation: invalid relative target path."
+
+        filename = parts[-1]
+        if filename.endswith((".py", ".sh")):
             return False, "", "Path modification violation: writing to script or code files (.py, .sh) is blocked."
 
-        BLOCKED_HIDDEN = {".env", ".git"}
         if filename.startswith("."):
-            if filename in BLOCKED_HIDDEN:
+            if filename in {".env", ".git"}:
                 return False, "", f"Path modification violation: writing to protected file '{filename}' is blocked."
             return False, "", f"Path modification violation: writing to hidden files ({filename}) is blocked."
 
-        # Prevent modifying folders inside protected directory tree
-        rel_path = os.path.relpath(abs_path, workspace_abs)
-        parts = rel_path.split(os.sep)
-
-        # Block any path containing .git as a directory component
         if ".git" in parts:
             return False, "", "Path modification violation: writing into .git directory tree is blocked."
 
-        # Block modifying files in system directories
-        BLOCKED_DIRS = {"core", "security", "tests", "scripts", "toolbox", "storage"}
-        if parts[0] in BLOCKED_DIRS or parts[0].startswith("."):
+        blocked_dirs = {"core", "security", "tests", "scripts", "toolbox", "storage"}
+        if parts[0] in blocked_dirs or parts[0].startswith("."):
             return False, "", f"Path modification violation: writing to protected directory '{parts[0]}' is blocked."
 
+        directory_flags = (
+            os.O_RDONLY
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        file_flags = (
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        root_fd = None
+        parent_fd = None
+        temp_name = None
         try:
-            os.makedirs(os.path.dirname(abs_path), exist_ok=True)
-            with open(abs_path, "w") as f:
-                f.write(content)
-            return True, f"File {abs_path} written successfully.", ""
-        except Exception as e:
-            return False, "", f"Failed to write file: {e}"
+            # Open the workspace root and walk every parent relative to an already
+            # opened directory. Symlinked parent components are rejected by
+            # O_NOFOLLOW; renames cannot redirect the subsequent open into a
+            # different path through string re-resolution.
+            root_fd = os.open(workspace_abs, directory_flags)
+            parent_fd = os.dup(root_fd)
+            for component in parts[:-1]:
+                try:
+                    child_fd = os.open(component, directory_flags, dir_fd=parent_fd)
+                except FileNotFoundError:
+                    # Preserve the prior behavior of creating parent directories,
+                    # but create them relative to the pinned parent descriptor.
+                    try:
+                        os.mkdir(component, mode=0o755, dir_fd=parent_fd)
+                    except FileExistsError:
+                        pass
+                    child_fd = os.open(component, directory_flags, dir_fd=parent_fd)
+                child_stat = os.fstat(child_fd)
+                if not stat.S_ISDIR(child_stat.st_mode):
+                    os.close(child_fd)
+                    raise OSError(f"target parent is not a directory: {component}")
+                os.close(parent_fd)
+                parent_fd = child_fd
+
+            # Refuse a symlink, directory, device or FIFO as the final target.
+            # A missing target is fine; replacement below is atomic and never
+            # follows a final symlink even if the name changes after this check.
+            try:
+                old_stat = os.stat(filename, dir_fd=parent_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                old_stat = None
+            if old_stat is not None and not stat.S_ISREG(old_stat.st_mode):
+                raise OSError("target exists but is not a regular file")
+
+            # Write a private temporary file in the exact target directory, fsync
+            # its contents, then rename by dirfd. This avoids truncating the target
+            # before the new content is complete and never writes through hard links.
+            temp_name = f".kaia-write-{uuid.uuid4().hex}.tmp"
+            temp_fd = os.open(temp_name, file_flags, 0o600, dir_fd=parent_fd)
+            try:
+                payload = content.encode("utf-8")
+                offset = 0
+                while offset < len(payload):
+                    written = os.write(temp_fd, payload[offset:])
+                    if written <= 0:
+                        raise OSError("short write while preparing replacement")
+                    offset += written
+                os.fsync(temp_fd)
+            finally:
+                os.close(temp_fd)
+
+            # If the destination changed to a symlink or non-regular entry while
+            # content was being written, abort rather than silently replacing it.
+            try:
+                latest_stat = os.stat(filename, dir_fd=parent_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                latest_stat = None
+            if latest_stat is not None and not stat.S_ISREG(latest_stat.st_mode):
+                raise OSError("target changed to a non-regular file during write")
+
+            os.replace(
+                temp_name, filename,
+                src_dir_fd=parent_fd, dst_dir_fd=parent_fd,
+            )
+            temp_name = None
+            try:
+                os.fsync(parent_fd)
+            except OSError as e:
+                # Rename already succeeded. Report the completed write accurately,
+                # while making uncertain directory-entry durability visible.
+                logger.warning("Workspace write committed but directory fsync failed for %s: %s", requested_abs, e)
+            return True, f"File {requested_abs} written successfully.", ""
+        except (OSError, ValueError, TypeError) as e:
+            return False, "", f"Failed to write file safely: {e}"
+        finally:
+            if temp_name is not None and parent_fd is not None:
+                try:
+                    os.unlink(temp_name, dir_fd=parent_fd)
+                except OSError:
+                    pass
+            if parent_fd is not None:
+                os.close(parent_fd)
+            if root_fd is not None:
+                os.close(root_fd)
 
     @staticmethod
     def execute_script(script_name: str, effective_level: str = None) -> tuple:
