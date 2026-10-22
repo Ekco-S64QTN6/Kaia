@@ -868,8 +868,18 @@ class KaiaWebBridge:
 
     @web.middleware
     async def security_headers_middleware(self, request: web.Request, handler) -> web.StreamResponse:
-        """Enforces Zero-Trust CSP and HTTP security headers on all responses."""
-        resp = await handler(request)
+        """Enforce loopback authority/origin checks and security headers on all routes."""
+        # DNS rebinding is not limited to state-changing routes: same-origin script
+        # on an attacker-controlled hostname could read the host telemetry from
+        # /api/snapshot. Apply the same authority check at the application boundary
+        # so health, snapshot, index, static assets, commands, and WebSockets agree.
+        request_error = self._local_request_error(request)
+        if request_error:
+            resp = web.json_response(
+                {"success": False, "error": request_error}, status=403
+            )
+        else:
+            resp = await handler(request)
         resp.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
             "script-src 'self'; "

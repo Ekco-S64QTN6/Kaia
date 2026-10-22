@@ -191,3 +191,32 @@ async def test_command_endpoint_checks_origin_before_parsing_malformed_body():
         assert "Origin" in (await resp.json())["error"]
     finally:
         await client.close()
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/", "/api/health", "/api/snapshot"])
+async def test_read_only_routes_reject_untrusted_host_for_dns_rebinding(path):
+    """Telemetry endpoints must not trust arbitrary Host values just because they are GETs."""
+    bridge = KaiaWebBridge(host="127.0.0.1", port=8765)
+    client = TestClient(TestServer(bridge.create_app()))
+    await client.start_server()
+    try:
+        resp = await client.get(path, headers={"Host": "attacker.example"})
+        assert resp.status == 403
+        assert "Host" in (await resp.json())["error"]
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/", "/api/health", "/api/snapshot"])
+async def test_read_only_routes_reject_cross_origin_requests(path):
+    """All HTTP routes should use the same browser-origin guard."""
+    bridge = KaiaWebBridge(host="127.0.0.1", port=8765)
+    client = TestClient(TestServer(bridge.create_app()))
+    await client.start_server()
+    try:
+        resp = await client.get(path, headers={"Origin": "https://attacker.example"})
+        assert resp.status == 403
+        assert "Origin" in (await resp.json())["error"]
+    finally:
+        await client.close()
