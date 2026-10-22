@@ -320,7 +320,9 @@ at boot — but that loses your session and tells you nothing about why it fired
 ### Recovering from a lockdown
 
 `kaia-lockdown.sh` snapshots the live ruleset to `/var/lib/kaia/pre-lockdown.nft`
-before flushing, plus a timestamped copy for forensics. To lift it:
+before flushing, plus a timestamped copy for forensics. The snapshot files are root-only; the state
+directory remains `root:kaiacord` mode `0750` so lockdown does not break group-readable
+operator ledgers and databases. To lift it:
 
 ```bash
 sudo ./scripts/kaia-unlock.sh          # regenerates via `ufw reload` where ufw is active
