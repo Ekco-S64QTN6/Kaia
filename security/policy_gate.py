@@ -11,7 +11,7 @@ from datetime import datetime, UTC, timedelta
 from pydantic import ValidationError
 
 import config
-from security.schemas import DiagnosticsRequest, MitigationRequest, ServiceControlRequest, StateModificationRequest, ScriptExecutionRequest, AuditRecord
+from security.schemas import DiagnosticsRequest, MitigationRequest, UnblockRequest, ServiceControlRequest, StateModificationRequest, ScriptExecutionRequest, AuditRecord
 from security.host_executor import HostExecutor
 from security.db import log_security_event
 from security.telemetry_daemon import start_script_sentinel, stop_script_sentinel
@@ -467,6 +467,46 @@ class PolicyGate:
                 if success:
                     log_security_event("block_ip", "policy_gate", req.target_ip, hashlib.sha256(str(payload).encode()).hexdigest(), "approved", session_id)
                 return {"status": "success" if success else "error", "stdout": stdout, "stderr": stderr}
+
+            elif action == "unblock_ip":
+                req = UnblockRequest(**payload)
+                ok_tok, err_tok = verify_capability_token(
+                    req.capability_token, "unblock_ip", req.target_ip
+                )
+                if not ok_tok:
+                    self._log_audit(
+                        req, "denied", reason=f"Token verification failed: {err_tok}"
+                    )
+                    log_security_event(
+                        "unauthorized_unmitigation_attempt", "policy_gate", req.target_ip,
+                        hashlib.sha256(str(payload).encode()).hexdigest(), "blocked", session_id,
+                    )
+                    return {"status": "denied", "message": f"Token verification failed: {err_tok}"}
+
+                success, stdout, stderr = HostExecutor.execute_unmitigation(
+                    req.target_ip, req.protocol, req.port
+                )
+                self._log_audit(
+                    req,
+                    "approved" if success else "denied",
+                    executor="HostExecutor.execute_unmitigation",
+                    reason="Firewall rule removed or already absent." if success else stderr,
+                )
+                if success:
+                    log_security_event(
+                        "unblock_ip", "policy_gate", req.target_ip,
+                        hashlib.sha256(str(payload).encode()).hexdigest(), "approved", session_id,
+                    )
+                else:
+                    log_security_event(
+                        "unblock_ip_failed", "policy_gate", req.target_ip,
+                        hashlib.sha256(str(payload).encode()).hexdigest(), "blocked", session_id,
+                    )
+                return {
+                    "status": "success" if success else "error",
+                    "stdout": stdout,
+                    "stderr": stderr,
+                }
 
             elif action == "restart_service":
                 req = ServiceControlRequest(**payload)
