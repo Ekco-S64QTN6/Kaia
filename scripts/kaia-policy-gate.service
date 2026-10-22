@@ -36,11 +36,11 @@ Group=kaiacord
 # needed because the daemon read a 0600 .env owned by an unprivileged user. The
 # secret now arrives via EnvironmentFile from root-owned /etc/kaia/secret.env.
 #
-# CAP_SYS_ADMIN dropped: required ONLY for mount-wide fanotify (FIM) and BCC/eBPF.
-# Both were non-functional as shipped -- fanotify failed EINVAL on every start and
-# BCC is not installed -- so granting it bought nothing. To re-enable FIM, verify
-# with `sudo python3 scripts/fanotify_probe.py /opt/kaia` and, if a mount mark
-# succeeds, add CAP_SYS_ADMIN back to BOTH lines below.
+# CAP_SYS_ADMIN is omitted by default under least privilege. fanotify and BCC/eBPF
+# availability depends on the deployed kernel, capabilities and installed bindings;
+# do not infer live-host support from source code or an old setup report. Probe the
+# deployed tree with `sudo python3 scripts/fanotify_probe.py /opt/kaia`, verify BCC
+# separately, then add CAP_SYS_ADMIN to BOTH lines only if the controls need it.
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
 
