@@ -8,7 +8,7 @@
 **Primary Design References:**
 * Kaiacord Cyber-Deck Audio UI: [`assets/dj/index.html`](file:///home/ekco/github/Kaiacord/assets/dj/index.html) (1,863 lines of standalone HTML5/CSS3/Canvas reactive cyber-deck audio dashboard)
 * Kaiacord Waterfall/Scanner UI: [`assets/rx/index.html`](file:///home/ekco/github/Kaiacord/assets/rx/index.html) (604 lines of real-time SDR/waterfall telemetry and status HUD)
-* Kaia Current Dashboard: [`kaia_dashboard.py`](file:///home/ekco/github/Kaia/kaia_dashboard.py) (2,300+ lines of curses TUI dashboard with thread-safe `KaiamonSnapshot` architecture)
+* Kaia Current Dashboard at the time of this design (2026-10-07): [`kaia_dashboard.py`](file:///home/ekco/github/Kaia/kaia_dashboard.py) (curses TUI with thread-safe `KaiamonSnapshot` architecture)
 * Kaia Core Security Subsystems:
   - Policy Gate & Tokens: [`security/policy_gate.py`](file:///home/ekco/github/Kaia/security/policy_gate.py)
   - eBPF Telemetry (`execve`, `openat2`): [`security/ebpf_telemetry.py`](file:///home/ekco/github/Kaia/security/ebpf_telemetry.py)
@@ -24,14 +24,13 @@
 
 ---
 
+> **Implementation status note — 2026-10-22:** This is the original 2026-10-07 design specification, not the current implementation checklist. The loopback web bridge, strict CSP, telemetry waterfall/oscillogram, passive-discovery radar, token widget, sentinel state controller and interactive command console are now present in the repository. The current tracked status is in [the master plan](../docs/master_plan.md) §10.5 and [the UI handoff](claude_handoff.md). The full-body crystal-polymer avatar, bundled local font assets, optional Web Audio cues, browser-level stress/fallback checks, incremental command-response streaming and target-host verification remain unfinished.
+
 ## 1. Executive Summary & Vision
 
 The `Kaia` project is a local-first, zero-trust AI security administration subsystem and host guardian for Linux. It operates under five strict architectural axioms: all LLM outputs are untrusted; all actions are schema-validated; the host makes execution decisions; security policy is decoupled from personality; and every boundary fails closed.
 
-Currently, Kaia’s operator interface is implemented as a 2,300-line Python `curses` terminal dashboard ([`kaia_dashboard.py`](file:///home/ekco/github/Kaia/kaia_dashboard.py)), known as `KaiamonUI`. While architecturally solid with background collector threads and a thread-safe snapshot engine (`KaiamonSnapshot`), its terminal-based presentation restricts situational awareness:
-* Syscall events and packet flows are flattened into standard terminal text grids.
-* Log velocity (LPS) is constrained to a 10-character Unicode sparkline (` ▂▃▄▅▆▇█`).
-* The system guardian persona is completely invisible, presenting no visual representation of Kaia’s affective state, policy evaluation focus, or active defensive stance.
+At the time this proposal was written (2026-10-07), the primary view was the Python curses dashboard (kaia_dashboard.py). Since then, the repository has gained a local loopback Web HUD with Canvas telemetry visualizations and a command console. The remaining visual gap is not “web UI absent”; it is the incomplete full-body character viewport and browser-level polish/validation described below. The security-state controller is a presentation layer, not an authorization source.
 
 This document specifies the upgrade of `Kaia`'s monitoring layer into a **Cyber-Sentinel Operations Center (SOC)**, porting the high-performance HTML5/CSS/Canvas and WebSocket foundations of `Kaiacord`'s [`assets/dj/index.html`](file:///home/ekco/github/Kaiacord/assets/dj/index.html) and [`assets/rx/index.html`](file:///home/ekco/github/Kaiacord/assets/rx/index.html).
 
@@ -192,7 +191,9 @@ stateDiagram-v2
 
 ---
 
-## 7. Implementation Roadmap for Claude Opus 5.5
+## 7. Original Implementation Roadmap (dated 2026-10-07; historical schedule)
+
+The dated tasks below are the proposal's original schedule. Treat them as historical plan dates; use the current status note above and the authoritative roadmap for what remains.
 
 ```mermaid
 gantt

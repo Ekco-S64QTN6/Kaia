@@ -1,4 +1,4 @@
-# Pending Setup — commands to run
+# Deployment and Host Verification Checklist
 
 This checklist records deployment findings last documented on **2026-09-08**. Most steps require `sudo`. Its statements about active services, privileges and installed units are historical observations, not a live host probe. Verify the current host before running commands or assuming a service is in the recorded state.
 
@@ -13,9 +13,11 @@ cd ~/github/Kaia
 sudo python3 scripts/fanotify_probe.py "$PWD"
 ```
 
-`CAP_SYS_ADMIN` is granted solely for mount-wide `fanotify` (FIM) and BCC/eBPF.
-Neither has ever worked on this host — fanotify failed `EINVAL` on every start
-since installation, and BCC is not installed — so the unit currently drops it.
+The last recorded host observation is 2026-09-08: fanotify returned `EINVAL` for
+the available mask attempts and BCC was not installed, so that unit dropped
+`CAP_SYS_ADMIN`. Re-run the probe against the currently deployed kernel and unit;
+do not assume the old host state is still true or infer that the source implementation
+is absent.
 
 `security/fim_daemon.py` was fixed to degrade across four mask tiers instead of
 retrying with a mask that fails for the same reason as the first attempt. This
@@ -77,48 +79,48 @@ and `Policy Gate listening on Unix socket`.
 
 ---
 
-## 4. Live-fire the mitigation path
+## 4. Live-fire the block/unblock lifecycle
 
-Not yet exercised against a real ruleset. `execute_mitigation` used to write into
-`ip filter` — ufw's own table — so every block was silently discarded by the next
-`ufw reload` while the audit ledger still recorded it as applied. It now writes to a
-dedicated `inet kaia_block` table at hook priority −10.
+This section had not yet been exercised against a real target ruleset in the last
+recorded host checklist. The software now has block, unblock and chronological ledger
+replay for both actions. Verify actual kernel behavior before relying on it.
 
-Verify with a documentation address (`203.0.113.42`, TEST-NET-3, never routable):
+Use a documentation address such as 203.0.113.42 (TEST-NET-3; not routable):
 
-```bash
-sudo nft list table inet kaia_block            # expect: no such table, yet
-# issue a block_ip intent for 203.0.113.42 through the gate
-sudo nft list table inet kaia_block            # expect: the drop rule
-sudo ufw reload
-sudo nft list table inet kaia_block            # MUST still be there
-```
+1. Confirm there is no active Kaia block for the test address.
+2. Through the local HUD, issue: block 203.0.113.42
+3. Verify the rule in: sudo nft list table inet kaia_block
+4. Run sudo ufw reload and verify the block still exists.
+5. Check that the ledger contains an approved block_ip record.
+6. Issue through the HUD: unblock 203.0.113.42
+7. Verify the exact rule is absent and the ledger has an approved unblock_ip record.
 
-That last step is the actual proof, and what the old implementation failed.
-
-To clean up afterwards:
-
-```bash
-sudo nft delete table inet kaia_block
-```
+Do not use "nft delete table inet kaia_block" as cleanup for this test. Deleting the
+table manually does not record the intended removal, so boot replay may correctly
+re-create the still-active ledger block.
 
 ---
 
-## 5. Verify block persistence across reboot
+## 5. Verify block and unblock replay across reboot
 
-`kaia-restore-blocks.service` replays approved `block_ip` entries from the ledger at
-boot, ordered `Before=kaia-policy-gate`, so there is no window where previously
-blocked traffic is accepted. Untested end to end because no block has ever
-successfully applied.
+After the live-fire steps above, test both states. Use two separate reboot cycles:
 
-After step 4 succeeds, reboot and confirm the rule returns:
+**A. Active block survives reboot**
 
-```bash
-sudo nft list table inet kaia_block
-journalctl -u kaia-restore-blocks -b --no-pager
-```
+- Apply block 203.0.113.42 and verify it in inet kaia_block.
+- Reboot the host.
+- Confirm the table contains the rule.
+- Inspect journalctl -u kaia-restore-blocks -b --no-pager for replay results.
 
----
+**B. Approved unblock survives reboot**
+
+- Issue unblock 203.0.113.42 through the HUD and verify it is absent.
+- Reboot again.
+- Confirm the rule remains absent; the later approved unblock tombstone must prevent replay from resurrecting the older block.
+- Inspect the audit ledger and restore-service log if the rule returns.
+
+These are target-host acceptance tests. CI verifies ledger folding and command construction,
+not kernel/firewall-manager integration.
 
 ## If something goes wrong
 
@@ -136,16 +138,14 @@ A reboot also clears any lockdown: nftables rules are runtime-only.
 
 ---
 
-## Known open items
+## Known open items — status after the 2026-10-22 code updates
 
-- **No `unblock_ip` intent exists.** The ledger only ever accumulates blocks, and
-  the boot replay has nothing to honour as a removal. Blocks can currently only be
-  undone by hand with `nft delete`.
-- **Dashboard Stage 2** — interactive command input and response streaming remains
-  the largest declared-but-unbuilt feature.
-- **`KAIA_CAPABILITY_TOKEN_SECRET` remains in git history** (4 commits, public repo).
-  It was rotated 2026-09-08, which is the actual mitigation; scrubbing history does
-  not un-publish a value that was already public. `install_services.sh` refuses the
-  leaked value outright.
-- **`sdb` (the backup drive) reports 2 pending sectors.** Unrelated to Kaia, but it
-  is the only backup target on this host.
+- **Incremental command-response streaming is not implemented.** The web HUD has interactive input, command history and one-shot response rendering. Telemetry itself streams over WebSocket; long-running command output is not yet forwarded chunk by chunk.
+- **Execution-blocking FIM remains unbuilt.** Current fanotify uses notification mode and does not hold the originating process for a verdict. A separate permission-event design and target-kernel tests are required.
+- **eBPF is partial and host-dependent.** The unlinkat callback is wired to the HUD as an observed syscall-entry attempt; broader hook coverage, successful-delete correlation and target-kernel/BCC verification remain open.
+- **Passive discovery is missing NetBIOS parsing.** The roadmap lists it, but it has not been implemented.
+- **Supply-chain monitoring is a first increment.** Completed pacman transactions are recorded, but AUR build/repository change tracking and dependency/signature attestation remain open.
+- **Tier 5 systems not yet implemented:** process/network/file behavioral baselines; alert-confidence scoring; secrets-exposure scanning; backup existence, recency and restorability monitoring; independent service/data-freshness supervision; expanded GeoLite2/CVE/passive-DNS/historical threat-intelligence stores and DuckDB analysis.
+- **Target-host acceptance tests remain required.** Verify the installed unit and trusted baseline, fanotify/BCC behavior, real block/unblock, UFW reload survival and two-step block/unblock replay across reboot. The 2026-09-08 setup notes above are historical, not a live system probe.
+- **Credential history:** the old KAIA_CAPABILITY_TOKEN_SECRET value remains in public Git history, though it was rotated on 2026-09-08 and the installer rejects it. Rotation is the mitigation; deleting history cannot make the published value secret again.
+- **Backup-drive note:** the last handoff mentioned pending sectors on sdb; re-check the device independently rather than treating that old note as current.

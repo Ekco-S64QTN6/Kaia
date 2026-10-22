@@ -1,10 +1,12 @@
 # Kaia — Claude Handoff Document
 
-**Generated:** 2026-09-18  
+**Original handoff:** 2026-09-18  
 **Reviewed by:** Antigravity (Gemini) agent reviewing docs/, tests/, and source  
 **Authoritative spec:** [`docs/master_plan.md`](docs/master_plan.md) — read this first  
 **Pending ops doc:** [`docs/NEXT_STEPS.md`](docs/NEXT_STEPS.md)  
 **Last agent report:** [`docs/03_Gemini35_Execution_Report.md`](docs/03_Gemini35_Execution_Report.md)
+
+**Status reconciliation:** 2026-10-22 — read `docs/master_plan.md` §10.5 and `docs/NEXT_STEPS.md` for current status. This is a historical handoff, not evidence of current host deployment.
 
 ---
 
@@ -17,16 +19,16 @@ Kaia is a **hardened security daemon** for Arch Linux. It is **not** an AI chat 
 - Monitors filesystem integrity (fanotify/watchdog), network traffic (raw sockets), honeypot decoys, and privilege escalation events (eBPF telemetry)
 - Enforces a capability lattice: `GLOBAL ∩ WORKSPACE → EFFECTIVE`
 - Runs all agent-requested scripts inside Bubblewrap sandboxes with cgroup limits
-- Presents everything via a curses TUI (`kaia_dashboard.py`)
+- Presents telemetry via the loopback web HUD by default and the legacy curses TUI (`kaia_dashboard.py --tui`)
 
-**Primary UI:** `kaia_dashboard.py` — the only intended interface.  
+**Operator UI:** local loopback web HUD by default; `kaia_dashboard.py --tui` keeps the curses dashboard available. They share the collector/snapshot architecture.  
 **`main.py`** is a debugging fallback only, not for normal use.
 
 ---
 
-## What Is Fully Complete ✅
+## Features Present in the Codebase — review snapshot 2026-10-22
 
-All of Tier 1, Tier 2, and Tier 3 core are done and verified. The following have been implemented, tested, and committed:
+The following code paths were present in the reviewed source as of 2026-10-22. Their presence does not imply that the privileged host deployment or kernel integrations have been verified end to end:
 
 ### Security Core
 - [x] Policy Gate Unix socket server with length-framed IPC protocol
@@ -45,7 +47,7 @@ All of Tier 1, Tier 2, and Tier 3 core are done and verified. The following have
 - [x] NFT ruleset snapshotted to `/var/lib/kaia/pre-lockdown.nft` before lockdown; `kaia-unlock.sh` lifts it
 - [x] `KAIA_TAMPER_ENFORCE=0` monitor-only mode (logged CRITICAL at startup)
 - [x] `.env` tampering now triggers lockdown (was silently exempt before)
-- [x] `kaia-restore-blocks.service` — replays `block_ip` entries from ledger at boot (Before=kaia-policy-gate)
+- [x] `kaia-restore-blocks.service` — folds approved block/unblock ledger events in order before the Policy Gate accepts requests
 - [x] Panic recovery: `~/kaia-panic-unlock.sh` (standalone, no repo dependency)
 
 ### Firewall / Network
@@ -65,6 +67,8 @@ All of Tier 1, Tier 2, and Tier 3 core are done and verified. The following have
 
 ### Dashboard Command Interface (Stage 1 commands implemented)
 - [x] `block <ip>` — sends `block_ip` intent to Policy Gate
+- [x] `unblock <ip>` — requests exact Kaia-managed rule removal via capability-gated Policy Gate action
+- [x] Web command console returns structured one-shot responses; incremental response streaming remains unfinished
 - [x] `show rules` — queries nftables via Policy Gate diagnostics
 - [x] `restart <service>` — sends `restart_service` intent
 - [x] `list recent blocks` — queries `security_events.db`
@@ -76,13 +80,13 @@ All of Tier 1, Tier 2, and Tier 3 core are done and verified. The following have
 - [x] `show fim alerts` — queries `/var/lib/secdaemon/fim_audit.db`
 
 ### Threat Intel
-- [x] Shodan InternetDB live lookup with 7-day SQLite cache + rate limiting (1 req/s)
+- [x] InternetDB lookup with 7-day SQLite cache, per-process serialized request rate limiting, and negative caching for authoritative 404 results
 - [x] CVE detail lookups
 - [x] IP reputation scoring
 
 ### Systemd Hardening
 - [x] `User=root` (was `User=ekco`, broke lockdown path)
-- [x] `CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_ADMIN CAP_DAC_OVERRIDE`
+- [x] Historical unit capability set was reviewed and later tightened; confirm the active unit before changing it. The 2026-09-08 host note recorded CAP_SYS_ADMIN/CAP_DAC_OVERRIDE dropped unless current kernel probes justify them.
 - [x] `ProtectHome=read-only`, `PrivateDevices=true`
 - [x] `KAIA_CAPABILITY_TOKEN_SECRET` loaded from `/etc/kaia/secret.env` (not in unit file)
 - [x] Honeypot files pre-created on host; daemon truncates (not deletes) on shutdown
@@ -98,84 +102,63 @@ All of Tier 1, Tier 2, and Tier 3 core are done and verified. The following have
 - [x] Legacy files `security/cognitive_wiring.py` and `storage/cognition/beliefs.json` removed
 - [x] `.gitignore` excludes `/core/personal_context` and `/core/storage`
 - [x] FIM daemon degrades across 4 mask tiers on EINVAL (was retrying same failing mask)
+- [x] FIM hashes and scans the same bounded byte snapshot read from the original event FD; this is notification-mode observation, not pre-execution blocking
+- [x] `sys_enter_unlinkat` eBPF events are consumed and exposed in the syscall waterfall as attempts
+- [x] YARA generation escapes string literals; sandbox validation fails closed when prerequisites are missing
+- [x] Passive pacman transaction monitor for completed package operations, with persistent cursor and rotation handling
+- [x] Strict CSP and GitHub Actions regression workflow (latest recorded main run: 156 passed)
 - [x] Trusted baseline via `scripts/kaia-baseline.sh` -> `/var/lib/kaia/baseline.sha256`
 
 ---
 
-## What Is NOT Done / Still Needs Work ❌
+## What Is NOT Done / Still Needs Work — updated 2026-10-22
 
-### 1. Dashboard Stage 2 — LARGEST UNBUILT FEATURE
+### 1. Incremental command-response streaming
 
-**Status: Declared in the spec, NOT built.**
+Interactive command entry is built in core/web/static/js/terminal.js; /api/command
+dispatches known commands through the Policy Gate and returns structured output.
+The telemetry WebSocket streams snapshots, but command output itself is still one
+completed response. Long-running diagnostics and sandboxed operations do not publish
+partial output chunks while executing. Completing this needs a bounded, framed
+streaming protocol, cancellation/timeout behavior and UI back-pressure tests.
 
-The master plan (§9.4) and NEXT_STEPS.md both call out interactive command input with **response streaming** as the primary remaining feature. The current implementation:
+### 2. Execution-blocking FIM
 
-- Enqueues a command to `_cmd_queue`
-- `_command_worker` processes it and calls `_add_response()` with single string results
-- The command pane renders the accumulated responses
+The current FIMDaemon uses FAN_CLASS_NOTIF. The October hardening keeps the
+original event FD open and scans/hashes the same captured byte snapshot (bounded to
+64 MiB), but notification mode does not block the originating process pending a
+verdict. A separate permission-event design is required if pre-execution prevention
+is a goal.
 
-**What is missing:** Live response streaming. As the Policy Gate executes long-running diagnostics or script sandboxes, partial output should render in real time in the command pane — not a single batch response after completion.
+### 3. Expand and verify kernel telemetry
 
-**Implementation path:**
-1. Policy Gate needs to send chunked/framed partial responses over the socket (requires protocol extension)
-2. `send_pg()` in `_command_worker` needs to read and forward each chunk as it arrives
-3. Dashboard render loop needs to pick up partial responses without waiting for completion
+The sys_enter_unlinkat perf callback and waterfall lane now exist. The record is
+captured at syscall entry and means attempt observed, not confirmed successful
+deletion. More hook coverage, successful-operation correlation and verification
+against the deployed kernel/BCC/toolchain remain unfinished.
 
-This is a non-trivial change touching both `policy_gate.py` (IPC protocol) and `kaia_dashboard.py` (rendering).
+### 4. Network discovery gaps
 
----
+NetBIOS Name Service parsing is still a target requirement and is not implemented.
+The existing passive discovery only sees traffic actually observed on the configured
+interface; it is not a complete asset inventory or active scanner.
 
-### 2. `unblock_ip` Intent — Does Not Exist
+### 5. Broader supply-chain and resilience features
 
-The ledger only ever accumulates blocks. There is no way to programmatically unblock an IP through Kaia. The boot-replay service (`kaia-restore-blocks`) also has no concept of removal entries.
+Basic pacman-log transaction observation is implemented. Still missing are AUR build
+input tracking, repository/metadata mutation detection, dependency-graph drift and
+package signature/installed-content attestation. Other Tier 5 backlog items include
+behavioral baselines, alert-confidence scoring, secrets-exposure detection, backup
+restorability checks, independent service/data-freshness supervision and expanded
+GeoLite2/CVE/passive-DNS/historical threat-intelligence stores.
 
-Current workaround: `sudo nft delete rule inet kaia_block input ...` by hand.
+### 6. Target-host deployment / acceptance tests
 
-**What needs building:**
-1. `UnblockIPPayload` schema in `security/schemas.py`
-2. `execute_unblock_ip()` handler in `security/host_executor.py` (deletes the specific nft rule)
-3. Policy Gate routing for the `unblock_ip` action in `security/policy_gate.py`
-4. A ledger entry format for removal (so boot-replay can honour it)
-5. `kaia-restore-blocks` updated to skip blocks that have a subsequent removal entry
-6. Dashboard command: `unblock <ip>`
-
----
-
-### 3. Hardened Deployment NOT Installed — Blocked on `sudo`
-
-The code is written and committed but **none of the hardened deployment has been applied to the host**. The Policy Gate is still running from the developer checkout (`~/github/Kaia`) as root with full capabilities, and the audit ledger is still inside the working tree (violates INV-008).
-
-**You (Claude) cannot fix this** — it requires manual `sudo` steps by the operator. The exact commands are in [`docs/NEXT_STEPS.md`](docs/NEXT_STEPS.md). Summary:
-
-1. `sudo python3 scripts/fanotify_probe.py "$PWD"` — decide if `CAP_SYS_ADMIN` is viable
-2. `sudo scripts/install_services.sh` — deploy to `/opt/kaia`, migrate ledger to `/var/lib/kaia`
-3. `sudo /opt/kaia/scripts/kaia-baseline.sh` + `sudo systemctl start kaia-policy-gate`
-4. Live-fire `block_ip` for `203.0.113.42`, verify rule survives `ufw reload`
-
-> **After step 2, `~/github/Kaia` is the source tree and `/opt/kaia` is what runs. You must re-run the installer after any code changes.**
-
----
-
-### 4. Block Persistence Across Reboot — Untested End-to-End
-
-`kaia-restore-blocks.service` is committed and will be installed by `install_services.sh`, but it has **never been tested** because no block has ever successfully applied to the real nftables. Test after the live-fire step above:
-
-```bash
-# After a successful block_ip and reboot:
-sudo nft list table inet kaia_block
-journalctl -u kaia-restore-blocks -b --no-pager
-```
-
----
-
-### 5. Fixed Tests: `test_yara_rule_validation` & `test_lattice_intersection_allowed` ✅
-
-Both previously failing/hanging test issues have been resolved:
-- **`test_yara_rule_validation`**: Guarded with `if not rule_engine.HAS_YARA: pytest.skip(...)` when `yara-python` is absent from the host environment.
-- **`test_lattice_intersection_allowed`**: Wrapped Policy Gate evaluation with `patch.object(HostExecutor, 'execute_service_control', return_value=(True, "Restarted", ""))`, preventing blocking interactive sudo password prompts in headless test environments.
-- **Result:** The entire non-sudo test suite is **100% clean and passing** (55 passed, 1 skipped).
-
----
+The deployment section below reflects an old host checkpoint, not a current live
+probe. Before relying on Kaia, verify the actual systemd unit, ExecStart,
+WorkingDirectory, state directory and trusted integrity baseline, then run the
+firewall block → UFW reload → reboot replay → unblock → second reboot test described
+in docs/NEXT_STEPS.md. FIM marks and BCC probes must be checked on the target kernel.
 
 ## Architecture Quick Reference
 
@@ -301,19 +284,21 @@ window.KaiaAvatar.mountAnimationViewport({
 | Issue | Status |
 |-------|--------|
 | `KAIA_CAPABILITY_TOKEN_SECRET` was committed in 4 git commits to a public repo | Rotated 2026-09-08. Old value rejected by installer outright. History NOT scrubbed (scrubbing doesn't un-publish a value that was already public). |
-| `sdb` backup drive reports 2 pending sectors | Unrelated to Kaia. Investigate separately. |
+| `sdb` backup drive reportedly had 2 pending sectors | Historical note from the 2026-09-18 handoff. Re-check device health before treating it as current. |
 
 ---
 
 ## Tier 5 Stretch Goals (Future / Optional)
 
-These are declared in `master_plan.md §11` but not started:
+These are a mixture of remaining roadmap items and optional visual polish. Current implementation status is tracked in `docs/master_plan.md` §10.5; the list below is not a claim that every item is untouched:
 
-- [ ] Expanded eBPF coverage (more tracepoints/kprobes)
-- [ ] YARA/fanotify FIM breadth (more paths, more rule templates)
+- [ ] Expanded eBPF coverage and target-kernel validation
+- [ ] Execution-blocking FIM, plus broader path/rule coverage
 - [ ] NetBIOS in passive LAN discovery
-- [ ] DuckDB threat-intel expansion
-- [ ] MaxMind GeoLite2 (`storage/threat_intel/geoip/`) — directory exists, empty
-- [ ] NVD CVE tables via SQLite (`storage/threat_intel/cvedb/`) — directory exists, empty
-- [ ] Passive DNS maps (`storage/threat_intel/dnsdb/`) — directory exists, empty
+- [ ] Broader supply-chain monitoring (AUR/repositories/dependency graphs)
+- [ ] Behavioral baselines, alert-confidence scoring and secrets exposure detection
+- [ ] Backup restorability and independent service/data-freshness monitoring
+- [ ] DuckDB analysis, richer GeoLite2/CVE and passive-DNS datasets
+- [ ] WebGL2 fallback, resize/resource checks, bundled local fonts and optional Web Audio alert synthesis
+- [ ] Full-body transparent crystal-polymer Kaia artwork/mesh; the current renderer is a rigged portrait
 
