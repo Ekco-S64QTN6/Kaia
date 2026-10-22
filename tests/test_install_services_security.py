@@ -155,7 +155,10 @@ def test_geoip_updater_uses_installed_state_path_without_sourcing_config():
     assert 'GEOIP_DIR="${STATE_DIR}/threat_intel/geoip"' in script
     assert 'GEOIP_DIR="${PROJECT_DIR}/storage/threat_intel/geoip"' in script
     assert 'chown root:kaiacord -- "$MMDB_FILE"' in script
-    assert 'chmod 640 -- "$MMDB_FILE"' in scriptdef test_decoy_network_setup_does_not_suppress_failures_or_enable_global_forwarding():
+    assert 'chmod 640 -- "$MMDB_FILE"' in script
+
+
+def test_decoy_network_setup_does_not_suppress_failures_or_enable_global_forwarding():
     script = Path("scripts/setup_decoys.sh").read_text()
 
     assert "set -euo pipefail" in script
