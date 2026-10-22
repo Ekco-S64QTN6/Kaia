@@ -338,9 +338,9 @@ There is **no cognitive state**, **no emotional vector**, and **no belief system
 
 ---
 
-## 9. Curses Terminal Dashboard UI – PRIMARY USER INTERFACE
+## 9. Operator Dashboard Architecture (Terminal + Local Web HUD)
 
-**The dashboard (`kaia_dashboard.py`) is the single, primary frontend for Kaia.** It is the only intended user interface. The `main.py` script exists for debugging and fallback but is **not** part of the normal user experience. All user interaction happens through the dashboard.
+**The collector/snapshot pipeline is the shared source of telemetry.** `kaia_dashboard.py` remains the curses dashboard and headless operational fallback; `core/web_bridge.py` exposes a separate loopback-only web HUD. The web HUD consumes serialized snapshots rather than maintaining independent collectors, and any operator command must pass through the Policy Gate. The terminal and web presentations are operator surfaces, not alternate authorization systems.
 
 ### 9.1 Design Principles
 
@@ -351,7 +351,7 @@ There is **no cognitive state**, **no emotional vector**, and **no belief system
 
 ### 9.2 Layout: Four Panes + Command Interface
 
-The dashboard is designed to be responsive to terminal resizing and works well in a typical 2×2 terminal grid on a 1920×1080 display. It uses relative percentages for pane widths and scrolls content when lines exceed available height.
+The curses dashboard is designed to be responsive to terminal resizing and works well in a typical 2×2 terminal grid on a 1920×1080 display. It uses relative percentages for pane widths and scrolls content when lines exceed available height. The loopback web HUD is a separate presentation of the shared snapshot and must not duplicate collectors or authorize actions.
 
 **Final Mockup (guaranteed to render in monospaced fonts):**
 
@@ -471,7 +471,7 @@ The dashboard is designed to be responsive to terminal resizing and works well i
   - `Up/Down` – scroll through command history
 
 ### 9.5 Multi‑Terminal Environment Integration
-The dashboard is designed to run in one terminal of a **4‑terminal grid** (e.g., using Kitty with a custom launch script). Typical screen geometry: 1920×1080 with OS taskbar, four terminals arranged in a 2×2 grid. The dashboard occupies one of these terminals (e.g., top‑left). The other terminals may be used for system monitoring, log tailing, or other projects. **Kaia itself has only this one frontend.** There is no separate CLI interaction; all user input and output go through the dashboard. The `main.py` script exists as a fallback for debugging or headless operation but is not part of the intended user experience.
+The curses dashboard can occupy one terminal in a multi-terminal workstation. The loopback-only web HUD is a second presentation of the shared collector snapshot; it does not own an independent telemetry or authorization pipeline. The `main.py` script remains a debugging/headless fallback.
 
 ---
 
@@ -645,6 +645,36 @@ All negative test cases must assert that the operation is denied, logged in the 
 
 ---
 
+### 10.5 Implementation and Verification Status (audit snapshot: 2026-10-22)
+
+This status was reconciled against the repository tree, implementation, service definitions and existing tests. It describes code present on the repository branch at the time of review, not the state of any particular host. The deployment checklist in `docs/NEXT_STEPS.md` remains the guide for operational verification.
+
+**Implemented in the repository (not equivalent to live-fire proof):**
+
+- [x] Policy Gate, capability-token validation, request schemas, executor boundary, IPC framing guards and audit writes.
+- [x] Executor path containment, argv execution without a shell, command allowlists, sandbox wrappers and cgroup resource ceilings.
+- [x] Trusted integrity baselines, discovered security-module watchlists, tamper alert latching and a lockdown-rate circuit breaker.
+- [x] Curses collector/snapshot pipeline and loopback web telemetry bridge. Web mutations must remain Policy Gate clients, never direct shell dispatch.
+- [x] Passive AF_PACKET discovery and cache-backed InternetDB/optional GeoIP enrichment. This is not active scanning or a complete network inventory.
+- [x] Regression tests for negative security, IPC, path containment, firewall command construction, ledger replay and dashboard behavior.
+
+**Partial, optional or not yet demonstrated as complete controls:**
+
+- [ ] **Execution-blocking FIM.** The current fanotify class is notification mode; an event is not a permission gate that blocks the originating process pending a scan verdict. A true blocking design requires separate implementation and kernel-level verification.
+- [ ] **Complete eBPF coverage.** Probes depend on BCC, supported hooks, kernel capabilities and active registration. Missing events mean missing visibility, not a clean host.
+- [ ] **YARA end-to-end enforcement.** Source generation, isolated validation, runtime scanner activation, event delivery and response behavior must be tested together. Saving a rule file alone is not activation.
+- [ ] **Live firewall/recovery path.** Unit tests do not prove the kernel accepts a rule, UFW reload preserves it, or boot recovery restores it. The live-fire checklist remains required.
+- [ ] **Independent health supervision, supply-chain/package tracking, behavioral baselines, alert-confidence scoring, secrets scanning and backup-restorability checks.** These remain planned enhancements.
+- [ ] **Automated regression enforcement.** A CI workflow and successful Actions run are necessary before claiming continuous pass status. Platform-specific integrations still need target-host validation.
+
+**Near-term priority order:**
+
+1. Verify/install the root-owned system-mode deployment and create a trusted baseline from a reviewed known-good state.
+2. Exercise firewall block, removal, reload survival, boot replay and panic recovery with documentation/test addresses on the target Arch Linux host.
+3. Run selected regression tests in CI and resolve failures before expanding the matrix.
+4. Design permission-event FIM as a distinct enforcement subsystem; do not relabel the existing notification monitor as blocking.
+5. Expand and validate telemetry hooks, independent health supervision and remaining Tier 5 capabilities in small, independently testable changes.
+
 ## 11. Advanced Monitoring Capabilities (Optional Future Enhancements)
 
 While not required for the core security model, the following capabilities may be incrementally added to enhance Kaia's visibility and operational confidence. They are listed as **optional** and should not delay the completion of Tier 1–3.
@@ -671,7 +701,7 @@ To maintain engineering focus and prevent architectural bloat, the following ite
 - Multi‑agent consensus or distributed decision architectures.
 - Advanced emotional, affective, or belief‑state modeling (Kaia remains zero‑personality and purely deterministic).
 - General‑purpose container orchestration or microservices management.
-- Graphical user interfaces beyond the terminal dashboard.
+- Remote or network-exposed graphical operator interfaces. The existing loopback-only web HUD is in scope, but it must use packaged assets and route every mutating command through the Policy Gate.
 
 These exclusions serve to keep Kaia focused on host‑level security monitoring and autonomous remediation, avoiding feature creep that could introduce new attack surfaces or maintenance burden.
 
@@ -770,7 +800,7 @@ The following items are explicitly declared as out‑of‑scope for Kaia's core 
 4. Multi‑agent consensus or distributed architectures.
 5. Emotional, affective, or belief‑state modeling (Kaia is deterministic and personality‑free).
 6. General‑purpose container orchestration (e.g., Kubernetes integration).
-7. Graphical user interfaces beyond the terminal dashboard.
+7. Remote or network-exposed graphical operator interfaces. The repository's loopback-only HUD is in scope, but may not become a remote management surface.
 
 These boundaries ensure that engineering effort remains concentrated on host‑level security monitoring and autonomous remediation.
 
@@ -780,9 +810,9 @@ These boundaries ensure that engineering effort remains concentrated on host‑l
 
 - This document is the **single source of truth**. Ignore all superseded documents.
 - Kaia has **no emotional/belief state** – remove any legacy references.
-- The dashboard is the **only frontend** – `main.py` is for debugging only.
-- The immediate work is: fix the `LogCollector` bug, verify the dashboard, then implement the command input.
-- Future work is clearly scoped in §10 and §11.
+- The collector/snapshot pipeline is the shared telemetry source; curses and the loopback web HUD are operator surfaces. Every web mutation must pass through the Policy Gate.
+- Use §10.5 for the latest code-review status snapshot and `docs/NEXT_STEPS.md` for target-host verification. Do not treat older status lists or displayed dashboard values as proof that a capability is live.
+- Keep Tier 5 and platform-specific work explicitly unfinished until both regression coverage and deployment evidence exist.
 - All implementation must adhere to the fail‑closed principles, security invariants (§1), and the hardening rules in Appendix E.
 
 ---
