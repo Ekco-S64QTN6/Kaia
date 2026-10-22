@@ -76,7 +76,7 @@ sudo systemctl start kaia-policy-gate
 systemctl status kaia-policy-gate --no-pager -n 15
 ```
 
-System mode refuses to start without a valid baseline. Review the deployed tree and expected diff first; never baseline a suspected compromise. The baseline records SHA-256 hashes of every protected file to root-owned
+System mode refuses to start without a valid baseline. Review the deployed tree and expected diff first; never baseline a suspected compromise. The baseline command refuses missing, symlinked or non-regular protected paths (except the intentionally absent deployed `.env`) before creating a replacement file. The baseline records SHA-256 hashes of every protected file to root-owned
 `<KAIA_STATE_DIR>/baseline.sha256` (default: `/var/lib/kaia/baseline.sha256`). In unprivileged development mode only, a missing baseline permits a weaker current-disk bootstrap; edits made while stopped then cannot be detected. The FIM audit database is stored at `<KAIA_STATE_DIR>/fim_audit.db`; the installer migrates legacy history from `/var/lib/secdaemon/fim_audit.db` if the new destination does not already exist.
 
 **Run the baseline only from a state you have reviewed.** Baselining a compromise

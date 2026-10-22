@@ -49,7 +49,10 @@ class TamperDetector:
                     if path not in self.immutable_files:
                         self.immutable_files.append(path)
         except OSError as e:
-            logger.error(f"Could not enumerate {security_pkg} for integrity watch: {e}")
+            raise RuntimeError(
+                f"Could not enumerate protected security modules in {security_pkg}; "
+                "refusing to continue integrity monitoring."
+            ) from e
 
         # The installed service loads its signing key from /etc/kaia/secret.env;
         # /opt/kaia/.env is deliberately removed by the installer. Watch the
