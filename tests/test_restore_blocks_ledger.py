@@ -177,3 +177,17 @@ def test_collect_blocks_refuses_symlink_ledger(tmp_path):
 
     with pytest.raises(OSError):
         collect_blocks(str(link))
+
+
+def test_collect_blocks_logs_when_active_rule_limit_drops_oldest(caplog, tmp_path):
+    ledger = tmp_path / "ledger.json"
+    ledger.write_text(
+        chr(10).join(
+            json.dumps(_record(f"192.0.2.{i}")) for i in range(1, 5)
+        ) + chr(10)
+    )
+
+    blocks = collect_blocks(str(ledger), max_blocks=2)
+
+    assert [item["target_ip"] for item in blocks] == ["192.0.2.3", "192.0.2.4"]
+    assert "older active rules were omitted" in caplog.text
