@@ -51,7 +51,9 @@ What this changes:
 - Creates the configured state directory (default `/var/lib/kaia`, `root:kaiacord`,
   0750) and **migrates** existing audit/event data out of the checkout. Custom state
   paths must be below `/var/lib`, `/srv`, or `/mnt`; deploy paths must be below `/opt`.
-  The installer rejects paths overlapping the source checkout or each other.
+  The installer rejects paths overlapping the source checkout or each other. It refuses
+unexpected code-tree symlinks before recursive root ownership changes; the sole allowed
+`static/dashboard` symlink must resolve to `core/web/static` inside the tree.
 - Refuses symlinked or non-regular legacy runtime files during migration and normalizes
   existing ledger/DB files to `root:kaiacord` mode `0640`.
 - Installs `kaia-policy-gate`, `kaia-lockdown` and the new
