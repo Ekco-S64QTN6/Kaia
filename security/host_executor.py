@@ -5,6 +5,7 @@ import ipaddress
 import re
 import stat
 import uuid
+import errno
 
 SYSTEM_BINARIES = {
     "ss": "/usr/bin/ss",
@@ -362,6 +363,8 @@ class HostExecutor:
                 logger.warning("Workspace write committed but directory fsync failed for %s: %s", requested_abs, e)
             return True, f"File {requested_abs} written successfully.", ""
         except (OSError, ValueError, TypeError) as e:
+            if isinstance(e, OSError) and e.errno in (errno.ELOOP, errno.ENOTDIR):
+                return False, "", f"Path modification violation: symlinked or non-directory path component rejected: {e}"
             return False, "", f"Failed to write file safely: {e}"
         finally:
             if temp_name is not None and parent_fd is not None:
