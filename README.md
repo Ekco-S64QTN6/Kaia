@@ -48,7 +48,7 @@ This describes capabilities present in the repository. It is not proof that priv
 - **Threat intelligence:** InternetDB input validation, per-process serialized requests and negative caching for authoritative 404 responses are implemented alongside the existing reputation/CVE lookup paths.
 - **Package transactions:** a passive pacman-log monitor records install/upgrade/downgrade/reinstall/remove events after successful ALPM transaction completion. It is a first increment, not full supply-chain attestation.
 - **Operator UI:** the loopback-only web HUD has interactive command entry, bounded command dispatch through the Policy Gate, telemetry WebSocket updates and strict self-hosted CSP. Command results are returned after the request completes; incremental response streaming for long-running operations remains unfinished.
-- **Regression automation:** GitHub Actions compiles Python modules and runs the focused security regression suite. The latest recorded main run on 2026-10-22 passed 156 tests. This does not replace privileged host validation.
+- **Regression automation:** GitHub Actions compiles Python modules and runs the focused security regression suite. The latest recorded main run on 2026-10-22 passed 166 tests. This does not replace privileged host validation.
 
 ### Still incomplete or host-dependent
 
@@ -233,9 +233,11 @@ path that tamper detection can *report* but not *prevent*.
 sudo scripts/install_services.sh
 ```
 
-That deploys a root-owned copy to `/opt/kaia` (0644 files, 0755 dirs, root:root),
-provisions the configured state directory (default `/var/lib/kaia`), migrates any
-in-repo ledger, and installs the units. It validates the signing secret before
+That deploys a root-owned copy below `/opt` (default `/opt/kaia`; 0644 files, 0755
+dirs, root:root), provisions the configured state directory (default `/var/lib/kaia`;
+custom paths must be below `/var/lib`, `/srv`, or `/mnt`), migrates existing runtime
+data, and installs the units. The installer rejects destinations that overlap the
+source checkout or each other. It validates the signing secret before
 changing files and stops an active Policy Gate before syncing monitored code. The
 installer enables but does **not start** the gate automatically. Review the deployed
 diff, write the trusted baseline, then start it:
@@ -318,7 +320,9 @@ at boot — but that loses your session and tells you nothing about why it fired
 ### Recovering from a lockdown
 
 `kaia-lockdown.sh` snapshots the live ruleset to `/var/lib/kaia/pre-lockdown.nft`
-before flushing, plus a timestamped copy for forensics. To lift it:
+before flushing, plus a timestamped copy for forensics. The snapshot files are root-only; the state
+directory remains `root:kaiacord` mode `0750` so lockdown does not break group-readable
+operator ledgers and databases. To lift it:
 
 ```bash
 sudo ./scripts/kaia-unlock.sh          # regenerates via `ufw reload` where ufw is active
@@ -344,7 +348,10 @@ sudo systemctl restart kaia-policy-gate  # adopt it
 Run it **only from a state you have reviewed.** Baselining a compromise makes the
 compromise the reference. The script shows a diff against the previous baseline
 before replacing it, and enumerates files via the detector itself so the two cannot
-drift apart.
+drift apart. It hashes into a temporary file and atomically replaces the trusted
+baseline only after every protected file is successfully hashed; failure preserves
+the previous baseline. The baseline is root-only, while the state directory remains
+`root:kaiacord` mode `0750` for group-readable operator data.
 
 System mode refuses to start without a valid trusted baseline. Only unprivileged
 development mode may bootstrap from the current disk state, where changes made while

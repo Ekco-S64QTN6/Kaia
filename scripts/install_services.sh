@@ -27,6 +27,31 @@ for path_name in DEPLOY_DIR STATE_DIR; do
             ;;
     esac
 done
+
+# These scripts perform privileged recursive sync/chown/chmod operations.
+# Constrain targets to dedicated application-data roots rather than only rejecting '/'.
+case "$DEPLOY_DIR" in
+    /opt/*) ;;
+    *) echo "DEPLOY_DIR must be a dedicated directory below /opt." >&2; exit 1 ;;
+esac
+case "$STATE_DIR" in
+    /var/lib/*|/srv/*|/mnt/*) ;;
+    *) echo "STATE_DIR must be a dedicated directory below /var/lib, /srv, or /mnt." >&2; exit 1 ;;
+esac
+
+PROJECT_REAL="$(realpath -e -- "$KAIA_PROJECT_DIR")"
+case "$DEPLOY_DIR/" in
+    "$PROJECT_REAL/"*) echo "DEPLOY_DIR must not be inside the source checkout." >&2; exit 1 ;;
+esac
+case "$PROJECT_REAL/" in
+    "$DEPLOY_DIR/"*) echo "DEPLOY_DIR must not contain the source checkout." >&2; exit 1 ;;
+esac
+case "$STATE_DIR/" in
+    "$PROJECT_REAL/"*) echo "STATE_DIR must not be inside the source checkout." >&2; exit 1 ;;
+esac
+case "$PROJECT_REAL/" in
+    "$STATE_DIR/"*) echo "STATE_DIR must not contain the source checkout." >&2; exit 1 ;;
+esac
 case "$STATE_DIR/" in
     "$DEPLOY_DIR/"*) echo "STATE_DIR must not be inside DEPLOY_DIR." >&2; exit 1 ;;
 esac
@@ -116,22 +141,50 @@ chmod 750 "$STATE_DIR/threat_intel"
 # Migrate any existing in-repo ledger/database exactly once.
 for f in audit_ledger.json security_events.db; do
     src="$KAIA_PROJECT_DIR/storage/security/$f"
-    if [ -f "$src" ] && [ ! -f "$STATE_DIR/$f" ]; then
-        cp -a "$src" "$STATE_DIR/$f"
-        chown root:kaiacord "$STATE_DIR/$f"
-        chmod 640 "$STATE_DIR/$f"
+    dst="$STATE_DIR/$f"
+    # Never follow a symlink while running as root; it could redirect ownership changes.
+    if [ -L "$src" ]; then
+        echo "ERROR: refusing to migrate symlinked runtime data: $src" >&2
+        exit 1
+    fi
+    if [ -L "$dst" ] || { [ -e "$dst" ] && [ ! -f "$dst" ]; }; then
+        echo "ERROR: runtime data destination is not a regular file: $dst" >&2
+        exit 1
+    fi
+    if [ -f "$src" ] && [ ! -e "$dst" ]; then
+        cp -- "$src" "$dst"
+        chown root:kaiacord "$dst"
+        chmod 640 "$dst"
         echo "    migrated $f ($(stat -c%s "$src") bytes)"
+    elif [ -f "$dst" ]; then
+        chown root:kaiacord "$dst"
+        chmod 640 "$dst"
     fi
 done
 
 # FIM history used to live outside the configured state directory. Preserve it
 # during the first upgrade to the unified state layout.
 legacy_fim_db="/var/lib/secdaemon/fim_audit.db"
-if [ -f "$legacy_fim_db" ] && [ ! -e "$STATE_DIR/fim_audit.db" ]; then
-    cp -a "$legacy_fim_db" "$STATE_DIR/fim_audit.db"
-    chown root:kaiacord "$STATE_DIR/fim_audit.db"
-    chmod 640 "$STATE_DIR/fim_audit.db"
+fim_db_destination="$STATE_DIR/fim_audit.db"
+if [ -L "$fim_db_destination" ] || { [ -e "$fim_db_destination" ] && [ ! -f "$fim_db_destination" ]; }; then
+    echo "ERROR: FIM DB destination exists but is not a regular file: $fim_db_destination" >&2
+    exit 1
+fi
+if [ -L "$legacy_fim_db" ]; then
+    echo "ERROR: refusing to migrate legacy FIM history through a symlink: $legacy_fim_db" >&2
+    exit 1
+fi
+if [ -f "$legacy_fim_db" ] && [ ! -e "$fim_db_destination" ]; then
+    cp -- "$legacy_fim_db" "$fim_db_destination"
     echo "    migrated legacy FIM history ($(stat -c%s "$legacy_fim_db") bytes)"
+fi
+if [ -L "$fim_db_destination" ] || { [ -e "$fim_db_destination" ] && [ ! -f "$fim_db_destination" ]; }; then
+    echo "ERROR: FIM DB is not a regular file: $fim_db_destination" >&2
+    exit 1
+fi
+if [ -f "$fim_db_destination" ]; then
+    chown root:kaiacord "$fim_db_destination"
+    chmod 640 "$fim_db_destination"
 fi
 
 for SERVICE in kaia-policy-gate kaia-lockdown kaia-restore-blocks; do
