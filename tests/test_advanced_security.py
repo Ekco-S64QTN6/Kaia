@@ -62,9 +62,11 @@ class TestAdvancedSecurity(unittest.TestCase):
             "service_name": "nginx",
             "justification": "Test lattice allowed",
             "capability_token": generate_capability_token("restart_service", "nginx"),
-            "session_id": "sess_test_123" # Bypass health checks
+            "session_id": "sess_123"
         }
-        with patch.object(HostExecutor, 'execute_service_control', return_value=(True, "Restarted", "")):
+        with patch.object(HostExecutor, 'execute_service_control', return_value=(True, "Restarted", "")), \
+             patch('security.telemetry_daemon.get_systemd_unit_status',
+                   return_value={"active_state": "inactive", "sub_state": "dead"}):
             res = gate.evaluate_and_execute(payload)
         # It passes the lattice filter, and executes (returns success or error but not denied by lattice)
         self.assertNotEqual(res.get("message"), "Lattice violation: action 'restart_service' is blocked by security policy.")
