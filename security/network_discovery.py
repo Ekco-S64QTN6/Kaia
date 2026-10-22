@@ -6,6 +6,8 @@ import struct
 import sqlite3
 import logging
 import threading
+from collections import OrderedDict
+from queue import Empty, Full, Queue
 import config
 
 logger = logging.getLogger(__name__)
@@ -66,10 +68,18 @@ class PassiveDiscoveryEngine:
         self.thread = None
         self.sock = None
         self.oui = {}
-        self.seen_cache = {}  # (mac, ip) -> last_seen_timestamp
+        self.seen_cache = OrderedDict()  # bounded LRU: (mac, ip) -> last_seen_timestamp
         self.cache_lock = threading.Lock()
+        self.seen_cache_max_entries = 4096
+        self.enrichment_queue = Queue(maxsize=256)
+        self.enrichment_thread = None
+        self.enrichment_dropped = 0
 
     def start(self):
+        if self.thread and self.thread.is_alive():
+            return True
+
+        self.stop_event.clear()
         # Initialize DB
         os.makedirs(os.path.dirname(config.ASSETS_DB_PATH), exist_ok=True)
         conn = None
@@ -102,6 +112,15 @@ class PassiveDiscoveryEngine:
         # Load OUI
         self.oui = load_oui()
 
+        # Keep InternetDB enrichment off the packet-processing path and cap its
+        # concurrency. A hostile LAN can spoof arbitrarily many MAC/IP pairs;
+        # it must not be able to create one thread (or one pending task) per pair.
+        if not self.enrichment_thread or not self.enrichment_thread.is_alive():
+            self.enrichment_thread = threading.Thread(
+                target=self._enrichment_worker, daemon=True, name="net-discovery-enrichment"
+            )
+            self.enrichment_thread.start()
+
         self.thread = threading.Thread(target=self._run, daemon=True, name="net-discovery")
         self.thread.start()
         logger.info("PassiveDiscoveryEngine started.")
@@ -115,6 +134,50 @@ class PassiveDiscoveryEngine:
             except Exception:
                 pass
             self.sock = None
+
+        # These threads are daemonized so shutdown cannot hang forever on a
+        # broken raw socket or remote enrichment request.
+        current = threading.current_thread()
+        if self.thread and self.thread is not current:
+            self.thread.join(timeout=2.0)
+        if self.enrichment_thread and self.enrichment_thread is not current:
+            self.enrichment_thread.join(timeout=2.0)
+
+    def _is_recent_duplicate(self, key: tuple, now: float, window_seconds: float = 300.0) -> bool:
+        """Update the deduplication LRU while enforcing a hard memory ceiling."""
+        with self.cache_lock:
+            last_seen = self.seen_cache.get(key)
+            duplicate = last_seen is not None and now - last_seen < window_seconds
+            self.seen_cache[key] = now
+            self.seen_cache.move_to_end(key)
+            while len(self.seen_cache) > self.seen_cache_max_entries:
+                self.seen_cache.popitem(last=False)
+            return duplicate
+
+    def _queue_enrichment(self, ip: str, mac: str) -> bool:
+        """Queue enrichment without blocking packet ingestion; reject on saturation."""
+        try:
+            self.enrichment_queue.put_nowait((ip, mac))
+            return True
+        except Full:
+            self.enrichment_dropped += 1
+            # Use debug to avoid allowing a packet flood to become a log flood.
+            logger.debug("InternetDB enrichment queue full; dropping enrichment for %s", ip)
+            return False
+
+    def _enrichment_worker(self):
+        """Run serialized enrichment with bounded queued work."""
+        while not self.stop_event.is_set():
+            try:
+                ip, mac = self.enrichment_queue.get(timeout=0.5)
+            except Empty:
+                continue
+            try:
+                self._enrich_shodan(ip, mac)
+            except Exception:
+                logger.exception("Unexpected network-asset enrichment failure")
+            finally:
+                self.enrichment_queue.task_done()
 
     def get_recent_assets(self, n=20) -> list:
         assets = []
@@ -287,7 +350,6 @@ class PassiveDiscoveryEngine:
 
     def _log_asset(self, ip: str, mac: str, hostname: str, vector: str):
         now = time.time()
-        key = (mac, ip)
 
         # Sanitize all fields from untrusted network input (INV-004)
         from security.telemetry_sanitizer import sanitize_telemetry
@@ -295,48 +357,46 @@ class PassiveDiscoveryEngine:
         clean = sanitize_telemetry(raw)
         ip = clean.get("ip", "")
         hostname = clean.get("hostname", "")
-        if not ip:   # Drop events with unparseable IPs
+        if not ip:
             return
-        
-        with self.cache_lock:
-            last_seen = self.seen_cache.get(key, 0)
-            if now - last_seen < 300:  # 5 minutes deduplication
-                # Just update seen timestamp in memory
-                self.seen_cache[key] = now
-                return
-            self.seen_cache[key] = now
 
-        # Determine vendor from OUI
+        key = (mac, ip)
+        if self._is_recent_duplicate(key, now):
+            return
+
         prefix = mac.replace(":", "").upper()[:6]
         vendor = self.oui.get(prefix, "unknown")
-        
         ts_str = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        
-        # Write to SQLite
+
+        # The packet parser must not spawn threads or queue work if persistence
+        # failed. The asset record is durable before enrichment is requested.
         conn = None
+        saved = False
         try:
             conn = sqlite3.connect(config.ASSETS_DB_PATH)
             cursor = conn.cursor()
-            
-            # Check if exists
-            cursor.execute("SELECT hostname, first_seen FROM assets WHERE ip = ? AND mac = ?", (ip, mac))
+            cursor.execute(
+                "SELECT hostname, first_seen FROM assets WHERE ip = ? AND mac = ?",
+                (ip, mac),
+            )
             row = cursor.fetchone()
             if row:
-                db_hostname = row[0]
-                first_seen = row[1]
-                # Keep hostname if it's already enriched, otherwise update
+                db_hostname, first_seen = row
                 final_hostname = db_hostname if db_hostname != "Unknown" else hostname
-                cursor.execute("""
-                    UPDATE assets SET hostname = ?, last_seen = ?
-                    WHERE ip = ? AND mac = ?
-                """, (final_hostname, ts_str, ip, mac))
+                cursor.execute(
+                    "UPDATE assets SET hostname = ?, last_seen = ? WHERE ip = ? AND mac = ?",
+                    (final_hostname, ts_str, ip, mac),
+                )
             else:
-                cursor.execute("""
+                cursor.execute(
+                    """
                     INSERT INTO assets (ip, mac, hostname, vendor, detection_vector, first_seen, last_seen)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (ip, mac, hostname, vendor, vector, ts_str, ts_str))
-                
+                    """,
+                    (ip, mac, hostname, vendor, vector, ts_str, ts_str),
+                )
             conn.commit()
+            saved = True
         except Exception as e:
             logger.error(f"Failed to log asset to database: {e}")
         finally:
@@ -346,10 +406,42 @@ class PassiveDiscoveryEngine:
             except Exception:
                 pass
 
-        # Spawn asynchronous threat intel enrichment
-        threading.Thread(target=self._enrich_shodan, args=(ip, mac), daemon=True).start()
+        if saved:
+            self._queue_enrichment(ip, mac)
 
     def _enrich_shodan(self, ip: str, mac: str):
+        from security import threat_intel
+
+        conn = None
+        try:
+            shodan = threat_intel.lookup_internetdb(ip)
+            tags = shodan.get("tags", [])
+            if not tags:
+                return
+            tags_str = ",".join(str(tag) for tag in tags[:32])
+            conn = sqlite3.connect(config.ASSETS_DB_PATH, timeout=2.0)
+            cursor = conn.cursor()
+            cursor.execute("SELECT hostname FROM assets WHERE ip = ? AND mac = ?", (ip, mac))
+            row = cursor.fetchone()
+            if row:
+                current_name = row[0] or "Unknown"
+                if "tags:" not in current_name:
+                    new_name = f"{current_name} (tags:{tags_str})"
+                    cursor.execute(
+                        "UPDATE assets SET hostname = ? WHERE ip = ? AND mac = ?",
+                        (new_name[:256], ip, mac),
+                    )
+            conn.commit()
+        except Exception as e:
+            logger.debug("InternetDB enrichment failed for %s: %s", ip, e)
+        finally:
+            try:
+                if conn:
+                    conn.close()
+            except Exception:
+                pass
+
+
         from security import threat_intel
         try:
             shodan = threat_intel.lookup_internetdb(ip)
