@@ -124,7 +124,7 @@ class HostExecutor:
 
         cmd = [SYSTEM_BINARIES["systemctl"], "restart", service_name]
         if os.geteuid() != 0:
-            cmd = ["sudo"] + cmd
+            cmd = [SYSTEM_BINARIES["sudo"]] + cmd
         return HostExecutor._run_cmd(cmd)
 
     @staticmethod
@@ -241,7 +241,7 @@ class HostExecutor:
                 "/tmp/run_script.sh"
             ]
             
-        elif effective_level in [SYSTEM_BINARIES["bwrap"], "auto"]:
+        elif effective_level in ["bwrap", "auto"]:
             cmd = [
                 SYSTEM_BINARIES["bwrap"],
                 "--ro-bind", "/usr", "/usr",
