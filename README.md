@@ -233,8 +233,11 @@ sudo scripts/install_services.sh
 ```
 
 That deploys a root-owned copy to `/opt/kaia` (0644 files, 0755 dirs, root:root),
-provisions `/var/lib/kaia` for state, migrates any in-repo ledger, and installs the
-units. Re-run it after changes — the checkout is the source, `/opt/kaia` is what runs.
+provisions the configured state directory (default `/var/lib/kaia`), migrates any
+in-repo ledger, and installs the units. The baseline and audit/event files use the
+same `KAIA_STATE_DIR`; the baseline script reads the installed secret and state
+configuration without sourcing the deployed checkout. Re-run the installer after
+changes — the checkout is the source, `/opt/kaia` is what runs.
 
 ### Privileges
 
