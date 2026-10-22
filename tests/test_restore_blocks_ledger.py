@@ -1,3 +1,4 @@
+import pytest
 import json
 
 from scripts.kaia_restore_blocks import collect_blocks
@@ -127,3 +128,52 @@ def test_collect_blocks_preserves_legacy_block_rule_semantics(tmp_path):
         {"target_ip": "192.0.2.10", "protocol": "all", "port": None},
         {"target_ip": "198.51.100.5", "protocol": "tcp", "port": 443}
     ]
+
+
+def test_collect_blocks_bounds_active_state_and_preserves_newest_order(tmp_path):
+    ledger = tmp_path / "ledger.json"
+    lines = [
+        _record("192.0.2.1"),
+        _record("192.0.2.2"),
+        _record("192.0.2.3"),
+        _record("192.0.2.2"),
+    ]
+    ledger.write_text(chr(10).join(json.dumps(item) for item in lines) + chr(10))
+
+    assert [
+        item["target_ip"] for item in collect_blocks(str(ledger), max_blocks=2)
+    ] == ["192.0.2.3", "192.0.2.2"]
+
+
+def test_collect_blocks_skips_oversized_record_and_keeps_reading(tmp_path):
+    from scripts.kaia_restore_blocks import MAX_LEDGER_LINE_BYTES
+
+    ledger = tmp_path / "ledger.json"
+    valid = (json.dumps(_record("198.51.100.8")) + chr(10)).encode()
+    ledger.write_bytes(b"{" + b"x" * (MAX_LEDGER_LINE_BYTES + 100) + bytes([10]) + valid)
+
+    assert [
+        item["target_ip"] for item in collect_blocks(str(ledger))
+    ] == ["198.51.100.8"]
+
+
+def test_max_blocks_configuration_is_bounded_and_invalid_values_fall_back(caplog):
+    from scripts.kaia_restore_blocks import (
+        DEFAULT_MAX_BLOCKS, HARD_MAX_BLOCKS, _parse_max_blocks,
+    )
+
+    assert _parse_max_blocks("23") == 23
+    assert _parse_max_blocks("not-a-number") == DEFAULT_MAX_BLOCKS
+    assert _parse_max_blocks("0") == DEFAULT_MAX_BLOCKS
+    assert _parse_max_blocks(str(HARD_MAX_BLOCKS + 1)) == DEFAULT_MAX_BLOCKS
+    assert "Invalid KAIA_MAX_RESTORED_BLOCKS" in caplog.text
+
+
+def test_collect_blocks_refuses_symlink_ledger(tmp_path):
+    target = tmp_path / "real-ledger.json"
+    target.write_text(json.dumps(_record()) + chr(10))
+    link = tmp_path / "ledger.json"
+    link.symlink_to(target)
+
+    with pytest.raises(OSError):
+        collect_blocks(str(link))
