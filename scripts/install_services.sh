@@ -91,6 +91,16 @@ for f in audit_ledger.json security_events.db; do
     fi
 done
 
+# FIM history used to live outside the configured state directory. Preserve it
+# during the first upgrade to the unified state layout.
+legacy_fim_db="/var/lib/secdaemon/fim_audit.db"
+if [ -f "$legacy_fim_db" ] && [ ! -e "$STATE_DIR/fim_audit.db" ]; then
+    cp -a "$legacy_fim_db" "$STATE_DIR/fim_audit.db"
+    chown root:kaiacord "$STATE_DIR/fim_audit.db"
+    chmod 640 "$STATE_DIR/fim_audit.db"
+    echo "    migrated legacy FIM history ($(stat -c%s "$legacy_fim_db") bytes)"
+fi
+
 for SERVICE in kaia-policy-gate kaia-lockdown kaia-restore-blocks; do
     SRC="$KAIA_PROJECT_DIR/scripts/${SERVICE}.service"
     [ -f "$SRC" ] || continue
