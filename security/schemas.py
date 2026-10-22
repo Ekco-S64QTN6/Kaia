@@ -1,6 +1,7 @@
 from datetime import datetime, UTC
+import ipaddress
 from typing import Any, Dict, List, Literal, Optional, Union
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 class CapabilityToken(BaseModel):
     capability: str
@@ -26,6 +27,33 @@ class MitigationRequest(BaseModel):
     justification: str
     capability_token: str
     session_id: str
+
+class UnblockRequest(BaseModel):
+    """Request to remove an exact Kaia-managed firewall rule."""
+    action: Literal["unblock_ip"] = "unblock_ip"
+    target_ip: str
+    protocol: Literal["tcp", "udp", "all"] = "all"
+    port: Optional[int] = Field(default=None, ge=1, le=65535)
+    justification: str
+    capability_token: str
+    session_id: str
+
+    @field_validator("target_ip")
+    @classmethod
+    def validate_target_ip(cls, value: str) -> str:
+        try:
+            ipaddress.ip_address(value)
+        except ValueError as exc:
+            raise ValueError("target_ip must be a valid IPv4 or IPv6 address") from exc
+        return value
+
+    @model_validator(mode="after")
+    def validate_protocol_port(self):
+        if self.protocol == "all" and self.port is not None:
+            raise ValueError("port may only be specified with tcp or udp")
+        if self.protocol in ("tcp", "udp") and self.port is None:
+            raise ValueError("a port is required when protocol is tcp or udp")
+        return self
 
 class ServiceControlRequest(BaseModel):
     action: Literal["restart_service"] = "restart_service"
