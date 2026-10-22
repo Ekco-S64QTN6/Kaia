@@ -29,47 +29,60 @@ Every structural decision in Kaia's architecture derives from five non-negotiabl
 2. **All actions are schema-validated.** A deterministic host process validates structured intents using rigorous Pydantic definitions before evaluation.
 3. **The host—not the model—makes execution decisions.** No LLM is involved in direct execution authorization or environment path matching.
 4. **Security policy and personality are completely decoupled.** Permissions and capability boundaries never depend on relationship standing, affinity, or the affective state of the agent.
-5. **Every security boundary fails closed.** Any state validation mismatch, IPC disruption, or configuration anomaly halts execution and revokes capability tokens instantly.
+5. **Fail-closed enforcement is mandatory.** Each boundary needs explicit failure behavior and tests; claims about effective containment require evidence from the relevant tests and target-host validation.
 
 ---
 
-## 📈 Target Implementation Status
+## Implementation Status — repository review snapshot (2026-10-22)
 
-Kaia is modeled around its completed architectural state, maintaining stable components alongside active target tracking matrices:
+This snapshot describes code present in the repository, not proof that privileged services are installed, optional kernel integrations work on the target host, or every security boundary has passed end-to-end testing.
 
-* **Policy Gate:** Fully implemented. Handles deterministic out-of-process verification over Unix Domain Sockets.
-* **Intent Validation:** Fully implemented. Rigidly enforces Pydantic schemas on incoming JSON payloads.
-* **Capability Tokens:** Fully implemented. Restricts actions dynamically based on signed cryptographic operational permissions.
-* **Audit Ledger:** Fully implemented. Maintains an append-only transaction stream to `security_events.db` and `audit_ledger.json`.
-* **Host Telemetry & Observers:** Operating via live `fanotify` mount-wide monitors and deep eBPF syscall hooks (`sys_enter_execve`, `sys_enter_openat2`) to prevent polling latency gaps.
-* **Network Threat Intelligence:** Shell-less Layer-2/Layer-3 discovery tracking via native `AF_PACKET` socket interceptors alongside a cache-first, live Shodan InternetDB API synchronization framework.
+### Foundations present in the repository
 
----
+- **Policy Gate and intent validation:** the out-of-process Unix-socket gate, Pydantic schemas, capability tokens, permission-lattice checks and host-executor dispatch are implemented in the codebase.
+- **Host execution controls:** path containment, direct argv execution, allowlists, sandbox wrappers and cgroup limits exist. Their effective behavior still depends on system configuration, executable paths, privileges and the installed deployment.
+- **Integrity monitoring:** trusted file baselines, discovered security-module watchlists, alert latching, ledger integrity checks and a lockdown-rate circuit breaker exist. Baseline creation and deployment coverage remain operator responsibilities.
+- **Operator surfaces:** the curses dashboard and a loopback web telemetry/command bridge both exist. Mutating commands must remain behind the Policy Gate; the web endpoint is not a general shell interface.
+- **Passive discovery and enrichment:** AF_PACKET parsing, local asset storage and optional InternetDB/GeoIP enrichment are implemented. Passive discovery is not active scanning or a complete inventory.
 
-## 📊 Planned Capability Matrix
+### Limits that must remain explicit
 
-### 1. Host Security & Integrity Monitoring
-* **File Integrity Monitoring (FIM):** Continuous mount-wide event processing via `fanotify` bindings with synchronous pre-execution header verification blocks.
-* **Process Observers:** Direct eBPF event stream capturing for process lifecycles and real-time execution context derivation.
-* **Configuration Drift Enforcement:** Structural verification of core platform states against established baseline configurations.
-* **Supply Chain Isolation:** Strict namespace tracking over system update hooks and package management transactions.
+- **Fanotify FIM:** the current implementation uses notification-mode fanotify. It observes filesystem events; it does not block a process pending a scan verdict. Do not describe it as synchronous pre-execution enforcement.
+- **eBPF:** coverage depends on installed BCC support, supported hooks, kernel version, capabilities and callback registration. An empty or unavailable event stream is not proof that the host is clean.
+- **YARA:** rule generation, isolated validation, runtime scanner activation and file-event scanning are separate parts of the pipeline. A saved rule file alone does not prove activation.
+- **Firewall response/recovery:** unit tests prove command construction and replay logic, not that real kernel rules install, UFW reload preserves them, or reboot recovery works.
+- **Threat intelligence:** cached and external results are enrichment signals. Missing, stale or unrated records must not be presented as confirmed benign.
+- **Fail-closed posture:** this is a required design property, not a blanket assertion that every component already meets it. Use regression tests and controlled host tests as evidence.
 
-### 2. Shell-less Network Discovery
-* **Layer-2/Layer-3 Active Mapping:** Raw socket processing loops capturing ARP, mDNS, and LLMNR broadcast frames directly from interfaces.
-* **Unmanaged Device Profiling:** Programmatic local area network asset tracking without relying on external wrapped tools or shell utilities.
-* **Reputation Enrichment:** Cache-first, automated lookup cycles utilizing local SQLite stores and live fallback synchronization routines.
+For the authoritative target architecture and dated implementation status, see `docs/master_plan.md`. The deployment checklist in `docs/NEXT_STEPS.md` reflects a historical checkpoint and must be verified against the current host.
 
-### 3. Threat Detection & Proactive Defense
-* **Signature Enforcement:** Native compilation and live processing of YARA rules across modified execution targets.
-* **Internal Honeypots:** Low-overhead network tripwires and local configuration honey-tokens designed to isolate internal traversal vectors.
-* **Telemetry Sanitization:** Pre-processing and striping of high-frequency metrics before passing payloads to AI context layers.
+## Target Capability Matrix
 
-### 4. Platform Resilience
-* **Self Health Monitoring:** Independent supervisor daemons verifying the integrity and execution states of core validation processes.
-* **Tamper Detection:** Defensive validation checks looking for runtime interference or alterations within privileged code spaces.
-* **Fail-Closed Isolation:** Native `nftables` ruleset flushes dropping all inbound, forward, and outbound packets during an active compromise assertion.
+The following are goals and boundaries, not blanket claims that each control is already production-verified.
 
----
+### 1. Host security and integrity
+
+- **File integrity:** trusted baselines and fanotify event processing exist. Notification-mode fanotify does not hold an originating process for a permission decision; a blocking execution-permission design remains separate work.
+- **Process observation:** eBPF telemetry is optional and hook-specific. Verify actual probes on the target kernel; missing events must be treated as missing visibility.
+- **Configuration and supply-chain drift:** file-hash baselines exist. Package-manager transaction tracking and behavioral baselines remain future work.
+
+### 2. Passive network discovery
+
+- **Layer-2 visibility:** native AF_PACKET parsing handles supported protocols from traffic observed on the configured interface. Quiet devices may remain undiscovered.
+- **Asset profiling:** the local inventory is useful but not a complete or continuously accurate network inventory.
+- **Reputation enrichment:** InternetDB and optional GeoIP records enrich observed addresses; cache misses and unrated entries are not clean verdicts. Internet-wide and active scanning remain out of scope.
+
+### 3. Threat detection and defense
+
+- **YARA:** generated rules need isolated validation, runtime activation and live event delivery before they count as active detection.
+- **Honeypots:** modules and setup helpers exist, but installation and the full event-to-response path need target-host verification.
+- **Telemetry sanitization:** every new ingress path must sanitize untrusted fields before they reach rendering, command construction, logs or model context.
+
+### 4. Platform resilience
+
+- **Tamper detection:** trusted hashes, watchlist discovery and rate-limited response exist; bootstrap and deployment coverage still matter.
+- **Firewall enforcement:** Kaia-owned nftables rule management and recovery code exist. Live block, reload-survival, reboot-replay and panic-recovery tests remain necessary.
+- **Health/supply-chain monitoring:** independent service supervision, package transaction monitoring, alert-confidence scoring, secrets scanning and backup restorability remain unfinished capabilities.
 
 ## 🏗️ Architecture and Isolation Layout
 
@@ -109,44 +122,37 @@ The execution security boundary strictly prevents the model from interacting wit
 
 ---
 
-## 📂 Repository Topology
+## Repository Topology
 
-```
+```text
 Kaia/
 ├── core/
-│   ├── config.py               # Central configuration & base directory logic
-│   ├── data/                   # Data directory for RAG indexing
-│   └── personal_context/       # Personal context directory
+│   ├── config.py              # Runtime configuration and state paths
+│   ├── kaia_cli.py            # CLI / structured-intent orchestration
+│   ├── web_bridge.py          # Loopback HTTP, WebSocket and command bridge
+│   └── web/static/            # Local dashboard HTML, CSS, JavaScript and Kaia codecs
 ├── security/
-│   ├── policy_gate.py          # Deterministic out-of-process validation service
-│   ├── host_executor.py        # Privileged runtime sandboxing and command handler
-│   ├── telemetry_sanitizer.py  # Filters metrics before feeding to the LLM
-│   └── db.py                   # Secure ledger handling
-├── scripts/
-│   └── activate_kaia_env.sh    # Main setup and daemon activation sequence
-├── tests/
-│   ├── verify_security.py      # Multi-tiered sandbox and lattice constraint tests
-│   └── test_heuristics.py      # Classifier accuracy validation suite
-├── toolbox/                    # System diagnostics utilities
-└── storage/
-├── security_events.db      # Append-only security audit ledger
-├── audit_ledger.json       # Policy Gate audit ledger
-└── threat_intel/           # Offline threat intelligence databases (SQLite, MMDB, Parquet)
+│   ├── policy_gate.py         # Token/schema checks and action authorization
+│   ├── host_executor.py       # Privileged command and state-operation boundary
+│   ├── tamper_detection.py    # Trusted baselines and runtime integrity checks
+│   ├── ebpf_telemetry.py      # Optional kernel event collection
+│   ├── fim_daemon.py          # Fanotify-based file monitoring
+│   └── threat_intel.py        # Local enrichment cache and InternetDB client
+├── scripts/                   # Deployment, baseline, recovery and maintenance
+├── tests/                     # Security, IPC, dashboard and regression tests
+├── docs/                      # Master plan, next steps and historical reviews
+├── kaia_dashboard.py          # Snapshot collectors and curses dashboard
+└── main.py                    # Entry point / fallback tooling
 ```
+
+Runtime databases, caches, audit ledgers and secrets are configuration-dependent and may live outside the checkout in system mode. They should not be assumed to be tracked repository files.
+
+## Project source of truth
+
+`docs/master_plan.md` is the authoritative architectural specification and roadmap. This README is the user-facing overview. Archived reviews and secondary design documents are historical inputs; reconcile them against the master plan and actual implementation before treating them as current requirements.
 ---
 
-## ⚖️ Source of Truth Constitutional Clause
-
-This `README.md` serves as the absolute, unalterable constitution of the Kaia project. It defines the definitive project goals, non-negotiable security axioms, architectural boundaries, and target capability frameworks. 
-
-All detailed design reviews, feature proposals, temporary scratchpads, and execution reports are subordinate to this document. If any conflict arises between implementation artifacts or secondary planning documentation and this constitution, **this file takes immediate precedence**. Automated coding agents and systems engineers are directed to baseline all development tracking against the criteria defined herein.
-
----
-
-> **Setup pending.** The hardened deployment (root-owned `/opt/kaia`, reduced
-> capabilities, relocated audit ledger, block persistence) is committed but not yet
-> installed on the development host. The privileged commands to apply it are in
-> **[docs/NEXT_STEPS.md](docs/NEXT_STEPS.md)**.
+> **Deployment state requires local verification.** The last recorded setup checklist is dated 2026-09-08. This repository cannot determine whether the services have since been installed or tested on the target host. Verify the active unit, deployment path, state directory, trusted baseline and firewall recovery before relying on them. See **[docs/NEXT_STEPS.md](docs/NEXT_STEPS.md)**.
 
 ## 🚀 Getting Started
 
@@ -178,9 +184,16 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 4. Running Verification Suite
-Confirm the security boundaries and IPC communications are functioning correctly:
+### 4. Running Verification Tests
+
+Install the focused test dependencies and run the regression suite from the repository root:
+
 ```bash
+python -m pip install -r requirements-test.txt
+pytest -q
+```
+
+The suite does not replace target-host checks for BCC/eBPF, fanotify, live nftables, systemd transient services or privileged recovery.bash
 python tests/verify_security.py
 python tests/test_heuristics.py
 ```
