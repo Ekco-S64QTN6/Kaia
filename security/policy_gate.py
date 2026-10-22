@@ -609,9 +609,15 @@ if __name__ == "__main__":
     from security.ebpf_telemetry import EBPFTelemetryEngine
     from security.network_discovery import PassiveDiscoveryEngine
     from security.honeypot import HoneypotCoordinator
+    from security.supply_chain_monitor import PacmanLogMonitor
     
     # Initialize security DB
     security.db.initialize_db()
+
+    # Package-manager monitoring is observational: failure to read the optional
+    # pacman log must not prevent the Policy Gate from starting.
+    pacman_monitor = PacmanLogMonitor()
+    pacman_monitor.start()
     
     # Configure logging with rotation and stdout
     from logging.handlers import RotatingFileHandler
@@ -671,3 +677,4 @@ if __name__ == "__main__":
         ebpf.stop()
         discovery.stop()
         honeypots.stop()
+        pacman_monitor.stop()
