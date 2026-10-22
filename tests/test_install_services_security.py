@@ -22,3 +22,12 @@ def test_installer_preflights_secret_and_stops_gate_before_sync():
     assert "systemctl enable kaia-policy-gate.service" in script
     assert 'sudo ${DEPLOY_DIR}/scripts/kaia-baseline.sh' in script
     assert "sudo systemctl start kaia-policy-gate.service" in script
+
+
+def test_installer_normalizes_both_quote_styles_and_writes_real_newlines():
+    script = Path("scripts/install_services.sh").read_text()
+
+    assert 'case "$secret_val" in' in script
+    assert 'secret_val="${secret_val:1:${#secret_val}-2}"' in script
+    assert 'printf \'%s\\n\' "KAIA_CAPABILITY_TOKEN_SECRET=$secret_val"' in script
+    assert 'printf \'%s\\n\' "KAIA_STATE_DIR=$STATE_DIR"' in script
