@@ -20,6 +20,7 @@ def test_system_state_mode_keeps_runtime_data_outside_read_only_checkout(tmp_pat
             "import config, json; print(json.dumps({"
             "'state': str(config.STATE_DIR), 'storage': str(config.STORAGE_DIR), "
             "'security': str(config.SECURITY_STORAGE_DIR), "
+            "'baseline': str(config.TRUSTED_BASELINE_PATH), "
             "'threat_intel': str(config.THREAT_INTEL_DIR), "
             "'system': config.STATE_DIR_IS_SYSTEM}))",
         ],
@@ -36,6 +37,7 @@ def test_system_state_mode_keeps_runtime_data_outside_read_only_checkout(tmp_pat
     assert Path(data["storage"]) == state
     assert Path(data["security"]) == state
     assert Path(data["threat_intel"]) == state / "threat_intel"
+    assert Path(data["baseline"]) == state / "baseline.sha256"
     assert (state / "threat_intel").is_dir()
 
 
@@ -61,6 +63,10 @@ def test_installer_persists_state_path_for_manual_unlock():
 
     assert 'printf \'KAIA_STATE_DIR=%q\\n\' "$STATE_DIR" > /etc/kaia/state.env' in installer
     assert '. /etc/kaia/state.env' in unlock
+    baseline_script = (repo_root / "scripts/kaia-baseline.sh").read_text()
+    assert "_read_secret_assignment /etc/kaia/secret.env" in baseline_script
+    assert 'STATE_DIR="${KAIA_STATE_DIR:-/var/lib/kaia}"' in baseline_script
+    assert ". \"\${PROJECT_DIR}/.env\"" not in baseline_script
 
 
 def test_config_treats_explicit_state_path_as_system_mode(tmp_path):
