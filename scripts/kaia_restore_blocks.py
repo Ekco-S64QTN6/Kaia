@@ -125,6 +125,7 @@ def collect_blocks(ledger_path: str, *, max_blocks: int = None) -> list:
 
     active = {}
     malformed = 0
+    evicted = 0
     try:
         metadata = os.fstat(fd)
         if not stat.S_ISREG(metadata.st_mode):
@@ -181,6 +182,7 @@ def collect_blocks(ledger_path: str, *, max_blocks: int = None) -> list:
                     active[key] = normalized
                     if len(active) > max_blocks:
                         active.pop(next(iter(active)))
+                        evicted += 1
 
     finally:
         if fd >= 0:
@@ -188,6 +190,11 @@ def collect_blocks(ledger_path: str, *, max_blocks: int = None) -> list:
 
     if malformed:
         logger.warning("Skipped %d malformed or oversized ledger record(s).", malformed)
+    if evicted:
+        logger.warning(
+            "Active-rule replay limit %d exceeded; older active rules were omitted (%d eviction(s)).",
+            max_blocks, evicted,
+        )
     return list(active.values())
 
 def main() -> int:
@@ -200,22 +207,15 @@ def main() -> int:
 
     ledger = config.AUDIT_LOG_PATH
     logger.info("Restoring blocks from %s", ledger)
-    blocks = collect_blocks(ledger)
+    try:
+        blocks = collect_blocks(ledger)
+    except (OSError, ValueError) as e:
+        logger.error("Could not safely reconstruct firewall state from %s: %s", ledger, e)
+        return 1
 
     if not blocks:
         logger.info("No approved block_ip entries to restore.")
         return 0
-
-    if MAX_BLOCKS < 1:
-        logger.error("KAIA_MAX_RESTORED_BLOCKS must be at least 1; refusing to restore.")
-        return 1
-
-    if len(blocks) > MAX_BLOCKS:
-        logger.warning(
-            "Ledger holds %d distinct blocks; restoring the newest %d "
-            "(raise KAIA_MAX_RESTORED_BLOCKS to change).", len(blocks), MAX_BLOCKS
-        )
-        blocks = blocks[-MAX_BLOCKS:]
 
     ok = failed = 0
     for req in blocks:
@@ -230,7 +230,7 @@ def main() -> int:
             logger.error("Failed to restore block for %s: %s", ip, err)
 
     logger.info("Restored %d block(s); %d failed.", ok, failed)
-    return 0
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
