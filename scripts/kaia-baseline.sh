@@ -66,37 +66,94 @@ if [ -z "${KAIA_CAPABILITY_TOKEN_SECRET:-}" ]; then
     export KAIA_CAPABILITY_TOKEN_SECRET="$secret"
 fi
 
-# A root-owned installer-generated state.env is authoritative for manual runs;
-# a caller's inherited environment must not redirect a privileged chown/chmod.
-if [ -r /etc/kaia/state.env ]; then
-    state_line="$(grep -E "^KAIA_STATE_DIR=/" /etc/kaia/state.env | head -n 1 || true)"
-    state_value="$(printf "%s" "$state_line" | cut -d= -f2-)"
-    case "$state_value" in
-        /*) ;;
-        *) echo "ERROR: invalid KAIA_STATE_DIR in /etc/kaia/state.env." >&2; exit 1 ;;
-    esac
-    case "$state_value" in
-        *[!A-Za-z0-9_./-]*) echo "ERROR: invalid characters in installed KAIA_STATE_DIR." >&2; exit 1 ;;
-    esac
-    export KAIA_STATE_DIR="$state_value"
+# The installer state file is authoritative for privileged manual runs. Parse
+# only its single path assignment; never source this root-run configuration.
+STATE_CONFIG="/etc/kaia/state.env"
+if [ -e "$STATE_CONFIG" ] || [ -L "$STATE_CONFIG" ]; then
+    if [ -L "$STATE_CONFIG" ] || [ ! -f "$STATE_CONFIG" ]; then
+        echo "ERROR: refusing non-regular installed state configuration: $STATE_CONFIG" >&2
+        exit 1
+    fi
+    config_owner="$(stat -c '%u' -- "$STATE_CONFIG")"
+    config_mode="$(stat -c '%a' -- "$STATE_CONFIG")"
+    config_links="$(stat -c '%h' -- "$STATE_CONFIG")"
+    state_line="$(grep -E '^KAIA_STATE_DIR=' "$STATE_CONFIG" || true)"
+    if [ "$config_owner" != "0" ] || [[ ! "$config_mode" =~ ^[0-7]+$ ]] || \
+       (( (8#$config_mode & 0077) != 0 )) || [ "$config_links" != "1" ] || \
+       [ "$(grep -c '^KAIA_STATE_DIR=' "$STATE_CONFIG" || true)" -ne 1 ] || \
+       [[ ! "$state_line" =~ ^KAIA_STATE_DIR=(/[A-Za-z0-9_./-]+)$ ]]; then
+        echo "ERROR: installed state configuration must be a root-owned private file with one absolute KAIA_STATE_DIR." >&2
+        exit 1
+    fi
+    KAIA_STATE_DIR="${state_line#*=}"
 fi
 KAIA_STATE_DIR="${KAIA_STATE_DIR:-/var/lib/kaia}"
 STATE_DIR="$(realpath -m -- "$KAIA_STATE_DIR")"
+state_input="${KAIA_STATE_DIR%/}"
+if [ "$STATE_DIR" != "$state_input" ]; then
+    echo "ERROR: KAIA_STATE_DIR must be canonical and must not contain symlink/parent-traversal components." >&2
+    exit 1
+fi
 case "$STATE_DIR" in
     /var/lib/*|/srv/*|/mnt/*) ;;
     *) echo "ERROR: KAIA_STATE_DIR must be below /var/lib, /srv, or /mnt." >&2; exit 1 ;;
 esac
 
 # The trusted baseline must not be placed in or above the tree it authenticates.
-# Otherwise a writable parent can replace the state directory, or the baseline
-# lives inside the same deployment whose contents it is meant to validate.
 case "$PROJECT_DIR/" in
     "$STATE_DIR/"*) echo "ERROR: KAIA_STATE_DIR must not contain the project checkout." >&2; exit 1 ;;
 esac
 case "$STATE_DIR/" in
     "$PROJECT_DIR/"*) echo "ERROR: KAIA_STATE_DIR must not be inside the project checkout." >&2; exit 1 ;;
 esac
+
+validate_state_path_components() {
+    local current="$STATE_DIR" owner mode
+    while :; do
+        if [ -L "$current" ]; then
+            echo "ERROR: state path contains a symlink component: $current" >&2
+            return 1
+        fi
+        if [ -e "$current" ]; then
+            if [ ! -d "$current" ]; then
+                echo "ERROR: state path component is not a directory: $current" >&2
+                return 1
+            fi
+            owner="$(stat -c '%u' -- "$current")" || return 1
+            mode="$(stat -c '%a' -- "$current")" || return 1
+            if [ "$owner" != "0" ] || [[ ! "$mode" =~ ^[0-7]+$ ]] || (( (8#$mode & 0022) != 0 )); then
+                echo "ERROR: state path component must be root-owned and not group/world-writable: $current" >&2
+                return 1
+            fi
+        fi
+        [ "$current" = "/" ] && break
+        current="$(dirname -- "$current")"
+    done
+}
+if ! validate_state_path_components; then
+    exit 1
+fi
+
+# Keep subprocess configuration aligned with the canonical trusted path.
+export KAIA_STATE_DIR="$STATE_DIR"
+
 BASELINE="${STATE_DIR}/baseline.sha256"
+if [ -L "$BASELINE" ]; then
+    echo "ERROR: refusing a symlinked trusted baseline: $BASELINE" >&2
+    exit 1
+elif [ -e "$BASELINE" ]; then
+    if [ ! -f "$BASELINE" ]; then
+        echo "ERROR: trusted baseline is not a regular file: $BASELINE" >&2
+        exit 1
+    fi
+    baseline_owner="$(stat -c '%u' -- "$BASELINE")"
+    baseline_mode="$(stat -c '%a' -- "$BASELINE")"
+    baseline_links="$(stat -c '%h' -- "$BASELINE")"
+    if [ "$baseline_owner" != "0" ] || [[ ! "$baseline_mode" =~ ^[0-7]+$ ]] || (( (8#$baseline_mode & 0077) != 0 )) || [ "$baseline_links" != "1" ]; then
+        echo "ERROR: trusted baseline must be root-owned, private and single-link." >&2
+        exit 1
+    fi
+fi
 
 echo -e "${CYAN}═══════════════════════════════════════${NC}"
 echo -e "${CYAN}  Kaia trusted integrity baseline${NC}"
