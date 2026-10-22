@@ -44,7 +44,10 @@ if [ ! -f "$KAIA_PROJECT_DIR/.env" ]; then
 fi
 secret_line="$(grep -E '^(export )?KAIA_CAPABILITY_TOKEN_SECRET=' "$KAIA_PROJECT_DIR/.env" | sed 's/^export //' | head -n1)"
 secret_val="${secret_line#*=}"
-secret_val="${secret_val%\"}"; secret_val="${secret_val#\"}"
+case "$secret_val" in
+    \"*\") secret_val="${secret_val:1:${#secret_val}-2}" ;;
+    \'*\') secret_val="${secret_val:1:${#secret_val}-2}" ;;
+esac
 if [ -z "$secret_val" ]; then
     echo "ERROR: KAIA_CAPABILITY_TOKEN_SECRET is missing or empty in .env." >&2
     echo "       Generate one with: openssl rand -hex 32" >&2
@@ -140,9 +143,9 @@ chmod 600 /etc/api_keys.json /var/backups/credentials.txt /root/.ssh/authorized_
 # Provision root-only environment files for systemd and manual recovery.
 mkdir -p /etc/kaia
 chmod 700 /etc/kaia
-printf 'KAIA_CAPABILITY_TOKEN_SECRET=%s\\n' "$secret_val" > /etc/kaia/secret.env
+printf '%s\n' "KAIA_CAPABILITY_TOKEN_SECRET=$secret_val" > /etc/kaia/secret.env
 chmod 600 /etc/kaia/secret.env
-printf 'KAIA_STATE_DIR=%q\\n' "$STATE_DIR" > /etc/kaia/state.env
+printf '%s\n' "KAIA_STATE_DIR=$STATE_DIR" > /etc/kaia/state.env
 chmod 600 /etc/kaia/state.env
 
 systemctl daemon-reload
