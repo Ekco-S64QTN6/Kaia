@@ -351,7 +351,7 @@ There is **no cognitive state**, **no emotional vector**, and **no belief system
 
 ### 9.2 Layout: Four Panes + Command Interface
 
-The dashboard is designed to be responsive to terminal resizing and works well in a typical 2×2 terminal grid on a 1920×1080 display. It uses relative percentages for pane widths and scrolls content when lines exceed available height.
+The curses dashboard is designed to be responsive to terminal resizing and works well in a typical 2×2 terminal grid on a 1920×1080 display. It uses relative percentages for pane widths and scrolls content when lines exceed available height. The loopback web HUD is a separate presentation of the shared snapshot and must not duplicate collectors or authorize actions.
 
 **Final Mockup (guaranteed to render in monospaced fonts):**
 
@@ -630,6 +630,21 @@ Current priorities:
    boot from the audit ledger, or remain deliberately ephemeral.
 4. **Tier 5 stretch goals** — expanded eBPF, YARA/fanotify breadth, NetBIOS discovery.
 
+### 10.4 Negative Testing Requirements
+
+The automated verification matrix must include a dedicated negative‑testing suite that simulates intentional containment breaches and verifies that the system correctly traps them. The suite must include:
+
+- **Path traversal attempts:** Using `../` or symlinks to write outside the workspace.
+- **Blocklisted path writes:** Attempt to write to `*.py`, `*.sh`, `.env`, `.git`, `core/`, `security/`, `tests/`, `scripts/`, `toolbox/`, `storage/` – all must be rejected.
+- **Unauthorized token usage:** Using expired or malformed capability tokens.
+- **Sandbox escape attempts:** Trying to access masked paths (`.env`, `storage/`) from inside Bubblewrap – must return empty or error.
+- **Command injection:** Attempting shell metacharacters in diagnostic commands – must be sanitised.
+- **Automated‑bypass attempts:** Trying to execute an action without going through the full Observe‑Analyze‑Recommend‑Execute pipeline – must be blocked.
+
+All negative test cases must assert that the operation is denied, logged in the audit ledger, and, if applicable, triggers a fail‑closed state (e.g., Policy Gate rejection, lockdown). These tests must be added to the test suite and run as part of the CI pipeline.
+
+---
+
 ### 10.5 Implementation and Verification Status (audit snapshot: 2026-10-22)
 
 This status was reconciled against the repository tree, implementation, service definitions and existing tests. It describes code present on the repository branch at the time of review, not the state of any particular host. The deployment checklist in `docs/NEXT_STEPS.md` remains the guide for operational verification.
@@ -659,21 +674,6 @@ This status was reconciled against the repository tree, implementation, service 
 3. Run selected regression tests in CI and resolve failures before expanding the matrix.
 4. Design permission-event FIM as a distinct enforcement subsystem; do not relabel the existing notification monitor as blocking.
 5. Expand and validate telemetry hooks, independent health supervision and remaining Tier 5 capabilities in small, independently testable changes.
-
-### 10.4 Negative Testing Requirements
-
-The automated verification matrix must include a dedicated negative‑testing suite that simulates intentional containment breaches and verifies that the system correctly traps them. The suite must include:
-
-- **Path traversal attempts:** Using `../` or symlinks to write outside the workspace.
-- **Blocklisted path writes:** Attempt to write to `*.py`, `*.sh`, `.env`, `.git`, `core/`, `security/`, `tests/`, `scripts/`, `toolbox/`, `storage/` – all must be rejected.
-- **Unauthorized token usage:** Using expired or malformed capability tokens.
-- **Sandbox escape attempts:** Trying to access masked paths (`.env`, `storage/`) from inside Bubblewrap – must return empty or error.
-- **Command injection:** Attempting shell metacharacters in diagnostic commands – must be sanitised.
-- **Automated‑bypass attempts:** Trying to execute an action without going through the full Observe‑Analyze‑Recommend‑Execute pipeline – must be blocked.
-
-All negative test cases must assert that the operation is denied, logged in the audit ledger, and, if applicable, triggers a fail‑closed state (e.g., Policy Gate rejection, lockdown). These tests must be added to the test suite and run as part of the CI pipeline.
-
----
 
 ## 11. Advanced Monitoring Capabilities (Optional Future Enhancements)
 
