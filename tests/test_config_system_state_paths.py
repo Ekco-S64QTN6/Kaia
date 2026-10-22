@@ -127,3 +127,20 @@ def test_fim_audit_storage_is_configured_and_legacy_history_is_migrated():
     assert "/var/lib/secdaemon" not in unit
     assert "systemctl stop kaia-policy-gate.service" in installer
     assert "systemctl enable --now kaia-policy-gate.service" not in installer
+
+
+
+def test_baseline_writer_is_fail_closed_and_preserves_state_directory_access():
+    repo_root = Path(__file__).resolve().parents[1]
+    script = (repo_root / "scripts/kaia-baseline.sh").read_text()
+
+    assert "set -euo pipefail" in script
+    assert "trap cleanup EXIT" in script
+    assert 'rm -f -- "$tmp"' in script
+    assert 'chmod 750 "$STATE_DIR"' in script
+    assert 'chown root:kaiacord "$STATE_DIR"' in script
+    assert 'chmod 700 "$STATE_DIR"' not in script
+    assert 'mv -f -- "$tmp" "$BASELINE"' in script
+    assert 'chown root:root "$tmp"' in script
+    assert 'STATE_DIR="$(realpath -m -- "$KAIA_STATE_DIR")"' in script
+    assert 'KAIA_STATE_DIR must be below /var/lib, /srv, or /mnt.' in script
