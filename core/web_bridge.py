@@ -903,23 +903,59 @@ class KaiaWebBridge:
         return app
 
     def _local_request_error(self, request: web.Request) -> Optional[str]:
-        """Reject non-loopback hosts and cross-origin browser requests."""
-        host = request.headers.get("Host", "").split(":", 1)[0].strip("[]").lower()
-        if host not in ALLOWED_LOOPBACK_HOSTS:
+        """Reject non-loopback hosts and origins that do not match host, scheme and port."""
+        from urllib.parse import urlsplit
+
+        host_header = request.headers.get("Host", "")
+        try:
+            parsed_host = urlsplit("//" + host_header)
+            host = (parsed_host.hostname or "").lower()
+            host_port = parsed_host.port
+        except ValueError:
             return "Invalid Host header"
+        if (
+            not host
+            or host not in ALLOWED_LOOPBACK_HOSTS
+            or parsed_host.username is not None
+            or parsed_host.password is not None
+            or parsed_host.path
+        ):
+            return "Invalid Host header"
+
+        # An omitted port means the scheme default (80/443), not the bridge's
+        # configured port. Compare effective ports to prevent an origin on
+        # http://localhost:80 from reading a WebSocket at localhost:8765.
+        request_port = host_port
+        if request_port is None:
+            request_port = 443 if request.scheme == "https" else 80
 
         origin = request.headers.get("Origin")
         if origin:
-            from urllib.parse import urlsplit
             try:
                 parsed_origin = urlsplit(origin)
-                origin_port = parsed_origin.port
+                explicit_origin_port = parsed_origin.port
             except ValueError:
                 return "Invalid Origin"
+            origin_scheme = parsed_origin.scheme.lower()
             origin_host = (parsed_origin.hostname or "").lower()
-            if parsed_origin.scheme not in ("http", "https") or origin_host not in ALLOWED_LOOPBACK_HOSTS:
+            if (
+                origin_scheme not in ("http", "https")
+                or origin_host not in ALLOWED_LOOPBACK_HOSTS
+                or parsed_origin.username is not None
+                or parsed_origin.password is not None
+                or parsed_origin.path
+                or parsed_origin.query
+                or parsed_origin.fragment
+            ):
                 return "Invalid Origin"
-            if origin_port not in (None, self.port):
+
+            origin_port = explicit_origin_port
+            if origin_port is None:
+                origin_port = 443 if origin_scheme == "https" else 80
+
+            if origin_scheme != request.scheme.lower():
+                return "Origin scheme mismatch"
+            if origin_port != request_port:
                 return "Origin port mismatch"
             if origin_host != host:
                 return "Origin host mismatch"
@@ -961,16 +997,15 @@ class KaiaWebBridge:
 
     async def handle_command(self, request: web.Request) -> web.Response:
         """Dispatches an interactive operator command."""
+        # Reject invalid Host/Origin before parsing any body or dispatching a command.
+        request_error = self._local_request_error(request)
+        if request_error:
+            return web.json_response({"success": False, "error": request_error}, status=403)
+
         try:
             body = await request.json()
         except Exception:
             return web.json_response({"success": False, "error": "Invalid JSON body"}, status=400)
-
-        # Loopback binding alone does not prevent DNS rebinding or cross-origin
-        # browser requests; apply the same origin guard used by the WebSocket.
-        request_error = self._local_request_error(request)
-        if request_error:
-            return web.json_response({"success": False, "error": request_error}, status=403)
 
         if not isinstance(body, dict):
             return web.json_response({"success": False, "error": "JSON body must be an object"}, status=400)
