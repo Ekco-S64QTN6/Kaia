@@ -1027,16 +1027,16 @@ class KaiaWebBridge:
 
     async def handle_command(self, request: web.Request) -> web.Response:
         """Dispatches an interactive operator command."""
+        # Reject invalid Host/Origin before parsing an attacker-controlled body or
+        # dispatching an action through the privileged Policy Gate.
+        request_error = self._local_request_error(request)
+        if request_error:
+            return web.json_response({"success": False, "error": request_error}, status=403)
+
         try:
             body = await request.json()
         except Exception:
             return web.json_response({"success": False, "error": "Invalid JSON body"}, status=400)
-
-        # Loopback binding alone does not prevent DNS rebinding or cross-origin
-        # browser requests; apply the same origin guard used by the WebSocket.
-        request_error = self._local_request_error(request)
-        if request_error:
-            return web.json_response({"success": False, "error": request_error}, status=403)
 
         if not isinstance(body, dict):
             return web.json_response({"success": False, "error": "JSON body must be an object"}, status=400)
