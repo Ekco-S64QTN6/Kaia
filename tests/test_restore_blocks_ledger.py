@@ -191,3 +191,50 @@ def test_collect_blocks_logs_when_active_rule_limit_drops_oldest(caplog, tmp_pat
 
     assert [item["target_ip"] for item in blocks] == ["192.0.2.3", "192.0.2.4"]
     assert "older active rules were omitted" in caplog.text
+
+
+def test_main_returns_failure_when_ledger_cannot_be_safely_read(monkeypatch, caplog):
+    import sys
+    import types
+    import scripts.kaia_restore_blocks as restore
+
+    fake_config = types.ModuleType("config")
+    fake_config.AUDIT_LOG_PATH = "/var/lib/kaia/symlinked-ledger.json"
+    fake_executor_module = types.ModuleType("security.host_executor")
+    fake_executor_module.HostExecutor = object
+    monkeypatch.setitem(sys.modules, "config", fake_config)
+    monkeypatch.setitem(sys.modules, "security.host_executor", fake_executor_module)
+
+    def fail_read(_path):
+        raise OSError("refusing symlink ledger")
+
+    monkeypatch.setattr(restore, "collect_blocks", fail_read)
+
+    assert restore.main() == 1
+    assert "Could not safely reconstruct firewall state" in caplog.text
+
+
+def test_main_returns_failure_when_any_nft_restore_fails(monkeypatch, caplog):
+    import sys
+    import types
+    import scripts.kaia_restore_blocks as restore
+
+    fake_config = types.ModuleType("config")
+    fake_config.AUDIT_LOG_PATH = "/var/lib/kaia/audit_ledger.json"
+
+    class FakeHostExecutor:
+        @staticmethod
+        def execute_mitigation(ip, protocol, port):
+            return False, "", "mock nft failure"
+
+    fake_executor_module = types.ModuleType("security.host_executor")
+    fake_executor_module.HostExecutor = FakeHostExecutor
+    monkeypatch.setitem(sys.modules, "config", fake_config)
+    monkeypatch.setitem(sys.modules, "security.host_executor", fake_executor_module)
+    monkeypatch.setattr(
+        restore, "collect_blocks",
+        lambda _path: [{"target_ip": "192.0.2.10", "protocol": "all", "port": None}],
+    )
+
+    assert restore.main() == 1
+    assert "mock nft failure" in caplog.text
