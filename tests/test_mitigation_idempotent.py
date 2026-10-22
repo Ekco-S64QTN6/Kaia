@@ -35,3 +35,30 @@ def test_mitigation_reuses_existing_table_and_chain(
     assert calls[1][:4] == ["/usr/bin/nft", "-exist", "add", "chain"]
     assert calls[2][:3] == ["/usr/bin/nft", "add", "rule"]
     assert expected_family in calls[2]
+
+
+def test_mitigation_rejects_ambiguous_protocol_port_shapes(monkeypatch):
+    calls = []
+    monkeypatch.setattr(HostExecutor, "_run_cmd", staticmethod(lambda cmd: calls.append(cmd) or (True, "", "")))
+
+    invalid = [
+        ("192.0.2.1", "icmp", None),
+        ("192.0.2.1", "tcp", None),
+        ("192.0.2.1", "udp", None),
+        ("192.0.2.1", "all", 53),
+        ("192.0.2.1", "tcp", True),
+    ]
+    for target, protocol, port in invalid:
+        ok, _, error = HostExecutor.execute_mitigation(target, protocol, port)
+        assert not ok and error
+    assert calls == []
+
+
+def test_mitigation_rejects_invalid_ip_before_nft(monkeypatch):
+    calls = []
+    monkeypatch.setattr(HostExecutor, "_run_cmd", staticmethod(lambda cmd: calls.append(cmd) or (True, "", "")))
+
+    ok, _, error = HostExecutor.execute_mitigation("203.0.113.1/24", "all")
+    assert not ok
+    assert "invalid ip" in error.lower()
+    assert calls == []
