@@ -6,6 +6,7 @@
 set -euo pipefail
 
 tests=(
+  tests/test_ci_workflow.py
   tests/test_config_system_state_paths.py
   tests/test_database_utils.py
   tests/test_diagnostics_read_only.py

@@ -39,8 +39,12 @@ When code or a subsystem contract changes, update the README summary if user-vis
 
 Run `python -m pip install -r requirements-test.txt` then
 `bash scripts/run_ci_tests.sh`. This runner is also called by the GitHub Actions
-workflow, so local and CI suite membership stays synchronized. It is a focused,
+workflow, so local and CI suite membership stays synchronized. Workflow actions are
+pinned to verified full commit SHAs to prevent mutable tag movement. It is a focused,
 deterministic suite, not every Python file under `tests/`: legacy scripts such as
 `verify_security.py` are manual/integration tools, and `test_advanced_security.py`
 contains host/database-backed tests that need isolation before it is safe for CI.
 Target-host checks remain separate.
+
+
+The current CI pass count changes as tests are added; current-facing docs link to the main-branch Actions history instead of embedding a number that becomes stale when the suite grows.
