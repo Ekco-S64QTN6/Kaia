@@ -32,13 +32,53 @@ logger = logging.getLogger("kaia-restore-blocks")
 MAX_BLOCKS = int(os.environ.get("KAIA_MAX_RESTORED_BLOCKS", "500"))
 
 
+def _effective_rule_key(ip: str, protocol: str, port, action: str = "block_ip"):
+    """Normalize a ledger request to the exact rule shape HostExecutor creates.
+
+    Older approved block records may contain protocol/port combinations that
+    the original executor accepted but effectively treated as an IP-wide rule.
+    Preserve those historical semantics when replaying blocks. New unblock
+    requests are stricter, because ambiguity must never delete a broader rule.
+    """
+    address = ipaddress.ip_address(ip).compressed
+    if protocol not in ("all", "tcp", "udp"):
+        raise ValueError("unsupported protocol")
+    if port is not None and (
+        isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535
+    ):
+        raise ValueError("invalid port")
+
+    if action == "unblock_ip":
+        if protocol == "all" and port is not None:
+            raise ValueError("port may only be specified with tcp or udp")
+        if protocol in ("tcp", "udp") and port is None:
+            raise ValueError("a port is required when protocol is tcp or udp")
+        effective_protocol, effective_port = protocol, port
+    elif protocol in ("tcp", "udp") and port is not None:
+        effective_protocol, effective_port = protocol, port
+    else:
+        # Preserve the actual legacy executor behavior: protocol without a
+        # port, or a port with protocol='all', generated an IP-wide DROP rule.
+        effective_protocol, effective_port = "all", None
+
+    return (address, effective_protocol, effective_port), {
+        "target_ip": address,
+        "protocol": effective_protocol,
+        "port": effective_port,
+    }
+
 def collect_blocks(ledger_path: str) -> list:
-    """Return de-duplicated approved block_ip entries, newest definition wins."""
+    """Reconstruct the latest approved state for each firewall-rule key.
+
+    A successful unblock is a tombstone for an earlier approved block. Denied
+    or failed operations never change desired state. Legacy block_ip-only
+    ledgers remain valid and restore exactly as before.
+    """
     if not os.path.exists(ledger_path):
         logger.info("No audit ledger at %s; nothing to restore.", ledger_path)
         return []
 
-    blocks = {}
+    active = {}
     malformed = 0
     with open(ledger_path, "r", errors="replace") as f:
         for line in f:
@@ -50,8 +90,6 @@ def collect_blocks(ledger_path: str) -> list:
             except (ValueError, TypeError):
                 malformed += 1
                 continue
-            # Valid JSON is not necessarily a valid ledger record. Keep a single
-            # malformed object from aborting the root boot-time restore service.
             if not isinstance(rec, dict):
                 malformed += 1
                 continue
@@ -61,7 +99,8 @@ def collect_blocks(ledger_path: str) -> list:
             if not isinstance(req, dict):
                 malformed += 1
                 continue
-            if req.get("action") != "block_ip":
+            action = req.get("action")
+            if action not in ("block_ip", "unblock_ip"):
                 continue
 
             ip = req.get("target_ip")
@@ -70,27 +109,20 @@ def collect_blocks(ledger_path: str) -> list:
             try:
                 if not isinstance(ip, str):
                     raise ValueError("target_ip must be a string")
-                ipaddress.ip_address(ip)
-                if protocol not in ("all", "tcp", "udp"):
-                    raise ValueError("unsupported protocol")
-                if port is not None and (
-                    isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535
-                ):
-                    raise ValueError("invalid port")
-            except ValueError:
+                key, normalized = _effective_rule_key(ip, protocol, port, action)
+            except (ValueError, TypeError):
                 malformed += 1
                 continue
 
-            # Reinsert duplicate keys so their newest record also has newest
-            # ordering; this matters when the restore cap is reached.
-            key = (ip, protocol, port)
-            blocks.pop(key, None)
-            blocks[key] = req
+            if action == "unblock_ip":
+                active.pop(key, None)
+            else:
+                active.pop(key, None)
+                active[key] = normalized
 
     if malformed:
         logger.warning("Skipped %d malformed ledger line(s).", malformed)
-    return list(blocks.values())
-
+    return list(active.values())
 
 def main() -> int:
     try:
