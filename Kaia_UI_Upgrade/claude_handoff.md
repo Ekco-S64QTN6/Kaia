@@ -19,14 +19,14 @@ Kaia is a **hardened security daemon** for Arch Linux. It is **not** an AI chat 
 - Monitors filesystem integrity (fanotify/watchdog), network traffic (raw sockets), honeypot decoys, and privilege escalation events (eBPF telemetry)
 - Enforces a capability lattice: `GLOBAL ∩ WORKSPACE → EFFECTIVE`
 - Runs all agent-requested scripts inside Bubblewrap sandboxes with cgroup limits
-- Presents everything via a curses TUI (`kaia_dashboard.py`)
+- Presents telemetry via the loopback web HUD by default and the legacy curses TUI (`kaia_dashboard.py --tui`)
 
 **Operator UI:** local loopback web HUD by default; `kaia_dashboard.py --tui` keeps the curses dashboard available. They share the collector/snapshot architecture.  
 **`main.py`** is a debugging fallback only, not for normal use.
 
 ---
 
-## What Is Fully Complete ✅
+## Features Present in the Codebase — review snapshot 2026-10-22
 
 The following code paths were present in the reviewed source as of 2026-10-22. Their presence does not imply that the privileged host deployment or kernel integrations have been verified end to end:
 
@@ -284,7 +284,7 @@ window.KaiaAvatar.mountAnimationViewport({
 | Issue | Status |
 |-------|--------|
 | `KAIA_CAPABILITY_TOKEN_SECRET` was committed in 4 git commits to a public repo | Rotated 2026-09-08. Old value rejected by installer outright. History NOT scrubbed (scrubbing doesn't un-publish a value that was already public). |
-| `sdb` backup drive reports 2 pending sectors | Unrelated to Kaia. Investigate separately. |
+| `sdb` backup drive reportedly had 2 pending sectors | Historical note from the 2026-09-18 handoff. Re-check device health before treating it as current. |
 
 ---
 
