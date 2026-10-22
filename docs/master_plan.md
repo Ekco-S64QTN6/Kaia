@@ -674,7 +674,7 @@ This is the current repository status as of the audit date. It describes impleme
 
 **Implemented in the repository:**
 
-- [x] Policy Gate, typed request schemas, expiring target-scoped capability tokens, permission-lattice checks, Unix-socket IPC, audit writes and constrained host execution.
+- [x] Policy Gate, typed request schemas, expiring target-scoped capability tokens, permission-lattice checks, Unix-socket IPC, audit writes and constrained host execution. Healthy-service restart guards are enforced independently of caller-controlled session IDs.
 - [x] Firewall block and unblock intents. Unblock inspects Kaia's own nftables chain and deletes exact matching handles; it never flushes the chain or deletes rules solely because an IP matches.
 - [x] Ledger-aware block replay. Approved block/unblock events are folded chronologically by normalized rule scope, including legacy block-only records; failed or denied unblocks do not remove desired state.
 - [x] Trusted integrity baseline parsing, coverage/mismatch checks, security-file watchlist and lockdown alert latching/circuit breaking. System mode now refuses startup when the trusted baseline is missing; only unprivileged development mode can bootstrap against current disk. Baseline creation uses a temporary file and atomic replacement after all hashes succeed, preserves `root:kaiacord` 0750 state-directory access, and refuses state paths outside the permitted roots.

@@ -550,10 +550,11 @@ class PolicyGate:
                 from security.telemetry_daemon import get_systemd_unit_status
                 status = get_systemd_unit_status(f"{req.service_name}.service")
                 
-                is_test_session = "test" in session_id or session_id == "sess_test_123"
                 is_degraded = (status.get("active_state") != "active" or status.get("sub_state") != "running")
-                
-                if not is_degraded and not is_test_session:
+
+                # Session IDs are caller-controlled correlation metadata, not a
+                # security boundary. A "test" label must never bypass this guard.
+                if not is_degraded:
                     self._log_audit(req, "denied", reason=f"Service '{req.service_name}' is healthy and running. Restart denied.")
                     log_security_event("restart_healthy_service_blocked", "policy_gate", "kaiacord", hashlib.sha256(str(payload).encode()).hexdigest(), "blocked", session_id)
                     return {"status": "denied", "message": f"Service '{req.service_name}' is healthy. Restart denied."}
