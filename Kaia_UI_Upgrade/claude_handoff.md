@@ -117,9 +117,7 @@ The following code paths were present in the reviewed source as of 2026-10-22. T
 
 Interactive command entry is built in core/web/static/js/terminal.js; /api/command
 dispatches known commands through the Policy Gate and returns structured output.
-The telemetry WebSocket streams snapshots, but command output itself is still one
-completed response. Long-running diagnostics and sandboxed operations do not publish
-partial output chunks while executing. Completing this needs a bounded, framed
+The telemetry WebSocket streams snapshots and enforces matching loopback Host/Origin scheme and effective-port checks; command POST validation happens before parsing and dispatch. Command output itself is still one completed response. Long-running diagnostics and sandboxed operations do not publish partial output chunks while executing. Completing this needs a bounded, framed
 streaming protocol, cancellation/timeout behavior and UI back-pressure tests.
 
 ### 2. Execution-blocking FIM
