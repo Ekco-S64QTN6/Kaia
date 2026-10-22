@@ -19,7 +19,7 @@ set -euo pipefail
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[1;36m'; NC='\033[0m'
 
-[ "$EUID" -eq 0 ] || { echo -e "\${RED}Must run as root: sudo $0\${NC}" >&2; exit 1; }
+[ "$EUID" -eq 0 ] || { echo -e "${RED}Must run as root: sudo $0${NC}" >&2; exit 1; }
 
 # This root-run utility does not trust inherited paths. The installed config
 # is authoritative; before installation, use the fixed default state directory.
@@ -46,7 +46,7 @@ if [ -e "$STATE_CONFIG" ] || [ -L "$STATE_CONFIG" ]; then
         echo "ERROR: installed state configuration has no valid absolute KAIA_STATE_DIR." >&2
         exit 1
     fi
-    state_value="\${state_line#*=}"
+    state_value="${state_line#*=}"
     case "$state_value" in
         /*) ;;
         *) echo "ERROR: invalid KAIA_STATE_DIR in installed state configuration." >&2; exit 1 ;;
@@ -58,7 +58,7 @@ if [ -e "$STATE_CONFIG" ] || [ -L "$STATE_CONFIG" ]; then
 fi
 
 state_dir_real="$(realpath -e -- "$STATE_DIR")"
-state_input="\${STATE_DIR%/}"
+state_input="${STATE_DIR%/}"
 if [ "$state_dir_real" != "$state_input" ]; then
     echo "ERROR: state directory path must be canonical and must not use symlinks." >&2
     exit 1
@@ -84,8 +84,8 @@ while :; do
     current="$(dirname -- "$current")"
 done
 
-LEDGER="\${STATE_DIR}/audit_ledger.json"
-KEEP="\${KAIA_LEDGER_KEEP:-6}"
+LEDGER="${STATE_DIR}/audit_ledger.json"
+KEEP="${KAIA_LEDGER_KEEP:-6}"
 if [[ ! "$KEEP" =~ ^[0-9]{1,3}$ ]]; then
     echo "ERROR: KAIA_LEDGER_KEEP must be an integer from 1 to 100." >&2
     exit 1
@@ -104,12 +104,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo -e "\${CYAN}═══════════════════════════════════════\${NC}"
-echo -e "\${CYAN}  Kaia audit ledger rotation\${NC}"
-echo -e "\${CYAN}═══════════════════════════════════════\${NC}\\n"
+echo -e "${CYAN}═══════════════════════════════════════${NC}"
+echo -e "${CYAN}  Kaia audit ledger rotation${NC}"
+echo -e "${CYAN}═══════════════════════════════════════${NC}\n"
 
 if systemctl is-active --quiet kaia-policy-gate 2>/dev/null; then
-    echo -e "\${RED}The Policy Gate is running.\${NC}"
+    echo -e "${RED}The Policy Gate is running.${NC}"
     echo "Stop it first, or rotation will race the writer and trip tamper detection:"
     echo "    sudo systemctl stop kaia-policy-gate"
     exit 1
@@ -120,7 +120,7 @@ if [ -L "$LEDGER" ]; then
     exit 1
 fi
 if [ ! -e "$LEDGER" ]; then
-    echo -e "\${YELLOW}No ledger at $LEDGER — nothing to rotate.\${NC}"
+    echo -e "${YELLOW}No ledger at $LEDGER — nothing to rotate.${NC}"
     exit 0
 fi
 if [ ! -f "$LEDGER" ]; then
@@ -141,7 +141,7 @@ echo "  current: $LEDGER"
 echo "           $(numfmt --to=iec "$size" 2>/dev/null || echo "$size bytes"), $lines entries"
 
 stamp="$(date +%Y%m%d-%H%M%S%N)"
-archive="\${LEDGER}.\${stamp}"
+archive="${LEDGER}.${stamp}"
 if [ -e "$archive" ] || [ -L "$archive" ]; then
     echo "ERROR: archive destination already exists: $archive" >&2
     exit 1
@@ -149,7 +149,7 @@ fi
 
 # Prepare a replacement first, then rename both files on the same filesystem.
 # If installing the replacement fails, restore the original archive where possible.
-new_ledger_tmp="$(mktemp "\${STATE_DIR}/.audit_ledger.json.XXXXXX")"
+new_ledger_tmp="$(mktemp "${STATE_DIR}/.audit_ledger.json.XXXXXX")"
 chown --reference="$LEDGER" -- "$new_ledger_tmp"
 chmod 640 -- "$new_ledger_tmp"
 if ! mv -- "$LEDGER" "$archive"; then
@@ -168,30 +168,30 @@ new_ledger_tmp=""
 
 # Compression is best effort so a gzip failure preserves the original archive.
 if gzip -9 -- "$archive" 2>/dev/null; then
-    archive="\${archive}.gz"
+    archive="${archive}.gz"
 else
     echo "WARNING: archive compression failed; preserving $archive uncompressed." >&2
 fi
 chmod 600 -- "$archive"
 
-echo -e "  \${GREEN}archived: $archive\${NC}"
-echo -e "  \${GREEN}new empty ledger created\${NC}"
+echo -e "  ${GREEN}archived: $archive${NC}"
+echo -e "  ${GREEN}new empty ledger created${NC}"
 
 # A checked file list avoids process-substitution masking errors from find/sort.
-archives_tmp="$(mktemp "\${STATE_DIR}/.ledger-archives.XXXXXX")"
-if ! find "$STATE_DIR" -maxdepth 1 -type f -name 'audit_ledger.json.*' -printf '%T@ %p\\n' | sort -n > "$archives_tmp"; then
+archives_tmp="$(mktemp "${STATE_DIR}/.ledger-archives.XXXXXX")"
+if ! find "$STATE_DIR" -maxdepth 1 -type f -name 'audit_ledger.json.*' -printf '%T@ %p\n' | sort -n > "$archives_tmp"; then
     echo "ERROR: rotation completed, but archive enumeration failed; manual pruning is required." >&2
     exit 1
 fi
 mapfile -t archives < "$archives_tmp"
 rm -f -- "$archives_tmp"
 archives_tmp=""
-remove_count=$((\${#archives[@]} - KEEP_COUNT))
+remove_count=$((${#archives[@]} - KEEP_COUNT))
 if (( remove_count > 0 )); then
     echo "  pruning $remove_count archive(s) beyond the newest $KEEP_COUNT:"
     for (( i=0; i<remove_count; i++ )); do
-        line="\${archives[$i]}"
-        f="\${line#* }"
+        line="${archives[$i]}"
+        f="${line#* }"
         if [ -L "$f" ] || [ ! -f "$f" ] || [ "$(stat -c '%u' -- "$f")" != "0" ] || [ "$(stat -c '%h' -- "$f")" != "1" ]; then
             echo "ERROR: refusing to prune an untrusted archive path: $f" >&2
             exit 1
@@ -202,6 +202,6 @@ if (( remove_count > 0 )); then
 fi
 
 echo
-echo -e "  \${YELLOW}The ledger hash has changed. Re-baseline before restarting:\${NC}"
+echo -e "  ${YELLOW}The ledger hash has changed. Re-baseline before restarting:${NC}"
 echo "      sudo ./scripts/kaia-baseline.sh"
 echo "      sudo systemctl start kaia-policy-gate"
