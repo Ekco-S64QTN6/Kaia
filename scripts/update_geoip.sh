@@ -30,8 +30,94 @@ if [[ ! "$MAXMIND_ACCOUNT_ID" =~ ^[0-9]+$ ]] || [[ ! "$MAXMIND_LICENSE_KEY" =~ ^
     exit 1
 fi
 
-GEOIP_DIR="storage/threat_intel/geoip"
-mkdir -p -- "$GEOIP_DIR"
+PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+STATE_CONFIG="/etc/kaia/state.env"
+SYSTEM_STATE_MODE=0
+STATE_DIR=""
+
+# The installed state path is authoritative. Parse the one expected assignment;
+# never source a root-owned file as shell code.
+if [ -e "$STATE_CONFIG" ] || [ -L "$STATE_CONFIG" ]; then
+    if [ -L "$STATE_CONFIG" ] || [ ! -f "$STATE_CONFIG" ]; then
+        echo "ERROR: refusing non-regular installed state configuration: $STATE_CONFIG" >&2
+        exit 1
+    fi
+    config_owner="$(stat -c '%u' -- "$STATE_CONFIG")"
+    config_mode="$(stat -c '%a' -- "$STATE_CONFIG")"
+    config_links="$(stat -c '%h' -- "$STATE_CONFIG")"
+    state_line="$(grep -E '^KAIA_STATE_DIR=' "$STATE_CONFIG" || true)"
+    if [ "$config_owner" != "0" ] || [[ ! "$config_mode" =~ ^[0-7]+$ ]] || \
+       (( (8#$config_mode & 0077) != 0 )) || [ "$config_links" != "1" ] || \
+       [ "$(grep -c '^KAIA_STATE_DIR=' "$STATE_CONFIG" || true)" -ne 1 ] || \
+       [[ ! "$state_line" =~ ^KAIA_STATE_DIR=(/[A-Za-z0-9_./-]+)$ ]]; then
+        echo "ERROR: installed state configuration must be root-owned, private, single-link, and contain one absolute state path." >&2
+        exit 1
+    fi
+    STATE_DIR="${state_line#*=}"
+    SYSTEM_STATE_MODE=1
+elif [ -d "/var/lib/kaia" ] && [ -w "/var/lib/kaia" ]; then
+    # Match config.py's root/system install default when no state.env exists yet.
+    STATE_DIR="/var/lib/kaia"
+    SYSTEM_STATE_MODE=1
+fi
+
+if [ "$SYSTEM_STATE_MODE" -eq 1 ]; then
+    state_input="$STATE_DIR"
+    STATE_DIR="$(realpath -e -- "$STATE_DIR")"
+    if [ "$STATE_DIR" != "${state_input%/}" ]; then
+        echo "ERROR: installed state path must be canonical and must not use symlinks." >&2
+        exit 1
+    fi
+    case "$STATE_DIR" in
+        /var/lib/*|/srv/*|/mnt/*) ;;
+        *) echo "ERROR: installed state path must be below /var/lib, /srv, or /mnt." >&2; exit 1 ;;
+    esac
+
+    # Verify every existing component before creating or changing anything under it.
+    current="$STATE_DIR"
+    while :; do
+        if [ -L "$current" ] || [ ! -d "$current" ]; then
+            echo "ERROR: unsafe state path component: $current" >&2
+            exit 1
+        fi
+        component_owner="$(stat -c '%u' -- "$current")"
+        component_mode="$(stat -c '%a' -- "$current")"
+        if [ "$component_owner" != "0" ] || [[ ! "$component_mode" =~ ^[0-7]+$ ]] || \
+           (( (8#$component_mode & 0022) != 0 )); then
+            echo "ERROR: state path component must be root-owned and not group/world-writable: $current" >&2
+            exit 1
+        fi
+        [ "$current" = "/" ] && break
+        current="$(dirname -- "$current")"
+    done
+
+    for child in "${STATE_DIR}/threat_intel" "${STATE_DIR}/threat_intel/geoip"; do
+        if [ -L "$child" ] || { [ -e "$child" ] && [ ! -d "$child" ]; }; then
+            echo "ERROR: refusing symlink or non-directory GeoIP destination component: $child" >&2
+            exit 1
+        fi
+    done
+    getent group kaiacord >/dev/null || {
+        echo "ERROR: required kaiacord group is missing; install Kaia first." >&2
+        exit 1
+    }
+    GEOIP_DIR="${STATE_DIR}/threat_intel/geoip"
+    mkdir -p -- "$GEOIP_DIR"
+    # Match the installed state tree's root:kaiacord, non-writable access model.
+    chown root:kaiacord -- "${STATE_DIR}/threat_intel" "$GEOIP_DIR"
+    chmod 750 -- "${STATE_DIR}/threat_intel" "$GEOIP_DIR"
+else
+    # Development mode follows the repository storage location, anchored to this
+    # script rather than the caller's current directory.
+    GEOIP_DIR="${PROJECT_DIR}/storage/threat_intel/geoip"
+    for child in "${PROJECT_DIR}/storage" "${PROJECT_DIR}/storage/threat_intel" "$GEOIP_DIR"; do
+        if [ -L "$child" ]; then
+            echo "ERROR: refusing symlinked development GeoIP destination: $child" >&2
+            exit 1
+        fi
+    done
+    mkdir -p -- "$GEOIP_DIR"
+fi
 
 URL="https://download.maxmind.com/geoip/databases/GeoLite2-City/download?suffix=tar.gz"
 # Never use predictable shared /tmp filenames: a symlink there could redirect
@@ -117,6 +203,12 @@ then
 fi
 
 if [ -f "$MMDB_FILE" ] && [ ! -L "$MMDB_FILE" ] && [ -s "$MMDB_FILE" ]; then
+    if [ "$SYSTEM_STATE_MODE" -eq 1 ]; then
+        chown root:kaiacord -- "$MMDB_FILE"
+        chmod 640 -- "$MMDB_FILE"
+    else
+        chmod 644 -- "$MMDB_FILE"
+    fi
     mv -- "$MMDB_FILE" "${GEOIP_DIR}/GeoLite2-City.mmdb"
     echo -e "${COLOR_GREEN}GeoLite2 City database updated successfully at ${GEOIP_DIR}/GeoLite2-City.mmdb${COLOR_RESET}"
 else

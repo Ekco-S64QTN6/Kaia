@@ -144,3 +144,15 @@ def test_geoip_updater_validates_archive_paths_and_only_copies_one_regular_datab
     assert 'open(output_path, "xb")' in script
     assert 'max_size = 512 * 1024 * 1024' in script
 
+
+
+def test_geoip_updater_uses_installed_state_path_without_sourcing_config():
+    script = Path("scripts/update_geoip.sh").read_text()
+
+    assert 'STATE_CONFIG="/etc/kaia/state.env"' in script
+    assert 'state_line="$(grep -E \'^KAIA_STATE_DIR=\' "$STATE_CONFIG" || true)"' in script
+    assert '. /etc/kaia/state.env' not in script
+    assert 'GEOIP_DIR="${STATE_DIR}/threat_intel/geoip"' in script
+    assert 'GEOIP_DIR="${PROJECT_DIR}/storage/threat_intel/geoip"' in script
+    assert 'chown root:kaiacord -- "$MMDB_FILE"' in script
+    assert 'chmod 640 -- "$MMDB_FILE"' in script
