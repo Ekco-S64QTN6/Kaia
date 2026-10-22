@@ -34,6 +34,27 @@ case "$DEPLOY_DIR/" in
     "$STATE_DIR/"*) echo "DEPLOY_DIR must not be inside STATE_DIR." >&2; exit 1 ;;
 esac
 
+# Preflight the signing secret before stopping services or changing deployed code.
+# Parse only the intended key assignment; never source the project .env as root.
+if [ ! -f "$KAIA_PROJECT_DIR/.env" ]; then
+    echo "ERROR: $KAIA_PROJECT_DIR/.env not found." >&2
+    echo "       KAIA_CAPABILITY_TOKEN_SECRET must be set before installing." >&2
+    echo "       Generate one with: openssl rand -hex 32" >&2
+    exit 1
+fi
+secret_line="$(grep -E '^(export )?KAIA_CAPABILITY_TOKEN_SECRET=' "$KAIA_PROJECT_DIR/.env" | sed 's/^export //' | head -n1)"
+secret_val="${secret_line#*=}"
+secret_val="${secret_val%\"}"; secret_val="${secret_val#\"}"
+if [ -z "$secret_val" ]; then
+    echo "ERROR: KAIA_CAPABILITY_TOKEN_SECRET is missing or empty in .env." >&2
+    echo "       Generate one with: openssl rand -hex 32" >&2
+    exit 1
+fi
+if [ "$secret_val" = "kaia_secure_signing_secret_key_2026" ]; then
+    echo "ERROR: KAIA_CAPABILITY_TOKEN_SECRET is the value published in git history." >&2
+    echo "       Rotate it before installing; capability tokens can otherwise be forged." >&2
+    exit 1
+fi
 # --- Deploy a root-owned copy of the code ------------------------------------
 #
 # The daemon runs as root. Running it directly out of a checkout under $HOME
@@ -42,6 +63,15 @@ esac
 # detection can only report after the fact, not prevent.
 #
 # Deploy to a root-owned tree instead. Develop in the checkout, install to run.
+if systemctl is-active --quiet kaia-policy-gate.service; then
+    echo "==> Stopping kaia-policy-gate before changing watched code"
+    systemctl stop kaia-policy-gate.service
+fi
+if systemctl is-active --quiet kaia-restore-blocks.service; then
+    echo "==> Stopping block replay before changing deployed scripts"
+    systemctl stop kaia-restore-blocks.service
+fi
+
 echo "==> Deploying code to $DEPLOY_DIR"
 mkdir -p "$DEPLOY_DIR"
 rsync -a --delete \
@@ -107,60 +137,22 @@ mkdir -p /var/backups /root/.ssh
 touch /etc/api_keys.json /var/backups/credentials.txt /root/.ssh/authorized_keys.bak
 chmod 600 /etc/api_keys.json /var/backups/credentials.txt /root/.ssh/authorized_keys.bak
 
-# Provision root-only secret environment file for systemd.
-#
-# There is deliberately NO fallback default here. A previous version wrote a
-# literal signing key when .env was absent -- a value committed to this public
-# repository, which meant a fresh install silently ran with a publicly known
-# secret and forgeable capability tokens. Per the fail-closed axiom, a missing
-# or empty secret aborts the install instead.
+# Provision root-only environment files for systemd and manual recovery.
 mkdir -p /etc/kaia
 chmod 700 /etc/kaia
-
-if [ ! -f "$KAIA_PROJECT_DIR/.env" ]; then
-    echo "ERROR: $KAIA_PROJECT_DIR/.env not found." >&2
-    echo "       KAIA_CAPABILITY_TOKEN_SECRET must be set before installing." >&2
-    echo "       Generate one with:  openssl rand -hex 32" >&2
-    exit 1
-fi
-
-secret_line="$(grep -E '^(export )?KAIA_CAPABILITY_TOKEN_SECRET=' "$KAIA_PROJECT_DIR/.env" | sed 's/^export //' | head -n1)"
-secret_val="${secret_line#*=}"
-secret_val="${secret_val%\"}"; secret_val="${secret_val#\"}"
-
-if [ -z "$secret_val" ]; then
-    echo "ERROR: KAIA_CAPABILITY_TOKEN_SECRET is missing or empty in .env." >&2
-    echo "       Generate one with:  openssl rand -hex 32" >&2
-    exit 1
-fi
-
-# Refuse the value that leaked into this repository's git history.
-if [ "$secret_val" = "kaia_secure_signing_secret_key_2026" ]; then
-    echo "ERROR: KAIA_CAPABILITY_TOKEN_SECRET is set to the value published in this" >&2
-    echo "       repository's git history. Capability tokens signed with it can be" >&2
-    echo "       forged by anyone who has read the source. Rotate it:" >&2
-    echo "           openssl rand -hex 32" >&2
-    exit 1
-fi
-
-printf 'KAIA_CAPABILITY_TOKEN_SECRET=%s\n' "$secret_val" > /etc/kaia/secret.env
+printf 'KAIA_CAPABILITY_TOKEN_SECRET=%s\\n' "$secret_val" > /etc/kaia/secret.env
 chmod 600 /etc/kaia/secret.env
-
-# The interactive unlock script is not launched by systemd, so persist the
-# configured state path separately for manual recovery commands.
-printf 'KAIA_STATE_DIR=%q\n' "$STATE_DIR" > /etc/kaia/state.env
+printf 'KAIA_STATE_DIR=%q\\n' "$STATE_DIR" > /etc/kaia/state.env
 chmod 600 /etc/kaia/state.env
-
-# The secret file is read by the daemon at startup; root-only is correct since
-# the daemon runs as root.
-chmod 600 /etc/kaia/secret.env
 
 systemctl daemon-reload
 systemctl enable kaia-restore-blocks.service 2>/dev/null || true
-systemctl enable --now kaia-policy-gate.service
+systemctl enable kaia-policy-gate.service
 
 echo
-echo "==> Record the trusted integrity baseline for the DEPLOYED tree:"
+echo "==> Deployment installed; the Policy Gate is NOT started automatically."
+echo "    Review the deployed source and baseline diff, then run:"
 echo "        sudo ${DEPLOY_DIR}/scripts/kaia-baseline.sh"
-echo "    then:  sudo systemctl restart kaia-policy-gate"
-echo "Done. kaia-lockdown.service installed but not enabled (start manually on breach)."
+echo "        sudo systemctl start kaia-policy-gate.service"
+echo "The service stays stopped until the reviewed baseline is recorded."
+echo "kaia-lockdown.service is installed but not enabled (start manually on breach)."
