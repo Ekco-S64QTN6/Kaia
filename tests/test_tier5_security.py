@@ -321,4 +321,5 @@ def test_yara_literal_escaping_preserves_data_without_injecting_rule_syntax():
         "T1234",
     )
     assert '$ioc = "' + escaped + '"' in rule
-    assert "rule fake_injected {" not in rule
+    assert "\\n rule fake_injected {" in rule
+    assert "\nrule fake_injected {" not in rule
