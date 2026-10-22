@@ -787,3 +787,9 @@ header {
   .panel { min-height: 260px; }
   #panel-terminal { min-height: 230px; }
 }
+
+
+/* Dynamic status colours use classes so the dashboard works with strict CSP. */
+#policy-gate-badge.state-good { color: var(--green); }
+#policy-gate-badge.state-bad { color: var(--red); }
+#host-meta.state-bad { color: var(--red); }
