@@ -80,7 +80,7 @@ def test_state_write_rejects_symlinked_parent_even_when_inside_workspace(tmp_pat
     ok, _, err = HostExecutor.execute_state_modification(str(alias / "note.txt"), "must not write")
 
     assert ok is False
-    assert "Failed to write file safely" in err
+    assert "Path modification violation" in err
     assert not (real_dir / "note.txt").exists()
 
 
