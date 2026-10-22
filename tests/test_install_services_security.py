@@ -57,3 +57,16 @@ def test_installer_rejects_symlinked_fim_history_migration():
     assert 'chmod 640 "$dst"' in script
     assert 'cp -- "$legacy_fim_db" "$fim_db_destination"' in script
     assert 'chown root:kaiacord "$fim_db_destination"' in script
+
+
+
+def test_installer_requires_32_byte_hex_capability_signing_key():
+    script = Path("scripts/install_services.sh").read_text()
+
+    format_check = script.index('[[ ! "$secret_val" =~ ^[A-Fa-f0-9]{64}$ ]]')
+    stop_gate = script.index("systemctl stop kaia-policy-gate.service")
+    sync = script.index("rsync -a --delete")
+
+    assert format_check < stop_gate < sync
+    assert "exactly 64 hexadecimal characters" in script
+    assert "openssl rand -hex 32" in script
