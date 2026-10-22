@@ -14,12 +14,15 @@ Only entries with result == "approved" are replayed. Malformed lines are
 skipped, not fatal -- a corrupt ledger must not prevent the host from booting
 with its blocks in place.
 
-Exit: 0 (always -- failure to restore is logged, never fatal at boot)
+Exit: 0 when no blocks are active or all recorded blocks restore successfully.
+Exit: 1 when the ledger cannot be safely read or any firewall restore fails.
+The oneshot reports failure in systemd but is not a hard dependency that blocks boot.
 """
 import ipaddress
 import json
 import logging
 import os
+import stat
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -28,8 +31,34 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger("kaia-restore-blocks")
 
-# Cap the replay so a very long ledger cannot stall boot indefinitely.
-MAX_BLOCKS = int(os.environ.get("KAIA_MAX_RESTORED_BLOCKS", "500"))
+# Bound per-record parsing and in-memory desired state. The ledger itself remains
+# append-only; operators should monitor its growth as part of the host checklist.
+DEFAULT_MAX_BLOCKS = 500
+HARD_MAX_BLOCKS = 10_000
+MAX_LEDGER_LINE_BYTES = 16 * 1024
+
+
+def _parse_max_blocks(raw: str) -> int:
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid KAIA_MAX_RESTORED_BLOCKS=%r; using default %d.",
+            raw, DEFAULT_MAX_BLOCKS,
+        )
+        return DEFAULT_MAX_BLOCKS
+    if not 1 <= value <= HARD_MAX_BLOCKS:
+        logger.warning(
+            "KAIA_MAX_RESTORED_BLOCKS must be 1..%d; using default %d.",
+            HARD_MAX_BLOCKS, DEFAULT_MAX_BLOCKS,
+        )
+        return DEFAULT_MAX_BLOCKS
+    return value
+
+
+MAX_BLOCKS = _parse_max_blocks(
+    os.environ.get("KAIA_MAX_RESTORED_BLOCKS", str(DEFAULT_MAX_BLOCKS))
+)
 
 
 def _effective_rule_key(ip: str, protocol: str, port, action: str = "block_ip"):
@@ -67,61 +96,107 @@ def _effective_rule_key(ip: str, protocol: str, port, action: str = "block_ip"):
         "port": effective_port,
     }
 
-def collect_blocks(ledger_path: str) -> list:
-    """Reconstruct the latest approved state for each firewall-rule key.
+def collect_blocks(ledger_path: str, *, max_blocks: int = None) -> list:
+    """Reconstruct newest active rules with bounded memory and per-record reads.
 
     A successful unblock is a tombstone for an earlier approved block. Denied
-    or failed operations never change desired state. Legacy block_ip-only
-    ledgers remain valid and restore exactly as before.
+    or failed operations never change desired state. Older active entries are
+    evicted as soon as the retention limit is exceeded, equivalent to slicing
+    the final active list to the newest max_blocks entries.
     """
-    if not os.path.exists(ledger_path):
+    if max_blocks is None:
+        max_blocks = MAX_BLOCKS
+    if (
+        isinstance(max_blocks, bool)
+        or not isinstance(max_blocks, int)
+        or not 1 <= max_blocks <= HARD_MAX_BLOCKS
+    ):
+        raise ValueError(
+            f"max_blocks must be an integer between 1 and {HARD_MAX_BLOCKS}"
+        )
+
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(ledger_path, flags)
+    except FileNotFoundError:
         logger.info("No audit ledger at %s; nothing to restore.", ledger_path)
         return []
+    except OSError:
+        logger.exception("Could not safely open audit ledger %s", ledger_path)
+        raise
 
     active = {}
     malformed = 0
-    with open(ledger_path, "r", errors="replace") as f:
-        for line in f:
-            line = line.strip().rstrip(",")
-            if not line.startswith("{"):
-                continue
-            try:
-                rec = json.loads(line)
-            except (ValueError, TypeError):
-                malformed += 1
-                continue
-            if not isinstance(rec, dict):
-                malformed += 1
-                continue
-            if rec.get("result") != "approved":
-                continue
-            req = rec.get("request")
-            if not isinstance(req, dict):
-                malformed += 1
-                continue
-            action = req.get("action")
-            if action not in ("block_ip", "unblock_ip"):
-                continue
+    evicted = 0
+    try:
+        metadata = os.fstat(fd)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError(f"Audit ledger is not a regular file: {ledger_path}")
+        with os.fdopen(fd, "rb") as f:
+            fd = -1  # fdopen owns and closes the descriptor
+            while True:
+                raw_line = f.readline(MAX_LEDGER_LINE_BYTES + 1)
+                if not raw_line:
+                    break
+                if len(raw_line) > MAX_LEDGER_LINE_BYTES:
+                    malformed += 1
+                    # Drain the remainder of this record in bounded chunks.
+                    while raw_line and raw_line[-1:] != bytes([10]):
+                        raw_line = f.readline(MAX_LEDGER_LINE_BYTES + 1)
+                    continue
 
-            ip = req.get("target_ip")
-            protocol = req.get("protocol", "all")
-            port = req.get("port")
-            try:
-                if not isinstance(ip, str):
-                    raise ValueError("target_ip must be a string")
-                key, normalized = _effective_rule_key(ip, protocol, port, action)
-            except (ValueError, TypeError):
-                malformed += 1
-                continue
+                line = raw_line.decode("utf-8", errors="replace").strip().rstrip(",")
+                if not line.startswith("{"):
+                    continue
+                try:
+                    rec = json.loads(line)
+                except (ValueError, TypeError):
+                    malformed += 1
+                    continue
+                if not isinstance(rec, dict):
+                    malformed += 1
+                    continue
+                if rec.get("result") != "approved":
+                    continue
+                req = rec.get("request")
+                if not isinstance(req, dict):
+                    malformed += 1
+                    continue
+                action = req.get("action")
+                if action not in ("block_ip", "unblock_ip"):
+                    continue
 
-            if action == "unblock_ip":
-                active.pop(key, None)
-            else:
-                active.pop(key, None)
-                active[key] = normalized
+                ip = req.get("target_ip")
+                protocol = req.get("protocol", "all")
+                port = req.get("port")
+                try:
+                    if not isinstance(ip, str):
+                        raise ValueError("target_ip must be a string")
+                    key, normalized = _effective_rule_key(ip, protocol, port, action)
+                except (ValueError, TypeError):
+                    malformed += 1
+                    continue
+
+                if action == "unblock_ip":
+                    active.pop(key, None)
+                else:
+                    active.pop(key, None)
+                    active[key] = normalized
+                    if len(active) > max_blocks:
+                        active.pop(next(iter(active)))
+                        evicted += 1
+
+    finally:
+        if fd >= 0:
+            os.close(fd)
 
     if malformed:
-        logger.warning("Skipped %d malformed ledger line(s).", malformed)
+        logger.warning("Skipped %d malformed or oversized ledger record(s).", malformed)
+    if evicted:
+        logger.warning(
+            "Active-rule replay limit %d exceeded; older active rules were omitted (%d eviction(s)).",
+            max_blocks, evicted,
+        )
     return list(active.values())
 
 def main() -> int:
@@ -134,22 +209,15 @@ def main() -> int:
 
     ledger = config.AUDIT_LOG_PATH
     logger.info("Restoring blocks from %s", ledger)
-    blocks = collect_blocks(ledger)
+    try:
+        blocks = collect_blocks(ledger)
+    except (OSError, ValueError) as e:
+        logger.error("Could not safely reconstruct firewall state from %s: %s", ledger, e)
+        return 1
 
     if not blocks:
         logger.info("No approved block_ip entries to restore.")
         return 0
-
-    if MAX_BLOCKS < 1:
-        logger.error("KAIA_MAX_RESTORED_BLOCKS must be at least 1; refusing to restore.")
-        return 1
-
-    if len(blocks) > MAX_BLOCKS:
-        logger.warning(
-            "Ledger holds %d distinct blocks; restoring the newest %d "
-            "(raise KAIA_MAX_RESTORED_BLOCKS to change).", len(blocks), MAX_BLOCKS
-        )
-        blocks = blocks[-MAX_BLOCKS:]
 
     ok = failed = 0
     for req in blocks:
@@ -164,7 +232,7 @@ def main() -> int:
             logger.error("Failed to restore block for %s: %s", ip, err)
 
     logger.info("Restored %d block(s); %d failed.", ok, failed)
-    return 0
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
