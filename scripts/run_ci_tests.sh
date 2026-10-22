@@ -27,6 +27,7 @@ tests=(
   tests/test_web_bridge.py
   tests/test_web_bridge_guards.py
   tests/test_tier5_security.py
+  tests/test_rotate_ledger_security.py
 )
 
 # Feature-specific tests are included as soon as their source files are present.
