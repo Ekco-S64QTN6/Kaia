@@ -148,3 +148,29 @@ def test_unblock_ip_rejects_invalid_capability_without_executor_call(monkeypatch
         "justification": "test unblocking", "capability_token": "invalid", "session_id": "unit_test",
     })
     assert result["status"] == "denied"
+
+
+def test_block_ip_schema_rejects_invalid_ip_and_ambiguous_port_scope(monkeypatch):
+    import os
+    os.environ.setdefault("KAIA_CAPABILITY_TOKEN_SECRET", "test_signing_secret_key_2026")
+    from pydantic import ValidationError
+    from security.schemas import MitigationRequest
+
+    base = {
+        "target_ip": "192.0.2.55",
+        "protocol": "all",
+        "port": None,
+        "justification": "unit-test block request",
+        "capability_token": "ck_test",
+        "session_id": "unit_test",
+    }
+    assert MitigationRequest(**base).target_ip == "192.0.2.55"
+
+    for changes in [
+        {"target_ip": "192.0.2.1/24"},
+        {"protocol": "all", "port": 53},
+        {"protocol": "tcp", "port": None},
+        {"protocol": "udp", "port": None},
+    ]:
+        with pytest.raises(ValidationError):
+            MitigationRequest(**{**base, **changes})
