@@ -44,6 +44,7 @@ def test_fim_scans_and_hashes_original_event_fd_not_replacement_path(tmp_path, m
     scanner = FakeYaraScanner()
     fim = FIMDaemon(yara_scanner=scanner)
     fim.db_path = str(tmp_path / "fim.db")
+    fim.exclude_prefixes = []  # tmp_path is intentionally outside the exclusion policy for this unit test
     _init_fim_db(fim.db_path)
     monkeypatch.setattr("security.fim_daemon.log_security_event", lambda **kwargs: None)
 
@@ -75,6 +76,7 @@ def test_fim_bounds_memory_for_large_file_and_records_scan_skip(tmp_path, monkey
     scanner = FakeYaraScanner()
     fim = FIMDaemon(yara_scanner=scanner)
     fim.db_path = str(tmp_path / "fim.db")
+    fim.exclude_prefixes = []  # tmp_path is intentionally outside the exclusion policy for this unit test
     _init_fim_db(fim.db_path)
     monkeypatch.setattr("security.fim_daemon.MAX_FIM_SCAN_BYTES", 1024)
     events = []
