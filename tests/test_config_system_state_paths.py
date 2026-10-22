@@ -64,8 +64,10 @@ def test_installer_persists_state_path_for_manual_unlock():
     assert 'printf \'KAIA_STATE_DIR=%q\\n\' "$STATE_DIR" > /etc/kaia/state.env' in installer
     assert '. /etc/kaia/state.env' in unlock
     baseline_script = (repo_root / "scripts/kaia-baseline.sh").read_text()
-    assert "_read_secret_assignment /etc/kaia/secret.env" in baseline_script
-    assert 'STATE_DIR="${KAIA_STATE_DIR:-/var/lib/kaia}"' in baseline_script
+    assert "_read_env_assignment /etc/kaia/secret.env" in baseline_script
+    assert 'if [ -z "${KAIA_STATE_DIR:-}" ]; then' in baseline_script
+    assert 'STATE_DIR="$KAIA_STATE_DIR"' in baseline_script
+    assert 'BASELINE="${STATE_DIR}/baseline.sha256"' in baseline_script
     assert ". \"\${PROJECT_DIR}/.env\"" not in baseline_script
 
 
