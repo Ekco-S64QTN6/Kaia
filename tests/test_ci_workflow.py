@@ -12,7 +12,7 @@ def test_security_workflow_uses_node24_actions_pinned_by_full_sha():
 
     assert f"actions/checkout@{checkout} # v7.0.1" in workflow
     assert f"actions/setup-python@{setup_python} # v7.0.0" in workflow
-    assert not re.search(r"uses:\\s*actions/(?:checkout|setup-python)@v[0-9]+", workflow)
+    assert not re.search(r"uses:\s*actions/(?:checkout|setup-python)@v[0-9]+", workflow)
     assert 'python-version: "3.12"' in workflow
     assert "bash scripts/run_ci_tests.sh" in workflow
-    assert "permissions:\\n  contents: read" in workflow
+    assert "permissions:\n  contents: read" in workflow
