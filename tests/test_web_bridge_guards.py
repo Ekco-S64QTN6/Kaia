@@ -64,3 +64,130 @@ async def test_command_endpoint_rejects_oversized_command(monkeypatch):
         assert resp.status == 413
     finally:
         await client.close()
+
+
+@pytest.mark.asyncio
+async def test_command_endpoint_rejects_origin_with_implicit_default_port(monkeypatch):
+    """An origin with no port means 80/443, not the HUD's non-default port."""
+    bridge = KaiaWebBridge(host="127.0.0.1", port=8765)
+    client = TestClient(TestServer(bridge.create_app()))
+    await client.start_server()
+    try:
+        local_url = client.make_url("/")
+        assert local_url.port is not None
+        origin = f"http://{local_url.host}"  # implied port 80
+        resp = await client.post(
+            "/api/command",
+            json={"command": "status"},
+            headers={"Origin": origin},
+        )
+        assert resp.status == 403
+        assert "port" in (await resp.json())["error"].lower()
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_command_endpoint_accepts_exact_same_origin(monkeypatch):
+    """The Host and Origin of a same-origin HUD request remain valid."""
+    import core.web_bridge as web_bridge_module
+
+    monkeypatch.setattr(
+        web_bridge_module,
+        "dispatch_operator_command",
+        lambda command: {"success": True, "command": command, "lines": []},
+    )
+    bridge = KaiaWebBridge(host="127.0.0.1", port=8765)
+    client = TestClient(TestServer(bridge.create_app()))
+    await client.start_server()
+    try:
+        local_url = client.make_url("/")
+        origin = f"{local_url.scheme}://{local_url.host}:{local_url.port}"
+        resp = await client.post(
+            "/api/command",
+            json={"command": "status"},
+            headers={"Origin": origin},
+        )
+        assert resp.status == 200
+        assert (await resp.json())["success"] is True
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_command_endpoint_rejects_host_authority_with_path_query_or_fragment():
+    """Host is an authority, not a URL; suffix components must not be accepted."""
+    bridge = KaiaWebBridge(host="127.0.0.1", port=8765)
+    client = TestClient(TestServer(bridge.create_app()))
+    await client.start_server()
+    try:
+        local_url = client.make_url("/")
+        port = local_url.port
+        for suffix in ("/path", "?query=1", "#fragment"):
+            resp = await client.post(
+                "/api/command",
+                json={"command": "status"},
+                headers={"Host": f"127.0.0.1:{port}{suffix}"},
+            )
+            assert resp.status == 403
+            assert "Host" in (await resp.json())["error"]
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_command_endpoint_rejects_host_port_not_matching_listener():
+    """A matching loopback name is insufficient if Host names another port."""
+    bridge = KaiaWebBridge(host="127.0.0.1", port=8765)
+    client = TestClient(TestServer(bridge.create_app()))
+    await client.start_server()
+    try:
+        local_url = client.make_url("/")
+        other_port = 80 if local_url.port != 80 else 443
+        resp = await client.post(
+            "/api/command",
+            json={"command": "status"},
+            headers={"Host": f"127.0.0.1:{other_port}"},
+        )
+        assert resp.status == 403
+        assert "port" in (await resp.json())["error"].lower()
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_command_endpoint_rejects_origin_scheme_mismatch():
+    bridge = KaiaWebBridge(host="127.0.0.1", port=8765)
+    client = TestClient(TestServer(bridge.create_app()))
+    await client.start_server()
+    try:
+        local_url = client.make_url("/")
+        origin = f"https://{local_url.host}:{local_url.port}"
+        resp = await client.post(
+            "/api/command",
+            json={"command": "status"},
+            headers={"Origin": origin},
+        )
+        assert resp.status == 403
+        assert "scheme" in (await resp.json())["error"].lower()
+    finally:
+        await client.close()
+
+
+
+@pytest.mark.asyncio
+async def test_command_endpoint_checks_origin_before_parsing_malformed_body():
+    """Reject cross-origin requests before their body is parsed."""
+    bridge = KaiaWebBridge(host="127.0.0.1", port=8765)
+    client = TestClient(TestServer(bridge.create_app()))
+    await client.start_server()
+    try:
+        resp = await client.post(
+            "/api/command",
+            data="{not-json",
+            headers={"Origin": "https://attacker.example"},
+        )
+        assert resp.status == 403
+        assert "Origin" in (await resp.json())["error"]
+    finally:
+        await client.close()

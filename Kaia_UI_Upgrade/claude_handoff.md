@@ -106,7 +106,7 @@ The following code paths were present in the reviewed source as of 2026-10-22. T
 - [x] `sys_enter_unlinkat` eBPF events are consumed and exposed in the syscall waterfall as attempts
 - [x] YARA generation escapes string literals; sandbox validation fails closed when prerequisites are missing
 - [x] Passive pacman transaction monitor for completed package operations, with persistent cursor and rotation handling
-- [x] Strict CSP and GitHub Actions regression workflow (latest recorded main run: 156 passed)
+- [x] Strict CSP, Host/Origin loopback authority/scheme/effective-port validation, and GitHub Actions regression workflow (latest recorded main run: 176 passed)
 - [x] Trusted baseline via `scripts/kaia-baseline.sh` -> `/var/lib/kaia/baseline.sha256`
 
 ---
@@ -117,8 +117,10 @@ The following code paths were present in the reviewed source as of 2026-10-22. T
 
 Interactive command entry is built in core/web/static/js/terminal.js; /api/command
 dispatches known commands through the Policy Gate and returns structured output.
-The telemetry WebSocket streams snapshots, but command output itself is still one
-completed response. Long-running diagnostics and sandboxed operations do not publish
+The telemetry WebSocket streams snapshots and now validates the request's loopback
+Host/Origin authority, scheme and effective port. Command POSTs perform that check
+before parsing or dispatching the body. Command output itself is still one completed
+response. Long-running diagnostics and sandboxed operations do not publish
 partial output chunks while executing. Completing this needs a bounded, framed
 streaming protocol, cancellation/timeout behavior and UI back-pressure tests.
 
