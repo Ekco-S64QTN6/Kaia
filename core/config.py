@@ -246,7 +246,9 @@ SECURITY_DB_PATH = str(STATE_DIR / "security_events.db")
 FIM_DB_PATH = str(STATE_DIR / "fim_audit.db")
 AUDIT_LOG_PATH = str(STATE_DIR / "audit_ledger.json")
 POLICY_GATE_SOCKET = "/run/kaiacord/policy_gate.sock"
-POLICY_GATE_SOCKET_FALLBACK = "/tmp/policy_gate.sock"
+POLICY_GATE_SOCKET_FALLBACK = str(
+    Path("/tmp") / f"kaia-policy-gate-{os.getuid()}" / "policy_gate.sock"
+)
 DISCOVERY_INTERFACE = "auto"
 ASSETS_DB_PATH = str(THREAT_INTEL_DIR / "assets.db")
 GEOIP_DB_PATH = str(THREAT_INTEL_DIR / "geoip" / "GeoLite2-City.mmdb")

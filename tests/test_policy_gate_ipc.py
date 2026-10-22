@@ -190,3 +190,36 @@ def test_mitigation_and_unblock_schemas_reject_boolean_ports():
                 capability_token="test-token",
                 session_id="unit_test",
             )
+
+def test_root_policy_gate_refuses_tmp_fallback_when_runtime_directory_is_unavailable(monkeypatch):
+    import config
+    import security.policy_gate as policy_gate_module
+
+    gate = PolicyGate()
+    gate.is_running = True
+    runtime_dir = os.path.dirname(config.POLICY_GATE_SOCKET)
+    real_makedirs = os.makedirs
+
+    def deny_runtime_dir(path, *args, **kwargs):
+        if path == runtime_dir:
+            raise PermissionError("simulated runtime directory failure")
+        return real_makedirs(path, *args, **kwargs)
+
+    monkeypatch.setattr(policy_gate_module.os, "makedirs", deny_runtime_dir)
+    monkeypatch.setattr(policy_gate_module.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(
+        policy_gate_module.socket,
+        "socket",
+        lambda *args, **kwargs: pytest.fail("root must not bind a fallback socket"),
+    )
+
+    gate._run_server()
+
+    assert gate.is_running is False
+    assert gate.socket_path == config.POLICY_GATE_SOCKET
+
+def test_policy_gate_fallback_path_is_scoped_to_current_uid():
+    import config
+
+    expected_parent = os.path.join("/tmp", f"kaia-policy-gate-{os.getuid()}")
+    assert os.path.dirname(config.POLICY_GATE_SOCKET_FALLBACK) == expected_parent

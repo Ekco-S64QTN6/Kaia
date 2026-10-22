@@ -220,3 +220,26 @@ async def test_read_only_routes_reject_cross_origin_requests(path):
         assert "Origin" in (await resp.json())["error"]
     finally:
         await client.close()
+
+@pytest.mark.asyncio
+async def test_policy_gate_client_rejects_untrusted_fallback_socket(tmp_path):
+    import socket
+    from core.web_bridge import _is_trusted_policy_gate_fallback_socket
+
+    fallback_dir = tmp_path / "fallback"
+    fallback_dir.mkdir(mode=0o700)
+    fallback_dir.chmod(0o700)
+    socket_path = fallback_dir / "policy_gate.sock"
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        listener.bind(str(socket_path))
+        assert _is_trusted_policy_gate_fallback_socket(str(socket_path))
+
+        symlink_path = tmp_path / "attacker.sock"
+        symlink_path.symlink_to(socket_path)
+        assert not _is_trusted_policy_gate_fallback_socket(str(symlink_path))
+
+        fallback_dir.chmod(0o755)
+        assert not _is_trusted_policy_gate_fallback_socket(str(socket_path))
+    finally:
+        listener.close()
