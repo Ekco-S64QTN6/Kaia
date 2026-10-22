@@ -66,8 +66,22 @@ class HostExecutor:
         try:
             address = ipaddress.ip_address(target_ip)
             target_ip = address.compressed
-        except ValueError:
+        except (ValueError, TypeError):
             return False, "", f"Invalid IP address format: {target_ip}"
+
+        # Never reinterpret an invalid protocol/port combination as an
+        # IP-wide block. That used to happen for protocol='icmp', or tcp/udp
+        # without a port, because the executor simply omitted the extra match.
+        if protocol not in ("all", "tcp", "udp"):
+            return False, "", f"Invalid protocol: {protocol}"
+        if isinstance(port, bool) or (port is not None and (
+            not isinstance(port, int) or not 1 <= port <= 65535
+        )):
+            return False, "", f"Invalid port: {port}"
+        if protocol == "all" and port is not None:
+            return False, "", "A port may only be specified with tcp or udp"
+        if protocol in ("tcp", "udp") and port is None:
+            return False, "", "A port is required when protocol is tcp or udp"
 
         # Detect address family so the rule uses the right selector.
         is_v6 = address.version == 6
