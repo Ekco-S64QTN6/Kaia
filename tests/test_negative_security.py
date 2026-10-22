@@ -535,8 +535,8 @@ def test_trusted_baseline_detects_modification_while_stopped(monkeypatch, tmp_pa
     detector.append_only_files = []
     detector.sqlite_append_only_files = []
     monkeypatch.setattr(detector, "_run", lambda: None)
-    detector.start()
-    detector.stop()
+    with pytest.raises(RuntimeError, match="trusted baseline"):
+        detector.start()
 
     assert lockdowns, "startup must alert when disk state differs from the trusted baseline"
     # And the runtime baseline must be the TRUSTED hash, not the on-disk one.
