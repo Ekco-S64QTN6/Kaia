@@ -20,7 +20,7 @@ def test_system_state_mode_keeps_runtime_data_outside_read_only_checkout(tmp_pat
             "import config, json; print(json.dumps({"
             "'state': str(config.STATE_DIR), 'storage': str(config.STORAGE_DIR), "
             "'security': str(config.SECURITY_STORAGE_DIR), "
-            "'baseline': str(config.TRUSTED_BASELINE_PATH), "
+            "'baseline': str(config.TRUSTED_BASELINE_PATH), 'fim_db': str(config.FIM_DB_PATH), "
             "'threat_intel': str(config.THREAT_INTEL_DIR), "
             "'system': config.STATE_DIR_IS_SYSTEM}))",
         ],
@@ -38,6 +38,7 @@ def test_system_state_mode_keeps_runtime_data_outside_read_only_checkout(tmp_pat
     assert Path(data["security"]) == state
     assert Path(data["threat_intel"]) == state / "threat_intel"
     assert Path(data["baseline"]) == state / "baseline.sha256"
+    assert Path(data["fim_db"]) == state / "fim_audit.db"
     assert (state / "threat_intel").is_dir()
 
 
@@ -107,3 +108,19 @@ def test_installer_validates_paths_before_privileged_copy():
     assert validation < rsync
     assert 'must not be the filesystem root' in installer
     assert 'must not be inside DEPLOY_DIR' in installer
+
+
+def test_fim_audit_storage_is_configured_and_legacy_history_is_migrated():
+    repo_root = Path(__file__).resolve().parents[1]
+    config = (repo_root / "core/config.py").read_text()
+    fim = (repo_root / "security/fim_daemon.py").read_text()
+    hud = (repo_root / "core/web_bridge.py").read_text()
+    installer = (repo_root / "scripts/install_services.sh").read_text()
+    unit = (repo_root / "scripts/kaia-policy-gate.service").read_text()
+
+    assert 'FIM_DB_PATH = str(STATE_DIR / "fim_audit.db")' in config
+    assert "self.db_path = config.FIM_DB_PATH" in fim
+    assert 'fim_db_path = config.FIM_DB_PATH' in hud
+    assert 'legacy_fim_db="/var/lib/secdaemon/fim_audit.db"' in installer
+    assert 'cp -a "$legacy_fim_db" "$STATE_DIR/fim_audit.db"' in installer
+    assert "/var/lib/secdaemon" not in unit
