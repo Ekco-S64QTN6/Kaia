@@ -18,7 +18,7 @@ def test_system_state_mode_keeps_runtime_data_outside_read_only_checkout(tmp_pat
             sys.executable,
             "-c",
             "import config, json; print(json.dumps({"
-            "'state': config.STATE_DIR, 'storage': str(config.STORAGE_DIR), "
+            "'state': str(config.STATE_DIR), 'storage': str(config.STORAGE_DIR), "
             "'security': str(config.SECURITY_STORAGE_DIR), "
             "'threat_intel': str(config.THREAT_INTEL_DIR), "
             "'system': config.STATE_DIR_IS_SYSTEM}))",
