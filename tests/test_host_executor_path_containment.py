@@ -117,11 +117,19 @@ def test_state_write_atomically_replaces_hardlink_without_changing_external_file
 
 
 def test_root_state_write_refuses_untrusted_workspace_ownership(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
     workspace = tmp_path / "user-owned-workspace"
     workspace.mkdir()
     monkeypatch.setattr(config, "WORKSPACE_DIR", str(workspace))
     monkeypatch.setattr(os, "geteuid", lambda: 0)
+    real_fstat = os.fstat
 
+    def report_untrusted_workspace_owner(fd):
+        metadata = real_fstat(fd)
+        return SimpleNamespace(st_uid=12345, st_mode=metadata.st_mode)
+
+    monkeypatch.setattr(os, "fstat", report_untrusted_workspace_owner)
     target = workspace / "notes.txt"
     ok, _, err = HostExecutor.execute_state_modification(str(target), "must not write")
 
@@ -131,6 +139,8 @@ def test_root_state_write_refuses_untrusted_workspace_ownership(tmp_path, monkey
 
 
 def test_root_state_write_refuses_group_or_world_writable_parent(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     public = workspace / "public"
@@ -138,7 +148,18 @@ def test_root_state_write_refuses_group_or_world_writable_parent(tmp_path, monke
     public.chmod(0o777)
     monkeypatch.setattr(config, "WORKSPACE_DIR", str(workspace))
     monkeypatch.setattr(os, "geteuid", lambda: 0)
+    real_fstat = os.fstat
+    calls = 0
 
+    def report_trusted_workspace_then_real_children(fd):
+        nonlocal calls
+        metadata = real_fstat(fd)
+        calls += 1
+        if calls == 1:
+            return SimpleNamespace(st_uid=0, st_mode=metadata.st_mode)
+        return metadata
+
+    monkeypatch.setattr(os, "fstat", report_trusted_workspace_then_real_children)
     target = public / "notes.txt"
     ok, _, err = HostExecutor.execute_state_modification(str(target), "must not write")
 
