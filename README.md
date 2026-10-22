@@ -35,54 +35,29 @@ Every structural decision in Kaia's architecture derives from five non-negotiabl
 
 ## Implementation Status — repository review snapshot (2026-10-22)
 
-This snapshot describes code present in the repository, not proof that privileged services are installed, optional kernel integrations work on the target host, or every security boundary has passed end-to-end testing.
+This describes capabilities present in the repository. It is not proof that privileged services are installed on a particular host or that every kernel-dependent control works there.
 
-### Foundations present in the repository
+### Implemented in the codebase
 
-- **Policy Gate and intent validation:** the out-of-process Unix-socket gate, Pydantic schemas, capability tokens, permission-lattice checks and host-executor dispatch are implemented in the codebase.
-- **Host execution controls:** path containment, direct argv execution, allowlists, sandbox wrappers and cgroup limits exist. Their effective behavior still depends on system configuration, executable paths, privileges and the installed deployment.
-- **Integrity monitoring:** trusted file baselines, discovered security-module watchlists, alert latching, ledger integrity checks and a lockdown-rate circuit breaker exist. Baseline creation and deployment coverage remain operator responsibilities.
-- **Operator surfaces:** the curses dashboard and a loopback web telemetry/command bridge both exist. Mutating commands must remain behind the Policy Gate; the web endpoint is not a general shell interface.
-- **Passive discovery and enrichment:** AF_PACKET parsing, local asset storage and optional InternetDB/GeoIP enrichment are implemented. Passive discovery is not active scanning or a complete inventory.
+- **Policy Gate and host execution:** typed request schemas, expiring capability tokens, permission-lattice checks, Unix-socket IPC, audit logging, allowlisted direct-argv execution, path containment and sandbox/resource controls.
+- **Firewall lifecycle:** the block and unblock commands are routed through the Policy Gate. Unblock removes exact matching Kaia-owned nftables rules by handle; boot replay folds approved block/unblock events so a successful removal does not resurrect an older block.
+- **Integrity monitoring:** trusted-baseline validation, watchlist discovery, tamper alerts and lockdown circuit breaking are implemented. Startup without a trusted baseline still has a weaker bootstrap path; review and establish the baseline before relying on integrity guarantees.
+- **File event handling:** the fanotify handler keeps the original event descriptor open, scans and hashes the same captured bytes, and caps the snapshot at 64 MiB. YARA validation now fails closed when the isolated validator is unavailable, and generated IOC strings are escaped as literals.
+- **eBPF telemetry:** the probe source includes execve, openat2, network-connect/retransmit, privilege-transition and unlinkat events. Unlinkat records are surfaced in the waterfall as syscall-entry attempts, not proof a deletion succeeded.
+- **Threat intelligence:** InternetDB input validation, per-process serialized requests and negative caching for authoritative 404 responses are implemented alongside the existing reputation/CVE lookup paths.
+- **Package transactions:** a passive pacman-log monitor records install/upgrade/downgrade/reinstall/remove events after successful ALPM transaction completion. It is a first increment, not full supply-chain attestation.
+- **Operator UI:** the loopback-only web HUD has interactive command entry, bounded command dispatch through the Policy Gate, telemetry WebSocket updates and strict self-hosted CSP. Command results are returned after the request completes; incremental response streaming for long-running operations remains unfinished.
+- **Regression automation:** GitHub Actions compiles Python modules and runs the focused security regression suite. The latest recorded main run on 2026-10-22 passed 156 tests. This does not replace privileged host validation.
 
-### Limits that must remain explicit
+### Still incomplete or host-dependent
 
-- **Fanotify FIM:** the current implementation uses notification-mode fanotify. It observes filesystem events; it does not block a process pending a scan verdict. Do not describe it as synchronous pre-execution enforcement.
-- **eBPF:** coverage depends on installed BCC support, supported hooks, kernel version, capabilities and callback registration. An empty or unavailable event stream is not proof that the host is clean.
-- **YARA:** rule generation, isolated validation, runtime scanner activation and file-event scanning are separate parts of the pipeline. A saved rule file alone does not prove activation.
-- **Firewall response/recovery:** unit tests prove command construction and replay logic, not that real kernel rules install, UFW reload preserves them, or reboot recovery works.
-- **Threat intelligence:** cached and external results are enrichment signals. Missing, stale or unrated records must not be presented as confirmed benign.
-- **Fail-closed posture:** this is a required design property, not a blanket assertion that every component already meets it. Use regression tests and controlled host tests as evidence.
+- **Execution-blocking FIM:** the current implementation uses FAN_CLASS_NOTIF. It observes file events but does not hold the originating process for a scan verdict.
+- **Effective kernel telemetry:** full eBPF visibility depends on BCC, kernel support, available capabilities and successful probe registration. Empty telemetry is not a benign verdict.
+- **End-to-end detection enforcement:** YARA rule validation and event scanning code exist, but the whole event-to-verdict-to-response path still requires target-host verification.
+- **Broader roadmap:** NetBIOS discovery; expanded eBPF/FIM coverage; AUR/repository/dependency graph monitoring; behavioral baselines; alert-confidence scoring; secrets-exposure scanning; backup restorability checks; independent service/data-freshness supervision; and expanded offline GeoLite2/CVE/passive-DNS threat intelligence remain unfinished.
+- **Production proof:** the installed systemd units, trusted baseline, firewall block/unblock behavior, UFW reload survival and reboot replay must be verified on the actual Arch Linux host.
 
-For the authoritative target architecture and dated implementation status, see `docs/master_plan.md`. The deployment checklist in `docs/NEXT_STEPS.md` reflects a historical checkpoint and must be verified against the current host.
-
-## Target Capability Matrix
-
-The following are goals and boundaries, not blanket claims that each control is already production-verified.
-
-### 1. Host security and integrity
-
-- **File integrity:** trusted baselines and fanotify event processing exist. Notification-mode fanotify does not hold an originating process for a permission decision; a blocking execution-permission design remains separate work.
-- **Process observation:** eBPF telemetry is optional and hook-specific. Verify actual probes on the target kernel; missing events must be treated as missing visibility.
-- **Configuration and supply-chain drift:** file-hash baselines exist. Package-manager transaction tracking and behavioral baselines remain future work.
-
-### 2. Passive network discovery
-
-- **Layer-2 visibility:** native AF_PACKET parsing handles supported protocols from traffic observed on the configured interface. Quiet devices may remain undiscovered.
-- **Asset profiling:** the local inventory is useful but not a complete or continuously accurate network inventory.
-- **Reputation enrichment:** InternetDB and optional GeoIP records enrich observed addresses; cache misses and unrated entries are not clean verdicts. Internet-wide and active scanning remain out of scope.
-
-### 3. Threat detection and defense
-
-- **YARA:** generated rules need isolated validation, runtime activation and live event delivery before they count as active detection.
-- **Honeypots:** modules and setup helpers exist, but installation and the full event-to-response path need target-host verification.
-- **Telemetry sanitization:** every new ingress path must sanitize untrusted fields before they reach rendering, command construction, logs or model context.
-
-### 4. Platform resilience
-
-- **Tamper detection:** trusted hashes, watchlist discovery and rate-limited response exist; bootstrap and deployment coverage still matter.
-- **Firewall enforcement:** Kaia-owned nftables rule management and recovery code exist. Live block, reload-survival, reboot-replay and panic-recovery tests remain necessary.
-- **Health/supply-chain monitoring:** independent service supervision, package transaction monitoring, alert-confidence scoring, secrets scanning and backup restorability remain unfinished capabilities.
+For the full implementation/verification matrix and remaining priorities, see docs/master_plan.md. The deployment checklist is a dated historical checkpoint and must be reconciled with the current host before running privileged commands.
 
 ## 🏗️ Architecture and Isolation Layout
 
@@ -132,6 +107,7 @@ Kaia/
 │   ├── web_bridge.py          # Loopback HTTP, WebSocket and command bridge
 │   └── web/static/            # Local dashboard HTML, CSS, JavaScript and Kaia codecs
 ├── security/
+│   ├── supply_chain_monitor.py # Passive pacman transaction monitor
 │   ├── policy_gate.py         # Token/schema checks and action authorization
 │   ├── host_executor.py       # Privileged command and state-operation boundary
 │   ├── tamper_detection.py    # Trusted baselines and runtime integrity checks
@@ -188,15 +164,12 @@ pip install -r requirements.txt
 
 Install the focused test dependencies and run the regression suite from the repository root:
 
-```bash
-python -m pip install -r requirements-test.txt
-pytest -q
-```
+    python -m pip install -r requirements-test.txt
+    pytest -q
 
-The suite does not replace target-host checks for BCC/eBPF, fanotify, live nftables, systemd transient services or privileged recovery.bash
-python tests/verify_security.py
-python tests/test_heuristics.py
-```
+The suite does not replace target-host checks for BCC/eBPF, fanotify, live nftables, systemd transient services or privileged recovery.
+
+
 
 ### 5. (Optional) GeoIP Database
 To enable country annotations on blocked IPs, obtain a free MaxMind license key
@@ -270,7 +243,7 @@ units. Re-run it after changes — the checkout is the source, `/opt/kaia` is wh
 | `CAP_NET_ADMIN` | granted | nftables rules for IP blocking |
 | `CAP_NET_RAW` | granted | `AF_PACKET` sockets for passive discovery |
 | `CAP_DAC_OVERRIDE` | **dropped** | Bypasses *all* file permission checks. Only ever needed to read a `0600 .env` owned by an unprivileged user; the secret now comes from root-owned `/etc/kaia/secret.env`. |
-| `CAP_SYS_ADMIN` | **dropped** | Needed only for mount-wide `fanotify` and BCC/eBPF. Both were non-functional as shipped — fanotify failed `EINVAL` on every start, BCC is not installed — so it granted privilege for nothing. |
+| `CAP_SYS_ADMIN` | Dropped in the last recorded host configuration | The 2026-09-08 host review recorded fanotify `EINVAL` and absent BCC. This is a host-specific observation, not proof that the current source lacks those features; rerun the probe on the deployed kernel before changing service capabilities. |
 
 To re-enable mount-wide FIM, check whether this kernel will accept a mount mark:
 
@@ -304,12 +277,17 @@ sudo systemctl start kaia-policy-gate
 
 ### Block persistence
 
-nftables rules are runtime-only, so a reboot silently clears every address Kaia has
-blocked. `kaia-restore-blocks.service` replays approved `block_ip` entries from the
-ledger at boot, before the Policy Gate starts accepting new requests. It re-uses
-`HostExecutor.execute_mitigation`, so table, chain and address-family handling have a
-single implementation. Malformed ledger lines are skipped rather than fatal — a corrupt
-ledger must not stop the host booting with its blocks in place.
+nftables rules are runtime-only. `kaia-restore-blocks.service` reconstructs the
+currently active Kaia-managed blocks from the audit ledger before the Policy Gate
+accepts new requests. Replay folds approved block_ip and unblock_ip events in
+chronological order: a successful unblock is a tombstone for the earlier rule, while
+a later approved re-block restores it. Malformed records are skipped and logged.
+This behavior is covered by ledger tests, but boot-time replay and the live nftables
+path still need verification on the target host.
+
+Use `unblock <ip>` through the dashboard for a normal removal. Do not manually
+delete the table during a replay test and then assume the ledger agrees: without an
+approved unblock event, boot replay is expected to restore an active ledger block.
 
 ### If the network goes down unexpectedly
 
@@ -359,8 +337,10 @@ compromise the reference. The script shows a diff against the previous baseline
 before replacing it, and enumerates files via the detector itself so the two cannot
 drift apart.
 
-With no baseline present the daemon still runs, but logs a warning at startup that
-modifications made while it was stopped cannot be detected.
+With no trusted baseline present the daemon has a weaker bootstrap path: it warns that
+modifications made while it was stopped cannot be detected. Create the baseline only
+after reviewing the source and deployment state; do not treat bootstrap hashing as
+equivalent to verification against a previously trusted baseline.
 
 ### Monitor-only mode
 
