@@ -76,7 +76,7 @@ def test_yara_rule_validation(monkeypatch):
         calls.append((argv, kwargs))
         rule_path = Path(argv[-2])
         source = rule_path.read_text(encoding="utf-8")
-        stdout = "/tmp/kaia_benign_corpus/benign_0.txt\n" if "Lorem ipsum" in source else ""
+        stdout = f"{engine.benign_corpus_dir}/benign_0.txt\n" if "Lorem ipsum" in source else ""
         return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
 
     monkeypatch.setattr(rule_engine.subprocess, "run", fake_sandbox)
@@ -455,3 +455,39 @@ def test_honeypot_does_not_cleanup_when_worker_fails_to_stop(tmp_path):
 
     assert path.read_text() == "known harmless decoy content"
     assert str(path) in coordinator._managed_decoys
+
+def test_benign_corpus_uses_unique_non_writable_shared_tmp_directory(tmp_path, monkeypatch):
+    import stat
+    from pathlib import Path
+
+    monkeypatch.setattr(config, "YARA_RULES_DIR", str(tmp_path / "rules"))
+    monkeypatch.setattr(RuleEngine, "_setup_benign_corpus", lambda self: None)
+    monkeypatch.setattr(RuleEngine, "reload_rules", lambda self: None)
+    engine = RuleEngine()
+    try:
+        corpus = Path(engine.benign_corpus_dir)
+        assert corpus.parent == Path("/tmp")
+        assert corpus.name.startswith("kaia_benign_corpus-")
+        assert corpus != Path("/tmp/kaia_benign_corpus")
+        metadata = corpus.stat()
+        assert stat.S_IMODE(metadata.st_mode) == 0o755
+        assert metadata.st_uid == os.geteuid()
+    finally:
+        engine._benign_corpus_tmpdir.cleanup()
+
+
+def test_benign_corpus_refuses_preexisting_symlink_sample(tmp_path):
+    from security.rule_engine import RuleEngine
+
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    external = tmp_path / "external.txt"
+    external.write_text("must remain untouched", encoding="utf-8")
+    (corpus / "benign_0.txt").symlink_to(external)
+
+    engine = object.__new__(RuleEngine)
+    engine.benign_corpus_dir = str(corpus)
+    with pytest.raises(RuntimeError, match="refusing rule validation"):
+        engine._setup_benign_corpus()
+    assert external.read_text(encoding="utf-8") == "must remain untouched"
+

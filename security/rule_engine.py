@@ -34,7 +34,14 @@ class RuleEngine:
     def __init__(self):
         self.rules_dir = config.YARA_RULES_DIR
         self.scanner = None
-        self.benign_corpus_dir = "/tmp/kaia_benign_corpus"
+        # A predictable shared /tmp path lets an unprivileged user race root's
+        # corpus writes through a symlink. tempfile creates a fresh directory
+        # atomically under sticky /tmp; keep it alive for this engine instance.
+        self._benign_corpus_tmpdir = tempfile.TemporaryDirectory(
+            prefix="kaia_benign_corpus-", dir="/tmp"
+        )
+        self.benign_corpus_dir = self._benign_corpus_tmpdir.name
+        os.chmod(self.benign_corpus_dir, 0o755)
         self.reload_callbacks = []
         
         # Initialize rules directory
@@ -46,23 +53,42 @@ class RuleEngine:
         self.reload_callbacks.append(callback)
 
     def _setup_benign_corpus(self):
-        """Creates 5 known-clean text files in /tmp/kaia_benign_corpus."""
-        os.makedirs(self.benign_corpus_dir, exist_ok=True)
-        lorem_ipsum_variants = [
-            "Lorem ipsum dolor sit amet, consectetur adipiscing elit.",
-            "Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.",
-            "Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris.",
-            "Duis aute irure dolor in reprehenderit in voluptate velit esse cillum.",
-            "Excepteur sint occaecat cupidatat non proident, sunt in culpa qui."
-        ]
-        for i, text in enumerate(lorem_ipsum_variants):
-            filepath = os.path.join(self.benign_corpus_dir, f"benign_{i}.txt")
-            try:
-                if not os.path.exists(filepath):
-                    with open(filepath, "w", encoding="utf-8") as f:
-                        f.write(text)
-            except Exception as e:
-                logger.error(f"Failed to create benign corpus file {filepath}: {e}")
+        """Create clean samples in this engine's exclusively-created temp directory."""
+        try:
+            directory_metadata = os.lstat(self.benign_corpus_dir)
+            if (
+                not stat.S_ISDIR(directory_metadata.st_mode)
+                or directory_metadata.st_uid != os.geteuid()
+                or directory_metadata.st_mode & 0o022
+            ):
+                raise PermissionError("YARA corpus directory is not trusted")
+
+            lorem_ipsum_variants = [
+                "Lorem ipsum dolor sit amet, consectetur adipiscing elit.",
+                "Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.",
+                "Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris.",
+                "Duis aute irure dolor in reprehenderit in voluptate velit esse cillum.",
+                "Excepteur sint occaecat cupidatat non proident, sunt in culpa qui."
+            ]
+            flags = (
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0)
+            )
+            for i, sample in enumerate(lorem_ipsum_variants):
+                filepath = os.path.join(self.benign_corpus_dir, f"benign_{i}.txt")
+                # O_EXCL rejects existing entries (including symlinks), while
+                # O_NOFOLLOW makes the no-follow intent explicit on supported OSes.
+                fd = os.open(filepath, flags, 0o644)
+                with os.fdopen(fd, "w", encoding="utf-8") as corpus_file:
+                    corpus_file.write(sample)
+                    corpus_file.flush()
+                    os.fsync(corpus_file.fileno())
+        except Exception as exc:
+            logger.error("Failed to initialize the safe YARA corpus: %s", exc, exc_info=True)
+            raise RuntimeError(
+                "Could not initialize safe YARA validation corpus; refusing rule validation."
+            ) from exc
 
     @staticmethod
     def _escape_yara_literal(value: str) -> str:
