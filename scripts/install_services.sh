@@ -83,6 +83,15 @@ if [ "$secret_val" = "kaia_secure_signing_secret_key_2026" ]; then
     echo "       Rotate it before installing; capability tokens can otherwise be forged." >&2
     exit 1
 fi
+
+# The signing key is written directly to systemd's EnvironmentFile and protects
+# HMAC-SHA256 capability tokens. Require 32 random bytes encoded as 64 hex chars:
+# this also prevents whitespace/newline/comment syntax from altering EnvironmentFile.
+if [[ ! "$secret_val" =~ ^[A-Fa-f0-9]{64}$ ]]; then
+    echo "ERROR: KAIA_CAPABILITY_TOKEN_SECRET must be exactly 64 hexadecimal characters." >&2
+    echo "       Generate a 32-byte key with: openssl rand -hex 32" >&2
+    exit 1
+fi
 # --- Deploy a root-owned copy of the code ------------------------------------
 #
 # The daemon runs as root. Running it directly out of a checkout under $HOME
