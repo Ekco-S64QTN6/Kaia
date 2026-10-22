@@ -14,7 +14,9 @@ Only entries with result == "approved" are replayed. Malformed lines are
 skipped, not fatal -- a corrupt ledger must not prevent the host from booting
 with its blocks in place.
 
-Exit: 0 (always -- failure to restore is logged, never fatal at boot)
+Exit: 0 when no blocks are active or all recorded blocks restore successfully.
+Exit: 1 when the ledger cannot be safely read or any firewall restore fails.
+The oneshot reports failure in systemd but is not a hard dependency that blocks boot.
 """
 import ipaddress
 import json
