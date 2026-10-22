@@ -172,3 +172,22 @@ async def test_command_endpoint_rejects_origin_scheme_mismatch():
         assert "scheme" in (await resp.json())["error"].lower()
     finally:
         await client.close()
+
+
+
+@pytest.mark.asyncio
+async def test_command_endpoint_checks_origin_before_parsing_malformed_body():
+    """Reject cross-origin requests before their body is parsed."""
+    bridge = KaiaWebBridge(host="127.0.0.1", port=8765)
+    client = TestClient(TestServer(bridge.create_app()))
+    await client.start_server()
+    try:
+        resp = await client.post(
+            "/api/command",
+            data="{not-json",
+            headers={"Origin": "https://attacker.example"},
+        )
+        assert resp.status == 403
+        assert "Origin" in (await resp.json())["error"]
+    finally:
+        await client.close()
