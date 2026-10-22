@@ -126,7 +126,7 @@ Runtime databases, caches, audit ledgers and secrets are configuration-dependent
 
 ## Project source of truth
 
-`docs/master_plan.md` is the authoritative architectural specification and roadmap. This README is the user-facing overview. Archived reviews and secondary design documents are historical inputs; reconcile them against the master plan and actual implementation before treating them as current requirements.
+`docs/README.md` explains the documentation hierarchy. `docs/master_plan.md` is the authoritative architecture and current repository-status record; `docs/NEXT_STEPS.md` is the target-host acceptance checklist. This README is the user-facing overview. Files under `docs/archived/` and dated execution reports are historical evidence, not current requirements or proof of present host state.
 ---
 
 > **Deployment state requires local verification.** The last recorded setup checklist is dated 2026-09-08. This repository cannot determine whether the services have since been installed or tested on the target host. Verify the active unit, deployment path, state directory, trusted baseline and firewall recovery before relying on them. See **[docs/NEXT_STEPS.md](docs/NEXT_STEPS.md)**.
