@@ -72,18 +72,23 @@ class TestAdvancedSecurity(unittest.TestCase):
     def test_cgroup_wrapper_commands(self):
         """Verify that HostExecutor prepends systemd-run wrapper commands."""
         # We can inspect the command returned or run test checks
-        with patch('subprocess.run') as mock_run:
+        from security.host_executor import SYSTEM_BINARIES
+        with patch('os.geteuid', return_value=1000), \
+             patch.dict(os.environ, {"XDG_RUNTIME_DIR": "/run/user/1000"}), \
+             patch('os.path.isfile', return_value=True), \
+             patch('os.access', return_value=True), \
+             patch('subprocess.run') as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout="Mocked output", stderr="")
-            
-            # Run script execution test
+
             HostExecutor.execute_script("music.sh", effective_level="none")
-            
-            # Check the cmd called in mock_run
+
             called_args = mock_run.call_args[0][0]
-            self.assertEqual(called_args[0], "systemd-run")
+            self.assertEqual(called_args[0], SYSTEM_BINARIES["systemd-run"])
             self.assertEqual(called_args[1], "--user")
             self.assertEqual(called_args[2], "--scope")
             self.assertIn(f"CPUQuota={config.CGROUP_CPU_QUOTA}", called_args)
+            child_env = mock_run.call_args.kwargs["env"]
+            self.assertNotIn("KAIA_CAPABILITY_TOKEN_SECRET", child_env)
 
     def test_dbus_queries_success(self):
         """Verify that D-Bus query helper yields unit information correctly."""

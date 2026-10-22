@@ -31,7 +31,7 @@ def test_mitigation_reuses_existing_table_and_chain(
 
     assert ok is True, err
     assert len(calls) == 3
-    assert calls[0][:4] == ["nft", "-exist", "add", "table"]
-    assert calls[1][:4] == ["nft", "-exist", "add", "chain"]
-    assert calls[2][:3] == ["nft", "add", "rule"]
+    assert calls[0][:4] == ["/usr/bin/nft", "-exist", "add", "table"]
+    assert calls[1][:4] == ["/usr/bin/nft", "-exist", "add", "chain"]
+    assert calls[2][:3] == ["/usr/bin/nft", "add", "rule"]
     assert expected_family in calls[2]

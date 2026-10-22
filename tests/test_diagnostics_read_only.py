@@ -33,11 +33,11 @@ def test_read_only_diagnostics_options_are_forwarded(monkeypatch):
     ok, stdout, _ = HostExecutor.execute_diagnostics("ss", ["-tuln"])
     assert ok is True
     assert stdout == "ok"
-    assert calls == [["ss", "-tuln"]]
+    assert calls == [["/usr/bin/ss", "-tuln"]]
 
     ok, _, _ = HostExecutor.execute_diagnostics("ip_route", ["-4", "show"])
     assert ok is True
-    assert calls[-1] == ["ip", "route", "-4", "show"]
+    assert calls[-1] == ["/usr/bin/ip", "route", "-4", "show"]
 
 
 def test_diagnostics_reject_non_string_arguments(monkeypatch):
@@ -49,3 +49,15 @@ def test_diagnostics_reject_non_string_arguments(monkeypatch):
     assert ok is False
     assert "list of strings" in err
     assert calls == []
+
+
+def test_all_diagnostics_launch_absolute_system_binaries(monkeypatch):
+    calls = []
+    monkeypatch.setattr(HostExecutor, "_run_cmd", lambda cmd: calls.append(cmd) or (True, "", ""))
+    monkeypatch.setattr("os.geteuid", lambda: 0)
+
+    assert HostExecutor.execute_diagnostics("ss", ["-n"])[0]
+    assert HostExecutor.execute_diagnostics("ip_route", ["show"])[0]
+    assert HostExecutor.execute_diagnostics("nft_list", [])[0]
+    assert [cmd[0] for cmd in calls] == ["/usr/bin/ss", "/usr/bin/ip", "/usr/bin/nft"]
+    assert all(cmd[0].startswith("/") for cmd in calls)
