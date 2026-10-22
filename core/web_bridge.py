@@ -903,23 +903,89 @@ class KaiaWebBridge:
         return app
 
     def _local_request_error(self, request: web.Request) -> Optional[str]:
-        """Reject non-loopback hosts and cross-origin browser requests."""
-        host = request.headers.get("Host", "").split(":", 1)[0].strip("[]").lower()
-        if host not in ALLOWED_LOOPBACK_HOSTS:
+        """Reject non-loopback or authority/origin mismatches before dispatch.
+
+        Do not assume an omitted port means the HUD's port: URL defaults are 80
+        for HTTP and 443 for HTTPS. The Host authority must also name the actual
+        local listener, preventing a forged Host and matching Origin from being
+        accepted on a non-default port.
+        """
+        from urllib.parse import urlsplit
+
+        host_header = request.headers.get("Host", "")
+        if not host_header or host_header != host_header.strip():
             return "Invalid Host header"
+        try:
+            parsed_host = urlsplit("//" + host_header)
+            host = (parsed_host.hostname or "").lower()
+            explicit_host_port = parsed_host.port
+        except ValueError:
+            return "Invalid Host header"
+
+        if (
+            not host
+            or host not in ALLOWED_LOOPBACK_HOSTS
+            or parsed_host.username is not None
+            or parsed_host.password is not None
+            or parsed_host.path
+            or parsed_host.query
+            or parsed_host.fragment
+            or "," in host_header
+        ):
+            return "Invalid Host header"
+
+        scheme = request.scheme.lower()
+        if scheme not in ("http", "https"):
+            return "Invalid request scheme"
+        default_port = 443 if scheme == "https" else 80
+        host_effective_port = explicit_host_port if explicit_host_port is not None else default_port
+
+        # Prefer the actual listener socket over self.port: test servers and
+        # socket activation may select a port different from the configured one.
+        local_port = None
+        transport = request.transport
+        if transport is not None:
+            sockname = transport.get_extra_info("sockname")
+            if isinstance(sockname, tuple) and len(sockname) >= 2:
+                candidate = sockname[1]
+                if isinstance(candidate, int) and not isinstance(candidate, bool):
+                    local_port = candidate
+        if local_port is None:
+            local_port = self.port
+        if host_effective_port != local_port:
+            return "Host port mismatch"
 
         origin = request.headers.get("Origin")
         if origin:
-            from urllib.parse import urlsplit
+            if origin != origin.strip():
+                return "Invalid Origin"
             try:
                 parsed_origin = urlsplit(origin)
-                origin_port = parsed_origin.port
+                explicit_origin_port = parsed_origin.port
             except ValueError:
                 return "Invalid Origin"
+
+            origin_scheme = parsed_origin.scheme.lower()
             origin_host = (parsed_origin.hostname or "").lower()
-            if parsed_origin.scheme not in ("http", "https") or origin_host not in ALLOWED_LOOPBACK_HOSTS:
+            if (
+                origin_scheme not in ("http", "https")
+                or origin_host not in ALLOWED_LOOPBACK_HOSTS
+                or parsed_origin.username is not None
+                or parsed_origin.password is not None
+                or parsed_origin.path
+                or parsed_origin.query
+                or parsed_origin.fragment
+                or not parsed_origin.netloc
+            ):
                 return "Invalid Origin"
-            if origin_port not in (None, self.port):
+
+            origin_default_port = 443 if origin_scheme == "https" else 80
+            origin_effective_port = (
+                explicit_origin_port if explicit_origin_port is not None else origin_default_port
+            )
+            if origin_scheme != scheme:
+                return "Origin scheme mismatch"
+            if origin_effective_port != host_effective_port:
                 return "Origin port mismatch"
             if origin_host != host:
                 return "Origin host mismatch"
