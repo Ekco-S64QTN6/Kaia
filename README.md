@@ -39,7 +39,7 @@ This describes capabilities present in the repository. It is not proof that priv
 
 ### Implemented in the codebase
 
-- **Policy Gate and host execution:** typed request schemas, expiring capability tokens, permission-lattice checks, Unix-socket IPC, audit logging, allowlisted direct-argv execution, descriptor-relative atomic workspace writes, symlink-resistant path traversal and sandbox/resource controls.
+- **Policy Gate and host execution:** typed request schemas, expiring capability tokens, permission-lattice checks, Unix-socket IPC, audit logging, allowlisted direct-argv execution, descriptor-relative atomic workspace writes, symlink-resistant path traversal, root-ownership checks when running privileged, and sandbox/resource controls.
 - **Firewall lifecycle:** the block and unblock commands are routed through the Policy Gate. Unblock removes exact matching Kaia-owned nftables rules by handle; boot replay folds approved block/unblock events so a successful removal does not resurrect an older block.
 - **Integrity monitoring:** trusted-baseline validation, watchlist discovery, tamper alerts and lockdown circuit breaking are implemented. System mode refuses to start without a valid trusted baseline; only unprivileged development mode may bootstrap from current disk state.
 - **File event handling:** the fanotify handler keeps the original event descriptor open, scans and hashes the same captured bytes, and caps the snapshot at 64 MiB. Its audit database uses the configured `KAIA_STATE_DIR` (`fim_audit.db`), and the installer migrates legacy history from `/var/lib/secdaemon/fim_audit.db`. YARA validation fails closed when the isolated validator is unavailable, and generated IOC strings are escaped as literals.
