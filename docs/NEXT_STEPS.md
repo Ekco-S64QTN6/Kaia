@@ -82,6 +82,8 @@ System mode refuses to start without a valid baseline. Review the deployed tree 
 **Run the baseline only from a state you have reviewed.** Baselining a compromise
 makes the compromise the reference.
 
+Protected-file hash verification opens a no-follow descriptor, refuses non-regular paths and streams in 1 MiB chunks; it preserves the historical SHA-256 digest format and prefix-hash behavior.
+
 Expected in the log: `Loaded N trusted hashes`, `Tamper detection thread started`,
 and `Policy Gate listening on Unix socket`. On a custom `KAIA_STATE_DIR`, verify
 that `core/config.py` and `scripts/kaia-baseline.sh` resolve the baseline to

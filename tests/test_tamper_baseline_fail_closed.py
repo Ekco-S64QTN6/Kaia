@@ -163,3 +163,60 @@ def test_baseline_script_refuses_missing_or_nonregular_watchlist_paths():
     assert "Missing protected file in integrity watchlist" in script
     assert "Protected watchlist path is not a regular file" in script
     assert "if os.path.exists(f):" not in script
+
+
+def test_compute_sha256_reads_bounded_chunks_and_preserves_full_digest(tmp_path, monkeypatch):
+    import hashlib
+
+    payload = bytes(range(256)) * 16_384
+    target = tmp_path / "large-protected-file.bin"
+    target.write_bytes(payload)
+    expected = hashlib.sha256(payload).hexdigest()
+    read_sizes = []
+    real_read = os.read
+
+    def bounded_read(fd, size):
+        assert size > 0, "unbounded file reads are forbidden in integrity hashing"
+        assert size <= 1024 * 1024, "hash chunk exceeds the configured memory bound"
+        read_sizes.append(size)
+        return real_read(fd, size)
+
+    monkeypatch.setattr(td.os, "read", bounded_read)
+    digest = td.TamperDetector()._compute_sha256(str(target))
+
+    assert digest == expected
+    assert len(read_sizes) > 1
+    assert max(read_sizes) == 1024 * 1024
+
+
+def test_compute_sha256_limit_hashes_only_the_requested_prefix(tmp_path):
+    import hashlib
+
+    payload = b"protected-prefix" + b"x" * 100_000
+    target = tmp_path / "prefix.bin"
+    target.write_bytes(payload)
+
+    digest = td.TamperDetector()._compute_sha256(str(target), limit=16)
+
+    assert digest == hashlib.sha256(payload[:16]).hexdigest()
+
+
+def test_compute_sha256_refuses_final_symlink_and_fifo_without_blocking(tmp_path):
+    import hashlib
+    import os
+
+    target = tmp_path / "real.bin"
+    target.write_bytes(b"trusted external target")
+    alias = tmp_path / "alias.bin"
+    alias.symlink_to(target)
+    fifo = tmp_path / "watch.fifo"
+    os.mkfifo(fifo)
+
+    detector = td.TamperDetector()
+
+    assert detector._compute_sha256(str(alias)) == ""
+    assert detector._compute_sha256(str(fifo)) == ""
+    assert target.read_bytes() == b"trusted external target"
+    assert detector._compute_sha256(str(target)) == hashlib.sha256(
+        b"trusted external target"
+    ).hexdigest()
