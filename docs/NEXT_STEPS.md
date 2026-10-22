@@ -51,13 +51,17 @@ What this changes:
 - Creates the configured state directory (default `/var/lib/kaia`, `root:kaiacord`,
   0750) and **migrates** existing audit/event data out of the checkout. Custom state
   paths must be below `/var/lib`, `/srv`, or `/mnt`; deploy paths must be below `/opt`.
-  The installer rejects paths overlapping the source checkout or each other.
+  The installer rejects paths overlapping the source checkout or each other. It refuses
+unexpected code-tree symlinks before recursive root ownership changes; the sole allowed
+`static/dashboard` symlink must resolve to `core/web/static` inside the tree.
 - Refuses symlinked or non-regular legacy runtime files during migration and normalizes
   existing ledger/DB files to `root:kaiacord` mode `0640`.
 - Installs `kaia-policy-gate`, `kaia-lockdown` and the new
   `kaia-restore-blocks` units, all pointing at `/opt/kaia`.
-- Aborts if `KAIA_CAPABILITY_TOKEN_SECRET` is missing, empty, or set to the value
-  that leaked into this repository's git history.
+- Aborts if `KAIA_CAPABILITY_TOKEN_SECRET` is missing, empty, historically leaked,
+  or not exactly 64 hexadecimal characters (32 random bytes). Generate a key with
+  `openssl rand -hex 32`; the format also prevents newlines or shell/systemd parsing
+  syntax from being injected into the installed EnvironmentFile.
 
 **From here on, `~/github/Kaia` is the source and `/opt/kaia` is what runs.**
 Re-run the installer after changes.

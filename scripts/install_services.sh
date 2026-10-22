@@ -83,6 +83,68 @@ if [ "$secret_val" = "kaia_secure_signing_secret_key_2026" ]; then
     echo "       Rotate it before installing; capability tokens can otherwise be forged." >&2
     exit 1
 fi
+
+# The signing key is written directly to systemd's EnvironmentFile and protects
+# HMAC-SHA256 capability tokens. Require 32 random bytes encoded as 64 hex chars:
+# this also prevents whitespace/newline/comment syntax from altering EnvironmentFile.
+if [[ ! "$secret_val" =~ ^[A-Fa-f0-9]{64}$ ]]; then
+    echo "ERROR: KAIA_CAPABILITY_TOKEN_SECRET must be exactly 64 hexadecimal characters." >&2
+    echo "       Generate a 32-byte key with: openssl rand -hex 32" >&2
+    exit 1
+fi
+
+# Root runs the deployed code. Reject unexpected links before any recursive
+# ownership normalization. The tracked dashboard link is permitted only as its
+# exact relative target and only when it resolves inside the tree being checked.
+validate_deployment_symlinks() {
+    local tree_root="$1" mode="$2" root_real link relative target resolved
+    root_real="$(realpath -e -- "$tree_root")" || return 1
+
+    if [ "$mode" = "source" ]; then
+        while IFS= read -r -d '' link; do
+            relative="${link#"$tree_root"/}"
+            target="$(readlink -- "$link")" || return 1
+            if [[ "$relative" != "static/dashboard" || "$target" != "../core/web/static" ]]; then
+                echo "ERROR: refusing unexpected symlink in source checkout: $relative" >&2
+                return 1
+            fi
+            resolved="$(realpath -e -- "$link")" || {
+                echo "ERROR: dangling dashboard symlink: $relative" >&2
+                return 1
+            }
+            case "$resolved/" in
+                "$root_real/"*) ;;
+                *) echo "ERROR: dashboard symlink escapes source checkout." >&2; return 1 ;;
+            esac
+        done < <(find "$tree_root" \
+            \( -path "$tree_root/.git" -o -path "$tree_root/.venv" -o \
+               -path "$tree_root/storage" -o -path "$tree_root/logs" -o \
+               -path "$tree_root/.pytest_cache" -o -path "$tree_root/tests" -o \
+               -name '__pycache__' \
+            \) -prune -o -type l -print0)
+    else
+        while IFS= read -r -d '' link; do
+            relative="${link#"$tree_root"/}"
+            target="$(readlink -- "$link")" || return 1
+            if [[ "$relative" != "static/dashboard" || "$target" != "../core/web/static" ]]; then
+                echo "ERROR: refusing unexpected symlink in deployed tree: $relative" >&2
+                return 1
+            fi
+            resolved="$(realpath -e -- "$link")" || {
+                echo "ERROR: dangling dashboard symlink in deployed tree: $relative" >&2
+                return 1
+            }
+            case "$resolved/" in
+                "$root_real/"*) ;;
+                *) echo "ERROR: dashboard symlink escapes deployment tree." >&2; return 1 ;;
+            esac
+        done < <(find "$tree_root" -path "$tree_root/storage" -prune -o -type l -print0)
+    fi
+}
+if ! validate_deployment_symlinks "$PROJECT_REAL" source; then
+    exit 1
+fi
+
 # --- Deploy a root-owned copy of the code ------------------------------------
 #
 # The daemon runs as root. Running it directly out of a checkout under $HOME
@@ -122,6 +184,11 @@ mkdir -p "$DEPLOY_DIR/logs"
 
 # The excluded storage/ tree is runtime data, not deployed code. Preserve its
 # ownership and modes rather than recursively making old databases world-readable.
+if ! validate_deployment_symlinks "$DEPLOY_DIR" deployed; then
+    echo "ERROR: refusing to chown or execute a deployment containing unexpected symlinks." >&2
+    exit 1
+fi
+
 find "$DEPLOY_DIR" -path "$DEPLOY_DIR/storage" -prune -o -exec chown root:root {} +
 find "$DEPLOY_DIR" -path "$DEPLOY_DIR/storage" -prune -o -type d -exec chmod 755 {} +
 find "$DEPLOY_DIR" -path "$DEPLOY_DIR/storage" -prune -o -type f -exec chmod 644 {} +

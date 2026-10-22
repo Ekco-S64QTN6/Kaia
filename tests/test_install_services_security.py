@@ -57,3 +57,40 @@ def test_installer_rejects_symlinked_fim_history_migration():
     assert 'chmod 640 "$dst"' in script
     assert 'cp -- "$legacy_fim_db" "$fim_db_destination"' in script
     assert 'chown root:kaiacord "$fim_db_destination"' in script
+
+
+
+def test_installer_requires_32_byte_hex_capability_signing_key():
+    script = Path("scripts/install_services.sh").read_text()
+
+    format_check = script.index('[[ ! "$secret_val" =~ ^[A-Fa-f0-9]{64}$ ]]')
+    stop_gate = script.index("systemctl stop kaia-policy-gate.service")
+    sync = script.index("rsync -a --delete")
+
+    assert format_check < stop_gate < sync
+    assert "exactly 64 hexadecimal characters" in script
+    assert "openssl rand -hex 32" in script
+
+
+
+def test_installer_rejects_unexpected_symlinks_before_root_chown():
+    script = Path("scripts/install_services.sh").read_text()
+
+    source_check = script.index('validate_deployment_symlinks "$PROJECT_REAL" source')
+    stop_gate = script.index("systemctl stop kaia-policy-gate.service")
+    rsync = script.index("rsync -a --delete")
+    deployed_check = script.index('validate_deployment_symlinks "$DEPLOY_DIR" deployed')
+    chown = script.index('find "$DEPLOY_DIR" -path "$DEPLOY_DIR/storage" -prune -o -exec chown')
+
+    assert source_check < stop_gate < rsync < deployed_check < chown
+    assert '[[ "$relative" != "static/dashboard" || "$target" != "../core/web/static" ]]' in script
+    assert 'realpath -e -- "$link"' in script
+    assert "dashboard symlink escapes deployment tree" in script
+
+
+def test_installer_allows_only_verified_in_tree_dashboard_link():
+    script = Path("scripts/install_services.sh").read_text()
+
+    assert '"$relative" != "static/dashboard"' in script
+    assert '"$target" != "../core/web/static"' in script
+    assert 'find "$tree_root" -path "$tree_root/storage" -prune -o -type l -print0' in script

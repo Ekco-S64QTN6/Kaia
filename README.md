@@ -151,8 +151,14 @@ export KAIA_DB_USER="kaiauser"
 export KAIA_DB_PASS="your_secure_password"
 export KAIA_DB_HOST="localhost"
 export KAIA_DB_NAME="kaiadb"
-export KAIA_CAPABILITY_TOKEN_SECRET="your_signing_secret_key"
+# Generate 32 random bytes (64 hex characters): openssl rand -hex 32
+# Paste that command's output verbatim in place of the placeholder below.
+export KAIA_CAPABILITY_TOKEN_SECRET="REPLACE_WITH_64_HEX_CHARACTERS_FROM_openssl_rand_-hex_32"
 ```
+
+The installer rejects a missing key, the historically leaked key, and anything other
+than exactly 64 hexadecimal characters. Do not use the illustrative placeholder as a
+real signing secret.
 
 ### 3. Virtual Environment & Dependencies
 ```bash
@@ -239,7 +245,10 @@ custom paths must be below `/var/lib`, `/srv`, or `/mnt`), migrates existing run
 data, and installs the units. The installer rejects destinations that overlap the
 source checkout or each other. It validates the signing secret before
 changing files and stops an active Policy Gate before syncing monitored code. The
-installer enables but does **not start** the gate automatically. Review the deployed
+installer enables but does **not start** the gate automatically. It rejects
+unexpected symlinks before root ownership normalization, allowing only the tracked
+`static/dashboard -> ../core/web/static` link while it resolves within the tree.
+Review the deployed
 diff, write the trusted baseline, then start it:
 
     sudo /opt/kaia/scripts/kaia-baseline.sh
