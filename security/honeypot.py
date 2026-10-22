@@ -111,7 +111,12 @@ class HoneypotCoordinator:
     @staticmethod
     def _read_regular_file_no_follow(path: str, max_bytes: int) -> tuple:
         """Read a small regular file without following a final-component symlink."""
-        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0)
+        )
         fd = os.open(path, flags)
         try:
             metadata = os.fstat(fd)
@@ -267,7 +272,12 @@ class HoneypotCoordinator:
 
     def _remove_managed_decoy_if_unchanged(self, path: str, expected: dict) -> bool:
         """Unlink only a file this process created whose identity and bytes are intact."""
-        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0)
+        )
         try:
             fd = os.open(path, flags)
         except FileNotFoundError:
