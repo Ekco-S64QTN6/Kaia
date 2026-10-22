@@ -1,9 +1,12 @@
 import os
+import json
 import sys
 import time
 import hashlib
 import logging
 import threading
+import re
+from pathlib import Path
 import config
 from security.db import log_security_event
 
@@ -22,24 +25,23 @@ class TamperDetector:
         # Timestamps of recent lockdown triggers, for the circuit breaker.
         self._lockdown_times = []
 
-        # 1. Core configs (immutable)
+        # Protect code that can make, enforce, or reset a security decision.
+        workspace = os.path.abspath(config.WORKSPACE_DIR)
         self.immutable_files = [
-            os.path.join(config.WORKSPACE_DIR, ".env"),
-            os.path.join(config.WORKSPACE_DIR, "core", "config.py"),
-            os.path.join(config.WORKSPACE_DIR, "kaia_dashboard.py"),
-            os.path.join(config.WORKSPACE_DIR, "main.py"),
-            os.path.join(config.WORKSPACE_DIR, "scripts", "kaia-lockdown.sh"),
+            os.path.join(workspace, ".env"),
+            os.path.join(workspace, "core", "config.py"),
+            os.path.join(workspace, "kaia_dashboard.py"),
+            os.path.join(workspace, "main.py"),
+            os.path.join(workspace, "scripts", "kaia-lockdown.sh"),
+            os.path.join(workspace, "scripts", "kaia-baseline.sh"),
+            os.path.join(workspace, "scripts", "install_services.sh"),
+            os.path.join(workspace, "scripts", "kaia-unlock.sh"),
+            os.path.join(workspace, "scripts", "kaia-rotate-ledger.sh"),
         ]
 
-        # Every module in the security package, discovered rather than listed.
-        #
-        # An explicit list goes stale the moment a module is added: before this,
-        # 8 of the 14 files in security/ were unprotected -- including
-        # telemetry_sanitizer.py, which INV-004 depends on, and rule_engine.py.
-        # Self-protection matters here too: neutralise tamper_detection.py and
-        # nothing else is ever checked again; neutralise db.py and the alert is
-        # never recorded.
-        security_pkg = os.path.join(config.WORKSPACE_DIR, "security")
+        # Automatically cover new security modules instead of maintaining a
+        # brittle hand-written list.
+        security_pkg = os.path.join(workspace, "security")
         try:
             for name in sorted(os.listdir(security_pkg)):
                 if name.endswith(".py"):
@@ -48,12 +50,20 @@ class TamperDetector:
                         self.immutable_files.append(path)
         except OSError as e:
             logger.error(f"Could not enumerate {security_pkg} for integrity watch: {e}")
-        
-        # Systemd service unit (if exists)
-        sysd_service = "/etc/systemd/system/kaia-policy-gate.service"
-        if os.path.exists(sysd_service):
-            self.immutable_files.append(sysd_service)
-            
+
+        # The installed service loads its signing key from /etc/kaia/secret.env;
+        # /opt/kaia/.env is deliberately removed by the installer. Watch the
+        # actual production secret and all installed Kaia unit files.
+        for path in (
+            "/etc/kaia/secret.env",
+            "/etc/systemd/system/kaia-policy-gate.service",
+            "/etc/systemd/system/kaia-lockdown.service",
+            "/etc/systemd/system/kaia-restore-blocks.service",
+        ):
+            if os.path.exists(path) and path not in self.immutable_files:
+                self.immutable_files.append(path)
+        self.immutable_files = list(dict.fromkeys(self.immutable_files))
+
         # 2. Append-only security files
         self.append_only_files = [
             config.AUDIT_LOG_PATH,
@@ -65,30 +75,46 @@ class TamperDetector:
         ]
 
     def _load_trusted_baseline(self) -> dict:
-        """Load operator-recorded hashes from a root-owned file, if present.
+        """Load the operator-approved file hashes, failing closed on corruption.
 
-        Returns {abspath: sha256}. Empty dict when no baseline exists, in which
-        case the detector falls back to trusting whatever is on disk at startup
-        (and says so loudly).
-
-        Format is `sha256sum`-compatible:  <hex>  <absolute path>
+        A missing baseline is an explicit bootstrap condition handled by start().
+        An existing but unreadable or malformed baseline must never be converted
+        into that weaker state, or an attacker could bypass trusted verification
+        by corrupting the trust record.
         """
         path = getattr(config, "TRUSTED_BASELINE_PATH", None)
         if not path or not os.path.exists(path):
             return {}
+
         trusted = {}
         try:
-            with open(path, "r") as f:
-                for line in f:
+            with open(path, "r", encoding="utf-8") as f:
+                for line_number, line in enumerate(f, start=1):
                     line = line.strip()
                     if not line or line.startswith("#"):
                         continue
                     parts = line.split(None, 1)
-                    if len(parts) == 2:
-                        trusted[os.path.abspath(parts[1].strip())] = parts[0].strip()
+                    if len(parts) != 2:
+                        raise ValueError(f"malformed entry at line {line_number}")
+                    digest, filepath = parts
+                    if not re.fullmatch(r"[0-9a-fA-F]{64}", digest):
+                        raise ValueError(f"invalid SHA-256 digest at line {line_number}")
+                    filepath = filepath.lstrip("*").strip()
+                    if not filepath or not os.path.isabs(filepath):
+                        raise ValueError(f"expected an absolute path at line {line_number}")
+                    normalized = os.path.abspath(filepath)
+                    if normalized in trusted:
+                        raise ValueError(f"duplicate path at line {line_number}")
+                    trusted[normalized] = digest.lower()
         except Exception as e:
-            logger.error(f"Could not read trusted baseline {path}: {e}")
-            return {}
+            raise RuntimeError(
+                f"Cannot trust integrity baseline {path}; refusing to start: {e}"
+            ) from e
+
+        if not trusted:
+            raise RuntimeError(
+                f"Integrity baseline {path} exists but contains no hashes; refusing to start."
+            )
         logger.info(f"Loaded {len(trusted)} trusted hashes from {path}")
         return trusted
 
@@ -106,25 +132,34 @@ class TamperDetector:
             return ""
 
     def _compute_sqlite_prefix_hash(self, db_path: str, row_count: int) -> str:
-        """
-        Hashes the logical content (not raw bytes) of the first `row_count` rows
-        by rowid. Stable across WAL checkpoints, header counter changes, and
-        VACUUM, since it only reflects committed row content.
-        """
+        """Hash a logical prefix of the SQLite ledger with unambiguous fields."""
         import sqlite3
-        h = hashlib.sha256()
+
+        if isinstance(row_count, bool) or not isinstance(row_count, int) or row_count < 0:
+            logger.error("Invalid SQLite baseline row count %r for %s", row_count, db_path)
+            return ""
+
+        digest = hashlib.sha256()
         conn = None
         try:
-            conn = sqlite3.connect(db_path, timeout=2.0)
+            # The detector only observes the ledger; it must not create or mutate
+            # the database as a side effect of checking integrity.
+            uri = Path(db_path).resolve().as_uri() + "?mode=ro"
+            conn = sqlite3.connect(uri, uri=True, timeout=2.0)
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(
+                """
                 SELECT event_id, timestamp, type, source, actor, payload_hash, disposition, session_id
                 FROM security_events
                 ORDER BY rowid ASC
                 LIMIT ?
-            """, (row_count,))
-            for row in cursor.fetchall():
-                h.update("|".join(str(c) for c in row).encode("utf-8"))
+                """,
+                (row_count,),
+            )
+            for row in cursor:
+                encoded = json.dumps(row, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+                digest.update(len(encoded).to_bytes(8, "big"))
+                digest.update(encoded)
         except Exception as e:
             logger.error(f"Error computing SQLite content hash for {db_path}: {e}")
             return ""
@@ -134,19 +169,23 @@ class TamperDetector:
                     conn.close()
             except Exception:
                 pass
-        return h.hexdigest()
+        return digest.hexdigest()
 
     def _get_sqlite_row_count(self, db_path: str) -> int:
+        """Return row count, or -1 if the ledger cannot be read."""
         import sqlite3
+
         conn = None
         try:
-            conn = sqlite3.connect(db_path, timeout=2.0)
+            uri = Path(db_path).resolve().as_uri() + "?mode=ro"
+            conn = sqlite3.connect(uri, uri=True, timeout=2.0)
             cursor = conn.cursor()
             cursor.execute("SELECT COUNT(*) FROM security_events")
-            return cursor.fetchone()[0]
+            row = cursor.fetchone()
+            return row[0] if row and isinstance(row[0], int) and not isinstance(row[0], bool) else -1
         except Exception as e:
             logger.error(f"Error counting rows in {db_path}: {e}")
-            return 0
+            return -1
         finally:
             try:
                 if conn:
@@ -155,32 +194,24 @@ class TamperDetector:
                 pass
 
     def start(self):
-        """Establish baselines and start audit thread."""
+        """Establish trusted baselines; do not start monitoring after a mismatch."""
         logger.info("Initializing tamper detection baseline hashes...")
-        
-        # Startup sanity check: verify critical files exist
+
         for filepath in self.immutable_files:
-            # .env might be missing in some test setups, check others
+            # The installer deliberately removes /opt/kaia/.env. In production,
+            # the actual signing secret comes from /etc/kaia/secret.env.
             if filepath.endswith(".env") and not os.path.exists(filepath):
                 continue
             if not os.path.exists(filepath):
-                print(f"FATAL: Critical system file missing: {filepath}", file=sys.stderr)
-                sys.exit(1)
+                raise RuntimeError(f"FATAL: Critical system file missing: {filepath}")
 
         if not getattr(config, "TAMPER_ENFORCE", True):
             logger.critical(
-                "TAMPER ENFORCEMENT IS DISABLED (KAIA_TAMPER_ENFORCE=0). Modifications "
-                "will be detected and logged but will NOT trigger emergency lockdown. "
-                "This is a security control running in monitor-only mode."
+                "TAMPER ENFORCEMENT IS DISABLED (KAIA_TAMPER_ENFORCE=0). "
+                "Modifications will be detected and logged but will NOT trigger "
+                "emergency lockdown. This is monitor-only mode."
             )
 
-        # Baseline immutable files against the TRUSTED record where one exists.
-        #
-        # Hashing whatever is on disk means a file edited while the daemon was
-        # stopped silently becomes the new baseline -- and anyone who can write a
-        # file can also restart a service, so that was a complete bypass. Where an
-        # operator-recorded hash exists we adopt it as the baseline and report the
-        # discrepancy immediately.
         trusted = self._load_trusted_baseline()
         if not trusted:
             logger.warning(
@@ -189,35 +220,74 @@ class TamperDetector:
                 "stopped CANNOT be detected. Create one with: sudo ./scripts/kaia-baseline.sh",
                 getattr(config, "TRUSTED_BASELINE_PATH", "<unset>"),
             )
+        else:
+            current_paths = {
+                os.path.abspath(path) for path in self.immutable_files if os.path.exists(path)
+            }
+            missing_hashes = sorted(current_paths - set(trusted))
+            stale_hashes = sorted(set(trusted) - current_paths)
+            if missing_hashes or stale_hashes:
+                details = []
+                if missing_hashes:
+                    details.append("unbaselined protected files: " + ", ".join(missing_hashes[:8]))
+                if stale_hashes:
+                    details.append("stale or missing protected paths: " + ", ".join(stale_hashes[:8]))
+                message = "Trusted integrity baseline coverage mismatch; refusing to start: " + "; ".join(details)
+                logger.critical(message)
+                for stale in stale_hashes:
+                    if not os.path.exists(stale):
+                        self._trigger_tamper_alert(stale, "Trusted protected file missing", "missing")
+                raise RuntimeError(message)
 
+        mismatches = []
         for filepath in self.immutable_files:
-            if os.path.exists(filepath):
-                h = self._compute_sha256(filepath)
-                expected = trusted.get(os.path.abspath(filepath))
-                if expected and expected != h:
-                    self._trigger_tamper_alert(
-                        filepath,
-                        "Startup hash does not match the trusted baseline "
-                        "(file was modified while the daemon was stopped)",
-                        h,
-                    )
-                # Adopt the trusted hash so ongoing checks measure against the
-                # recorded state, not the possibly-tampered current one.
-                self._baselines[filepath] = (expected or h, "immutable")
+            if not os.path.exists(filepath):
+                continue
+            current_hash = self._compute_sha256(filepath)
+            if not current_hash:
+                raise RuntimeError(f"Cannot hash protected file; refusing to start: {filepath}")
+            expected = trusted.get(os.path.abspath(filepath))
+            if expected and expected != current_hash:
+                self._trigger_tamper_alert(
+                    filepath,
+                    "Startup hash does not match the trusted baseline "
+                    "(file was modified while the daemon was stopped)",
+                    current_hash,
+                )
+                mismatches.append(filepath)
+            self._baselines[filepath] = (expected or current_hash, "immutable")
 
-        # Baseline append-only files (using prefix-hash technique to avoid false alarms on normal appends)
+        if mismatches:
+            raise RuntimeError(
+                "Protected files do not match trusted baseline; startup aborted: "
+                + ", ".join(mismatches[:8])
+            )
+
+        # Create the JSONL ledger before hashing it so its first record does not
+        # evade integrity monitoring when the file was absent at daemon startup.
         for filepath in self.append_only_files:
-            if os.path.exists(filepath):
+            try:
+                os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
+                fd = os.open(filepath, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o640)
+                os.close(fd)
                 size = os.path.getsize(filepath)
-                h = self._compute_sha256(filepath, limit=size)
-                self._baselines[filepath] = (h, size)
+                digest = self._compute_sha256(filepath, limit=size)
+                if not digest:
+                    raise RuntimeError("empty or unreadable prefix hash")
+                self._baselines[filepath] = (digest, size)
+            except Exception as e:
+                raise RuntimeError(f"Cannot baseline append-only ledger {filepath}: {e}") from e
 
-        # Baseline SQLite append-only files (using logical content hashing to avoid false alarms on WAL/header updates)
         for filepath in self.sqlite_append_only_files:
-            if os.path.exists(filepath):
-                row_count = self._get_sqlite_row_count(filepath)
-                h = self._compute_sqlite_prefix_hash(filepath, row_count)
-                self._baselines[filepath] = (h, ("sqlite", row_count))
+            if not os.path.exists(filepath):
+                continue
+            row_count = self._get_sqlite_row_count(filepath)
+            if row_count < 0:
+                raise RuntimeError(f"Cannot read SQLite audit ledger; refusing to start: {filepath}")
+            digest = self._compute_sqlite_prefix_hash(filepath, row_count)
+            if not digest:
+                raise RuntimeError(f"Cannot hash SQLite audit ledger; refusing to start: {filepath}")
+            self._baselines[filepath] = (digest, ("sqlite", row_count))
 
         self._thread = threading.Thread(target=self._run, daemon=True, name="tamper-detector")
         self._thread.start()
@@ -305,7 +375,14 @@ class TamperDetector:
             os.path.join(config.WORKSPACE_DIR, ".env"),
             os.path.join(config.WORKSPACE_DIR, "core", "config.py"),
             os.path.join(config.WORKSPACE_DIR, "scripts", "kaia-lockdown.sh"),
+            os.path.join(config.WORKSPACE_DIR, "scripts", "kaia-baseline.sh"),
+            os.path.join(config.WORKSPACE_DIR, "scripts", "install_services.sh"),
+            os.path.join(config.WORKSPACE_DIR, "scripts", "kaia-unlock.sh"),
+            os.path.join(config.WORKSPACE_DIR, "scripts", "kaia-rotate-ledger.sh"),
+            "/etc/kaia/secret.env",
             "/etc/systemd/system/kaia-policy-gate.service",
+            "/etc/systemd/system/kaia-lockdown.service",
+            "/etc/systemd/system/kaia-restore-blocks.service",
         }
         in_security_pkg = os.path.dirname(os.path.abspath(filepath)) == os.path.join(
             os.path.abspath(config.WORKSPACE_DIR), "security"
