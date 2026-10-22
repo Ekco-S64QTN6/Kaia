@@ -1,7 +1,7 @@
-# Kaia: Unified Architectural Specification & Implementation Blueprint (v7.5 – Final Corrected)
+# Kaia: Unified Architectural Specification & Implementation Blueprint (v7.6 — Living Specification)
 
-**Document Version:** 7.5 (Full Consolidation with Security Review Integrations and Missing Mechanics Codified)  
-**Status:** Authoritative Source of Truth – **Declarative Only, No Implementation Code**  
+**Document Version:** 7.6 (Current Architecture, Implementation Status and Verification Boundaries; audit snapshot 2026-10-22)  
+**Status:** Authoritative, living specification and roadmap — **declarative architecture plus dated implementation/verification status**  
 **Target Environment:** Arch Linux, Systemd, eBPF, Kitty Terminal  
 **Intended Reader:** Automated Coding Agents, Systems Engineers, Security Architects
 
@@ -17,7 +17,7 @@
 
 ## 0. Authoritative Source of Truth Clause
 
-This document constitutes the **absolute, unalterable constitution** of the Kaia project. It supersedes all individual design reports, legacy walkthroughs, code reviews, text transcripts, and research notes. Every subsequent modification, branch refactor, or agent action must align with the architectural constraints, system invariants, and implementation standards defined herein.
+This document is Kaia's **authoritative architectural specification and roadmap**. Its target requirements and invariants take precedence over individual design reports, legacy walkthroughs, reviews, transcripts and research notes. The implementation-status section is dated evidence about repository code and tests, not a declaration that a particular host is deployed or verified. Update this living specification when requirements or implementation change; retain obsolete source material only as clearly identified history.
 
 **The following six documents are now fully superseded and should be archived:**
 
