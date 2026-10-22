@@ -259,28 +259,50 @@ class PassiveDiscoveryEngine:
             self._log_asset(ip, mac, "Unknown", "ARP")
 
     def _parse_ipv4(self, payload: bytes, src_mac_str: str):
-        if len(payload) < 20:
+        # Validate the IPv4 header and length before interpreting transport bytes.
+        # Captured Ethernet frames can be truncated or contain non-initial fragments;
+        # neither should be mistaken for a complete UDP datagram.
+        if len(payload) < 20 or payload[0] >> 4 != 4:
             return
         version_ihl = payload[0]
         ihl = (version_ihl & 0x0F) * 4
-        if len(payload) < ihl + 8:
+        total_length = struct.unpack("!H", payload[2:4])[0]
+        if ihl < 20 or total_length < ihl or total_length > len(payload):
             return
-        protocol = payload[9]
-        src_ip = socket.inet_ntoa(payload[12:16])
+        if total_length < ihl + 8:
+            return
+        fragment_field = struct.unpack("!H", payload[6:8])[0]
+        if fragment_field & 0x1FFF:  # non-initial fragment: no UDP header at this offset
+            return
 
-        if protocol == 17:  # UDP
-            udp_hdr = payload[ihl:ihl+8]
-            sport, dport, length, checksum = struct.unpack("!HHHH", udp_hdr)
-            udp_payload = payload[ihl+8:]
-            
-            if dport == 5353:  # mDNS
-                self._parse_mdns(udp_payload, src_ip, src_mac_str)
-            elif dport == 5355:  # LLMNR
-                self._parse_llmnr(udp_payload, src_ip, src_mac_str)
-            elif dport == 1900:  # SSDP
-                self._parse_ssdp(udp_payload, src_ip, src_mac_str)
-            elif dport == 137:  # NetBIOS
-                self._parse_netbios(udp_payload, src_ip, src_mac_str)
+        protocol = payload[9]
+        if protocol != 17:  # UDP only
+            return
+        src_ip = socket.inet_ntoa(payload[12:16])
+        udp_segment = payload[ihl:total_length]
+        sport, dport, udp_length, _checksum = struct.unpack("!HHHH", udp_segment[:8])
+        if udp_length < 8 or udp_length > len(udp_segment):
+            return
+        udp_payload = udp_segment[8:udp_length]
+
+        if dport == 5353:  # mDNS queries / responses
+            self._parse_mdns(udp_payload, src_ip, src_mac_str)
+        elif dport == 5355:  # LLMNR queries / responses
+            self._parse_llmnr(udp_payload, src_ip, src_mac_str)
+        elif dport == 1900:  # SSDP announcements / search requests
+            self._parse_ssdp(udp_payload, src_ip, src_mac_str)
+
+        # NBNS requests use destination port 137, while ordinary unicast responses
+        # originate at source port 137 and target an ephemeral client port. Only
+        # response names are associated with the source asset below: a query's
+        # QNAME describes the name being requested, not the querier's hostname.
+        if sport == 137 or dport == 137:
+            self._parse_netbios(
+                udp_payload,
+                src_ip,
+                src_mac_str,
+                source_port=sport,
+            )
 
     def _parse_mdns(self, payload: bytes, ip: str, mac: str):
         name = self._parse_dns_name(payload)
@@ -305,12 +327,28 @@ class PassiveDiscoveryEngine:
         except Exception:
             pass
 
-    def _parse_netbios(self, payload: bytes, ip: str, mac: str):
-        if len(payload) >= 12 + 32 + 1 and payload[12] == 0x20:
-            encoded_name = payload[13:13+32]
-            name = self._decode_netbios_name(encoded_name)
-            if name:
-                self._log_asset(ip, mac, name, "NetBIOS")
+    def _parse_netbios(
+        self,
+        payload: bytes,
+        ip: str,
+        mac: str,
+        *,
+        source_port: int = 137,
+    ):
+        # Do not attribute the requested QNAME in a client query to the client.
+        # NetBIOS Name Service responses originate from UDP/137 and set QR=1.
+        # This deliberately handles encoded QNAME responses, not every NBNS/NBSTAT
+        # record encoding; unsupported/compressed names are ignored rather than guessed.
+        if source_port != 137 or len(payload) < 13 or not (payload[2] & 0x80):
+            return
+        if payload[12] != 0x20:  # RFC 1002 first-level encoded 16-byte NetBIOS name
+            return
+        if len(payload) < 13 + 32:
+            return
+        encoded_name = payload[13:13 + 32]
+        name = self._decode_netbios_name(encoded_name)
+        if name:
+            self._log_asset(ip, mac, name, "NetBIOS")
 
     def _parse_dns_name(self, payload: bytes, offset: int = 12) -> str:
         parts = []
@@ -332,21 +370,29 @@ class PassiveDiscoveryEngine:
             pass
         return ""
 
-    def _decode_netbios_name(self, encoded: bytes) -> str:
+    @staticmethod
+    def _decode_netbios_name(encoded: bytes) -> str:
+        """Decode the 32 A-P nibble characters representing a 16-byte NBNS name.
+
+        The sixteenth byte is the NetBIOS service suffix, not part of the host label.
+        Reject malformed first-level encodings instead of returning partial names.
+        """
+        if len(encoded) != 32:
+            return ""
         try:
-            name_bytes = bytearray()
-            for i in range(0, len(encoded), 2):
-                if i+1 >= len(encoded):
-                    break
-                c1 = encoded[i] - 0x41
-                c2 = encoded[i+1] - 0x41
-                name_bytes.append((c1 << 4) | c2)
-            name = name_bytes.decode("utf-8", "ignore").strip()
-            # NetBIOS names are padded with spaces, strip them
-            return name
-        except Exception:
-            pass
-        return ""
+            encoded = encoded.upper()
+            if any(byte < 0x41 or byte > 0x50 for byte in encoded):
+                return ""
+            decoded = bytes(
+                ((encoded[i] - 0x41) << 4) | (encoded[i + 1] - 0x41)
+                for i in range(0, 32, 2)
+            )
+            raw_name = decoded[:15]
+            if any(byte < 0x20 or byte > 0x7E for byte in raw_name):
+                return ""
+            return raw_name.decode("ascii").rstrip(" ").strip()
+        except (ValueError, UnicodeDecodeError):
+            return ""
 
     def _log_asset(self, ip: str, mac: str, hostname: str, vector: str):
         now = time.time()
