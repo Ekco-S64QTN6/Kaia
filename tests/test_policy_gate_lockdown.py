@@ -158,3 +158,34 @@ def test_restart_frequency_reservation_is_atomic_under_concurrency(tmp_path, mon
         ).fetchone()[0]
     assert count == 3
 
+def test_restart_service_denied_when_health_probe_is_missing_or_malformed(gate, monkeypatch):
+    import config
+    from security import telemetry_daemon
+    from security.host_executor import HostExecutor
+
+    monkeypatch.setattr(config, "GLOBAL_PERMISSIONS", {"restart_service"})
+    monkeypatch.setattr(config, "WORKSPACE_PERMISSIONS", {"restart_service"})
+    monkeypatch.setattr(
+        config, "SERVICE_RESTART_ALLOWLIST",
+        set(config.SERVICE_RESTART_ALLOWLIST) | {"nginx"},
+    )
+    monkeypatch.setattr(
+        telemetry_daemon, "get_systemd_unit_status",
+        lambda name: {},
+    )
+    monkeypatch.setattr(
+        HostExecutor, "execute_service_control",
+        lambda *args: pytest.fail("unknown health must not reach service restart"),
+    )
+
+    result = gate.evaluate_and_execute({
+        "action": "restart_service",
+        "service_name": "nginx",
+        "justification": "test that missing health telemetry fails closed",
+        "capability_token": generate_capability_token("restart_service", "nginx"),
+        "session_id": "unit_test",
+    })
+
+    assert result["status"] == "denied"
+    assert "cannot determine health" in result["message"].lower()
+

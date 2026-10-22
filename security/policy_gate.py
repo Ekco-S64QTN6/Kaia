@@ -616,8 +616,36 @@ class PolicyGate:
                 # Check service health status via D-Bus / telemetry
                 from security.telemetry_daemon import get_systemd_unit_status
                 status = get_systemd_unit_status(f"{req.service_name}.service")
-                
-                is_degraded = (status.get("active_state") != "active" or status.get("sub_state") != "running")
+
+                # A missing/malformed status is not evidence that the service is
+                # degraded. Fail closed rather than turning a telemetry failure
+                # into permission to restart a potentially healthy service.
+                if (
+                    not isinstance(status, dict)
+                    or not isinstance(status.get("active_state"), str)
+                    or not status.get("active_state")
+                    or not isinstance(status.get("sub_state"), str)
+                    or not status.get("sub_state")
+                ):
+                    message = (
+                        f"Cannot determine health of {req.service_name}; "
+                        "service restart denied."
+                    )
+                    self._log_audit(req, "denied", reason=message)
+                    log_security_event(
+                        "service_restart_health_unknown",
+                        "policy_gate",
+                        "kaiacord",
+                        hashlib.sha256(str(payload).encode()).hexdigest(),
+                        "blocked",
+                        session_id,
+                    )
+                    return {"status": "denied", "message": message}
+
+                is_degraded = (
+                    status["active_state"] != "active"
+                    or status["sub_state"] != "running"
+                )
 
                 # Session IDs are caller-controlled correlation metadata, not a
                 # security boundary. A "test" label must never bypass this guard.
