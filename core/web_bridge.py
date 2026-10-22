@@ -648,18 +648,30 @@ def dispatch_operator_command(cmd_line: str) -> Dict[str, Any]:
             output_lines.append(f"Audit Ledger: {config.AUDIT_LOG_PATH if HAS_CONFIG else 'storage/security/audit_ledger.json'}")
             return {"success": True, "command": raw_cmd, "lines": output_lines}
 
-        elif cmd == "block" and len(args) >= 1:
+        elif cmd == "block" and len(args) == 1:
             ip = args[0]
             token = generate_capability_token("block_ip", ip, duration_seconds=15)
-            payload = {"target_ip": ip, "protocol": "all", "session_id": "sentinel_ui"}
+            payload = {
+                "target_ip": ip,
+                "protocol": "all",
+                "port": None,
+                "justification": "operator requested firewall block",
+                "session_id": "sentinel_ui",
+            }
             approved, resp = send_policy_gate_ipc("block_ip", payload, token)
             if approved:
                 output_lines.append(f"[APPROVED] Threat IP {ip} successfully blocked.")
+                detail = resp.get("stdout", "") if isinstance(resp, dict) else ""
+                if detail:
+                    output_lines.append(detail)
                 return {"success": True, "command": raw_cmd, "lines": output_lines}
-            else:
-                msg = resp.get("message") if isinstance(resp, dict) else str(resp)
-                output_lines.append(f"[DENIED] block_ip rejected: {msg}")
-                return {"success": False, "command": raw_cmd, "lines": output_lines}
+            msg = resp.get("message") if isinstance(resp, dict) else str(resp)
+            output_lines.append(f"[DENIED] block_ip rejected: {msg}")
+            return {"success": False, "command": raw_cmd, "lines": output_lines}
+
+        elif cmd == "block":
+            output_lines.append("Usage: block <ip>")
+            return {"success": False, "command": raw_cmd, "lines": output_lines}
 
         elif cmd == "unblock" and len(args) == 1:
             ip = args[0]
