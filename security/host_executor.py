@@ -1,6 +1,19 @@
 import subprocess
 import os
-import shutil
+import pwd
+
+SYSTEM_BINARIES = {
+    "ss": "/usr/bin/ss",
+    "ip": "/usr/bin/ip",
+    "nft": "/usr/bin/nft",
+    "sudo": "/usr/bin/sudo",
+    "systemctl": "/usr/bin/systemctl",
+    "unshare": "/usr/bin/unshare",
+    "bwrap": "/usr/bin/bwrap",
+    "systemd-run": "/usr/bin/systemd-run",
+    "systemd-nspawn": "/usr/bin/systemd-nspawn",
+    "bash": "/usr/bin/bash",
+}
 import logging
 import config
 
@@ -20,7 +33,7 @@ class HostExecutor:
             # read-only display flags, with no operands or option-value flags.
             if any(not re.fullmatch(r"-[Hntulaprome46]+", arg) for arg in args):
                 return False, "", "Unsupported ss diagnostics option; only read-only display flags are allowed"
-            cmd = ["ss"] + args
+            cmd = [SYSTEM_BINARIES["ss"]] + args
         elif query_type == "ip_route":
             # Passing arbitrary arguments here would expose route mutation
             # operations such as add, del, change, replace, and flush. Keep
@@ -32,16 +45,16 @@ class HostExecutor:
             }
             if tuple(args) not in allowed_args:
                 return False, "", "Unsupported ip route diagnostics arguments; route mutations are forbidden"
-            cmd = ["ip", "route"] + args
+            cmd = [SYSTEM_BINARIES["ip"], "route"] + args
         elif query_type == "nft_list":
             if args:
                 return False, "", "nft_list does not accept arguments"
-            cmd = ["nft", "list", "ruleset"]
+            cmd = [SYSTEM_BINARIES["nft"], "list", "ruleset"]
         else:
             return False, "", "Invalid diagnostics query type"
 
         if query_type == "nft_list" and os.geteuid() != 0:
-            cmd = ["sudo"] + cmd
+            cmd = [SYSTEM_BINARIES["sudo"]] + cmd
 
         return HostExecutor._run_cmd(cmd)
 
@@ -64,7 +77,7 @@ class HostExecutor:
         table = config.NFT_BLOCK_TABLE
         chain = config.NFT_BLOCK_CHAIN
         prio = config.NFT_BLOCK_PRIORITY
-        sudo = [] if os.geteuid() == 0 else ["sudo"]
+        sudo = [] if os.geteuid() == 0 else [SYSTEM_BINARIES["sudo"]]
 
         # Write into Kaia's OWN table, not ufw's.
         #
@@ -82,20 +95,20 @@ class HostExecutor:
         # These commands must be idempotent: a table/chain already created
         # by a prior block is normal, not a failure. Without nft's -exist,
         # every block after the first fails and boot restore stops after one.
-        ensure_table = sudo + ["nft", "-exist", "add", "table", "inet", table]
+        ensure_table = sudo + [SYSTEM_BINARIES["nft"], "-exist", "add", "table", "inet", table]
         ok, _, err = HostExecutor._run_cmd(ensure_table)
         if not ok:
             return False, "", f"Failed to ensure nftables table '{table}': {err}"
 
         ensure_chain = sudo + [
-            "nft", "-exist", "add", "chain", "inet", table, chain,
+            SYSTEM_BINARIES["nft"], "-exist", "add", "chain", "inet", table, chain,
             f"{{ type filter hook input priority {prio}; policy accept; }}",
         ]
         ok, _, err = HostExecutor._run_cmd(ensure_chain)
         if not ok:
             return False, "", f"Failed to create nftables chain '{chain}': {err}"
 
-        cmd = sudo + ["nft", "add", "rule", "inet", table, chain, saddr_sel, "saddr", target_ip]
+        cmd = sudo + [SYSTEM_BINARIES["nft"], "add", "rule", "inet", table, chain, saddr_sel, "saddr", target_ip]
         if protocol in ["tcp", "udp"] and port:
             cmd += [protocol, "dport", str(port)]
         cmd += ["drop"]
@@ -109,7 +122,7 @@ class HostExecutor:
         if service_name not in config.SERVICE_RESTART_ALLOWLIST:
             return False, "", f"Service {service_name} is not in the allowlist for restarts."
 
-        cmd = ["systemctl", "restart", service_name]
+        cmd = [SYSTEM_BINARIES["systemctl"], "restart", service_name]
         if os.geteuid() != 0:
             cmd = ["sudo"] + cmd
         return HostExecutor._run_cmd(cmd)
@@ -206,11 +219,11 @@ class HostExecutor:
             cmd = [script_path]
             
         elif effective_level == "namespace":
-            cmd = ["unshare", "--user", "--map-root-user", "--fork", "--pid", "--mount-proc", "--uts", "--ipc", "--net", script_path]
+            cmd = [SYSTEM_BINARIES["unshare"], "--user", "--map-root-user", "--fork", "--pid", "--mount-proc", "--uts", "--ipc", "--net", script_path]
             
         elif effective_level == "sandbox-exec":
             cmd = [
-                "bwrap",
+                SYSTEM_BINARIES["bwrap"],
                 "--ro-bind", "/usr", "/usr",
                 "--symlink", "usr/bin", "/bin",
                 "--symlink", "usr/lib", "/lib",
@@ -228,9 +241,9 @@ class HostExecutor:
                 "/tmp/run_script.sh"
             ]
             
-        elif effective_level in ["bwrap", "auto"]:
+        elif effective_level in [SYSTEM_BINARIES["bwrap"], "auto"]:
             cmd = [
-                "bwrap",
+                SYSTEM_BINARIES["bwrap"],
                 "--ro-bind", "/usr", "/usr",
                 "--symlink", "usr/bin", "/bin",
                 "--symlink", "usr/lib", "/lib",
@@ -255,11 +268,16 @@ class HostExecutor:
         elif effective_level == "systemd-nspawn":
             machine_dir = "/var/lib/machines/kaia"
             if os.path.exists(machine_dir):
-                cmd = ["sudo", "systemd-nspawn", "-D", machine_dir, "--private-users=pick", "/bin/bash", "-c", script_path]
+                sudo_prefix = [] if os.geteuid() == 0 else [SYSTEM_BINARIES["sudo"]]
+                cmd = sudo_prefix + [
+                    SYSTEM_BINARIES["systemd-nspawn"], "-D", machine_dir,
+                    "--private-users=pick", f"--bind-ro={script_path}:/tmp/run_script.sh",
+                    SYSTEM_BINARIES["bash"], "/tmp/run_script.sh",
+                ]
             else:
                 logger.warning("systemd-nspawn machine directory not found at /var/lib/machines/kaia. Falling back to bwrap.")
                 cmd = [
-                    "bwrap",
+                    SYSTEM_BINARIES["bwrap"],
                     "--ro-bind", "/usr", "/usr",
                     "--symlink", "usr/bin", "/bin",
                     "--symlink", "usr/lib", "/lib",
@@ -284,7 +302,7 @@ class HostExecutor:
         else: # gvisor, firecracker fallbacks
             logger.warning(f"Containment primitive '{effective_level}' not fully installed on host. Falling back to bwrap.")
             cmd = [
-                "bwrap",
+                SYSTEM_BINARIES["bwrap"],
                 "--ro-bind", "/usr", "/usr",
                 "--symlink", "usr/bin", "/bin",
                 "--symlink", "usr/lib", "/lib",
@@ -332,7 +350,8 @@ class HostExecutor:
         §6.3 requires these ceilings on every script execution, so if neither
         form is available we fail closed rather than running uncontained.
         """
-        if shutil.which("systemd-run") is None:
+        systemd_run = SYSTEM_BINARIES["systemd-run"]
+        if not os.path.isfile(systemd_run) or not os.access(systemd_run, os.X_OK):
             return False, [], (
                 "Containment failure: systemd-run not found, so the cgroup "
                 "resource ceilings required by the security policy cannot be "
@@ -345,13 +364,13 @@ class HostExecutor:
             "-p", f"TasksMax={config.CGROUP_TASKS_MAX}",
             "-p", f"IOWeight={config.CGROUP_IO_WEIGHT}",
         ]
-        base = ["systemd-run", "--scope", "--collect", "--quiet"]
+        base = [systemd_run, "--scope", "--collect", "--quiet"]
 
         if os.geteuid() == 0:
             return True, base + props, ""
 
         if os.environ.get("XDG_RUNTIME_DIR") or os.environ.get("DBUS_SESSION_BUS_ADDRESS"):
-            return True, ["systemd-run", "--user", "--scope", "--collect", "--quiet"] + props, ""
+            return True, [systemd_run, "--user", "--scope", "--collect", "--quiet"] + props, ""
 
         return False, [], (
             "Containment failure: no user session bus available and not running "
@@ -362,20 +381,54 @@ class HostExecutor:
 
 
     @staticmethod
+    def _build_child_environment() -> dict:
+        """Pass only non-secret environment needed by host utilities and user scopes."""
+        try:
+            account = pwd.getpwuid(os.geteuid())
+            home, username = account.pw_dir, account.pw_name
+        except Exception:
+            home, username = "/root", "root"
+
+        child_env = {
+            "PATH": "/usr/bin:/bin",
+            "HOME": home,
+            "USER": username,
+            "LOGNAME": username,
+            "LANG": "C.UTF-8",
+            "LC_ALL": "C",
+        }
+        # A non-root interactive invocation may need these to reach its own
+        # systemd user manager. Never forward arbitrary variables (especially
+        # KAIA_CAPABILITY_TOKEN_SECRET) from the Policy Gate's environment.
+        if os.geteuid() != 0:
+            for name in ("XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"):
+                value = os.environ.get(name)
+                if value:
+                    child_env[name] = value
+        return child_env
+
+    @staticmethod
     def _run_cmd(cmd: list) -> tuple:
         try:
+            if not isinstance(cmd, list) or not cmd or not isinstance(cmd[0], str):
+                return False, "", "HostExecutor requires a non-empty argv list."
+            if not os.path.isabs(cmd[0]):
+                return False, "", (
+                    f"HostExecutor requires an absolute executable path; rejected: {cmd[0]!r}"
+                )
             logger.info(f"HostExecutor running: {' '.join(cmd)}")
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
                 check=False,
-                timeout=config.TIMEOUT_SECONDS
+                shell=False,
+                env=HostExecutor._build_child_environment(),
+                timeout=config.TIMEOUT_SECONDS,
             )
             if result.returncode == 0:
                 return True, result.stdout.strip(), result.stderr.strip()
-            else:
-                return False, result.stdout.strip(), result.stderr.strip()
+            return False, result.stdout.strip(), result.stderr.strip()
         except FileNotFoundError as e:
             return False, "", f"Command executable not found: {e}"
         except subprocess.TimeoutExpired:
