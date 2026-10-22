@@ -873,10 +873,10 @@ class KaiaWebBridge:
         resp.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
             "script-src 'self'; "
-            "style-src 'self' 'unsafe-inline'; "
+            "style-src 'self'; "
             "img-src 'self' data:; "
-            "connect-src 'self' ws://127.0.0.1:* http://127.0.0.1:*; "
-            "font-src 'self' data:;"
+            "connect-src 'self' ws://127.0.0.1:* ws://localhost:*; "
+            "font-src 'self';"
         )
         resp.headers["X-Content-Type-Options"] = "nosniff"
         resp.headers["X-Frame-Options"] = "DENY"

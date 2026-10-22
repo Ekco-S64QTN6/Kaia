@@ -60,7 +60,8 @@ document.addEventListener('DOMContentLoaded', () => {
     setText('host-name', snap.host || '--');
     const running = snap.system_security && snap.system_security.gate_running;
     setText('policy-gate-badge', running ? 'ENFORCING' : 'OFFLINE');
-    $('policy-gate-badge').style.color = running ? 'var(--green)' : 'var(--red)';
+    $('policy-gate-badge').classList.toggle('state-good', Boolean(running));
+    $('policy-gate-badge').classList.toggle('state-bad', !running);
     const tl = snap.threat_level || '--';
     setText('threat-badge-val', tl);
     $('threat-pill').className = tl === 'CRITICAL' ? 'pill alert' : tl === 'ELEVATED' ? 'pill warn' : 'pill';
@@ -107,7 +108,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const down = services.filter((s) => !s.active).length;
     setText('host-meta', down ? `${down} SERVICE${down > 1 ? 'S' : ''} DOWN` : `${services.length} SERVICES UP`);
-    $('host-meta').style.color = down ? 'var(--red)' : '';
+    $('host-meta').classList.toggle('state-bad', down > 0);
     setText('host-foot', `split-lock events ${hw.split_lock_events ?? '--'}`
       + (hw.split_lock_last_app && hw.split_lock_last_app !== 'None' ? ` (last: ${hw.split_lock_last_app})` : '')
       + ' · trends: last 60 s · process CPU as % of all cores');

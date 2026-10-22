@@ -217,21 +217,27 @@ def test_passive_discovery_decoding():
     assert dns_name == "www.google.com"
 
 
-def test_lockdown_trigger(tmp_path):
-    # Mock config base dir to temp path so it doesn't write to system folders
-    lockdown_script = tmp_path / "kaia-lockdown.sh"
-    lockdown_script.write_text("#!/bin/bash\necho 'Lockdown running'")
-    
-    with mock.patch("config.WORKSPACE_DIR", str(tmp_path)), \
-         mock.patch("subprocess.run") as mock_run:
-        # Mock subprocess.run return code to simulate systemctl failure to trigger fallback
-        mock_run.return_value = mock.Mock(returncode=1)
-        trigger_lockdown("test_tamper")
-        
-        # Verify fallback shell script execution
-        mock_run.assert_any_call(["/bin/bash", str(tmp_path / "scripts" / "kaia-lockdown.sh")], check=False)
+def test_lockdown_trigger_uses_managed_unit_then_mocked_fallback(tmp_path):
+    # Never invoke systemctl or the lockdown script on the CI host. Exercise
+    # both branches through mocked subprocess results instead.
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    lockdown_script = scripts / "kaia-lockdown.sh"
+    lockdown_script.write_text("#!/bin/bash\necho 'Lockdown running'", encoding="utf-8")
 
+    with (
+        mock.patch("config.WORKSPACE_DIR", str(tmp_path)),
+        mock.patch("security.policy_gate.log_security_event") as log_event,
+        mock.patch("security.policy_gate.subprocess.run") as mock_run,
+    ):
+        mock_run.side_effect = [mock.Mock(returncode=1), mock.Mock(returncode=0)]
+        assert trigger_lockdown("test_tamper") is True
 
+        assert mock_run.call_args_list == [
+            mock.call(["/usr/bin/systemctl", "start", "kaia-lockdown.service"], check=False, timeout=30),
+            mock.call(["/bin/bash", str(lockdown_script)], check=False, timeout=30),
+        ]
+        log_event.assert_called_once()
 def test_tamper_detector_sqlite_hash(tmp_path):
     from security.tamper_detection import TamperDetector
     import sqlite3
@@ -306,7 +312,8 @@ def test_yara_literal_escaping_preserves_data_without_injecting_rule_syntax():
     assert '\\\"' in escaped
     assert "\\\\ " in escaped or escaped.endswith("\\\\")
     assert "\\n" in escaped
-    rule = RuleEngine.compile_rule_text(None,
+    engine = object.__new__(RuleEngine)
+    rule = engine.compile_rule_text(
         "literal_escape_test",
         "Unit test",
         "Valid description with enough characters",
@@ -314,4 +321,5 @@ def test_yara_literal_escaping_preserves_data_without_injecting_rule_syntax():
         "T1234",
     )
     assert '$ioc = "' + escaped + '"' in rule
-    assert "rule fake_injected {" not in rule
+    assert "\\n rule fake_injected {" in rule
+    assert "\nrule fake_injected {" not in rule
