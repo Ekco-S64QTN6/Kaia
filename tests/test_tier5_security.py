@@ -435,3 +435,23 @@ def test_honeypot_skips_existing_fifo_without_blocking(tmp_path, monkeypatch):
         coordinator.stop()
 
     assert path.is_fifo()
+
+
+
+def test_honeypot_does_not_cleanup_when_worker_fails_to_stop(tmp_path):
+    path = tmp_path / "decoy.txt"
+    coordinator = HoneypotCoordinator()
+    assert coordinator._prepare_decoy(str(path), "known harmless decoy content")
+
+    class StuckWorker:
+        def join(self, timeout=None):
+            return None
+
+        def is_alive(self):
+            return True
+
+    coordinator.threads = [StuckWorker()]
+    coordinator.stop()
+
+    assert path.read_text() == "known harmless decoy content"
+    assert str(path) in coordinator._managed_decoys
