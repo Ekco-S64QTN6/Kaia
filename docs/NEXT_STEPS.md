@@ -45,6 +45,9 @@ What this changes:
   The daemon runs as root; running it from a checkout under `$HOME` means root
   executes code any unprivileged process can rewrite. Tamper detection can report
   that after the fact but cannot prevent it.
+- Preflights the signing secret before stopping an active Policy Gate or syncing
+  monitored files. It enables but does not start the gate; review the deployed diff,
+  create the trusted baseline, then start the service explicitly.
 - Creates `/var/lib/kaia` (`root:kaiacord`, 0750) and **migrates** the existing
   audit ledger and event database out of `storage/security/` — satisfying INV-008,
   which requires the ledger to live outside the agent's working tree.

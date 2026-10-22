@@ -235,10 +235,15 @@ sudo scripts/install_services.sh
 
 That deploys a root-owned copy to `/opt/kaia` (0644 files, 0755 dirs, root:root),
 provisions the configured state directory (default `/var/lib/kaia`), migrates any
-in-repo ledger, and installs the units. The baseline and audit/event files use the
-same `KAIA_STATE_DIR`; the baseline script reads the installed secret and state
-configuration without sourcing the deployed checkout. Re-run the installer after
-changes — the checkout is the source, `/opt/kaia` is what runs.
+in-repo ledger, and installs the units. It validates the signing secret before
+changing files and stops an active Policy Gate before syncing monitored code. The
+installer enables but does **not start** the gate automatically. Review the deployed
+diff, write the trusted baseline, then start it:
+
+    sudo /opt/kaia/scripts/kaia-baseline.sh
+    sudo systemctl start kaia-policy-gate.service
+
+The checkout is the source; `/opt/kaia` is what runs.
 
 ### Privileges
 
