@@ -70,3 +70,30 @@ def test_unmitigation_rejects_invalid_or_ambiguous_rule_scope(monkeypatch):
     ]:
         ok, _, error = HostExecutor.execute_unmitigation(target, protocol, port)
         assert not ok and error
+
+
+def test_unmitigation_fails_closed_when_nft_executable_is_missing(monkeypatch):
+    monkeypatch.setattr("os.geteuid", lambda: 0)
+    calls = []
+
+    def missing_executable(argv):
+        calls.append(argv)
+        return (
+            False, "",
+            "Command executable not found: [Errno 2] No such file or directory: '/usr/bin/nft'",
+        )
+
+    monkeypatch.setattr(HostExecutor, "_run_cmd", staticmethod(missing_executable))
+    ok, message, error = HostExecutor.execute_unmitigation("192.0.2.1")
+
+    assert not ok
+    assert "could not run" in error.lower()
+    assert "No matching" not in message
+    assert calls
+
+
+def test_unmitigation_rejects_non_string_ip_without_raising():
+    ok, _, error = HostExecutor.execute_unmitigation(None)
+
+    assert not ok
+    assert "invalid ip" in error.lower()
