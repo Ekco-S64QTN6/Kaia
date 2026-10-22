@@ -94,3 +94,12 @@ def test_installer_allows_only_verified_in_tree_dashboard_link():
     assert '"$relative" != "static/dashboard"' in script
     assert '"$target" != "../core/web/static"' in script
     assert 'find "$tree_root" -path "$tree_root/storage" -prune -o -type l -print0' in script
+
+
+
+def test_installer_does_not_precreate_or_chmod_real_world_honeypot_paths():
+    script = Path("scripts/install_services.sh").read_text()
+
+    assert 'touch /etc/api_keys.json /var/backups/credentials.txt /root/.ssh/authorized_keys.bak' not in script
+    assert 'chmod 600 /etc/api_keys.json /var/backups/credentials.txt /root/.ssh/authorized_keys.bak' not in script
+    assert "exclusive, no-follow" in script

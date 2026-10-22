@@ -265,11 +265,9 @@ for SERVICE in kaia-policy-gate kaia-lockdown kaia-restore-blocks; do
     chmod 644 "$DEST"
     echo "Installed $DEST"
 done
-# Pre-create filesystem honeypot files/folders so systemd can bind-mount them
-mkdir -p /var/backups /root/.ssh
-touch /etc/api_keys.json /var/backups/credentials.txt /root/.ssh/authorized_keys.bak
-chmod 600 /etc/api_keys.json /var/backups/credentials.txt /root/.ssh/authorized_keys.bak
-
+# Filesystem decoys are created by HoneypotCoordinator with exclusive, no-follow
+# creation only when the target path is vacant. Never touch, truncate, or chmod a
+# potentially real API-key file, backup credential file, or SSH backup.
 # Provision root-only environment files for systemd and manual recovery.
 mkdir -p /etc/kaia
 chmod 700 /etc/kaia

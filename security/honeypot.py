@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+import stat
 import socket
 import struct
 import ctypes
@@ -79,6 +80,9 @@ class HoneypotCoordinator:
             os.path.expanduser("~/.ssh/authorized_keys.bak"): '# Authorized keys backup\n'
         }
         self.decoy_hashes = {}
+        self.active_decoy_paths = []
+        # Only files exclusively created by this coordinator may be cleaned up.
+        self._managed_decoys = {}
         
         # Network namespace decoy setup
         self.ns_name = "ns_decoy"
@@ -100,58 +104,257 @@ class HoneypotCoordinator:
         except Exception as e:
             logger.warning(f"Could not load libc for netns setns call: {e}")
 
+    @staticmethod
+    def _hash_bytes(content: bytes) -> str:
+        return hashlib.sha256(content).hexdigest()
+
+    @staticmethod
+    def _read_regular_file_no_follow(path: str, max_bytes: int) -> tuple:
+        """Read a small regular file without following a final-component symlink."""
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0)
+        )
+        fd = os.open(path, flags)
+        try:
+            metadata = os.fstat(fd)
+            if not stat.S_ISREG(metadata.st_mode):
+                return None, metadata
+            chunks = bytearray()
+            while len(chunks) <= max_bytes:
+                amount = min(4096, max_bytes + 1 - len(chunks))
+                if amount <= 0:
+                    return None, metadata
+                chunk = os.read(fd, amount)
+                if not chunk:
+                    break
+                chunks.extend(chunk)
+            if len(chunks) > max_bytes:
+                return None, metadata
+            return bytes(chunks), metadata
+        finally:
+            os.close(fd)
+
+    def _prepare_decoy(self, path: str, content: str) -> bool:
+        """Create a decoy exclusively; never adopt a real file based on size alone."""
+        expected = content.encode("utf-8")
+        try:
+            # Parent paths are fixed system directories. Creating a missing parent
+            # does not alter permissions or ownership on any existing directory.
+            os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+            flags = (
+                os.O_WRONLY
+                | os.O_CREAT
+                | os.O_EXCL
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NOFOLLOW", 0)
+            )
+            fd = os.open(path, flags, 0o600)
+        except FileExistsError:
+            # A previous run may have left a decoy behind. Reuse it only when its
+            # contents exactly equal our known harmless payload; never own it for
+            # cleanup because this coordinator did not create the file.
+            try:
+                existing, metadata = self._read_regular_file_no_follow(path, len(expected))
+                if existing == expected and metadata is not None:
+                    self.decoy_hashes[path] = self._hash_bytes(existing)
+                    self.active_decoy_paths.append(path)
+                    logger.info(
+                        "Reusing verified existing decoy content at %s (not owned for cleanup).",
+                        path,
+                    )
+                    return True
+                logger.warning(
+                    "Skipping existing non-decoy file at honeypot path %s; preserving it.",
+                    path,
+                )
+            except (OSError, ValueError) as e:
+                logger.warning("Skipping existing unsafe honeypot path %s: %s", path, e)
+            return False
+        except OSError as e:
+            logger.warning("Could not create filesystem decoy %s: %s", path, e)
+            return False
+
+        created_metadata = None
+        try:
+            created_metadata = os.fstat(fd)
+            if not stat.S_ISREG(created_metadata.st_mode):
+                raise OSError("new decoy path is not a regular file")
+            offset = 0
+            while offset < len(expected):
+                written = os.write(fd, expected[offset:])
+                if written <= 0:
+                    raise OSError("short write while creating decoy")
+                offset += written
+            os.fsync(fd)
+            final_metadata = os.fstat(fd)
+            if (
+                not stat.S_ISREG(final_metadata.st_mode)
+                or (final_metadata.st_dev, final_metadata.st_ino)
+                != (created_metadata.st_dev, created_metadata.st_ino)
+            ):
+                raise OSError("decoy file identity changed during creation")
+            digest = self._hash_bytes(expected)
+            self._managed_decoys[path] = {
+                "device": final_metadata.st_dev,
+                "inode": final_metadata.st_ino,
+                "sha256": digest,
+            }
+            self.decoy_hashes[path] = digest
+            self.active_decoy_paths.append(path)
+            logger.info("Created filesystem decoy: %s", path)
+            return True
+        except Exception:
+            # This descriptor refers to a file we exclusively created. Remove it
+            # only if the pathname still names the same regular-file inode.
+            if created_metadata is not None:
+                try:
+                    current = os.lstat(path)
+                    if (
+                        stat.S_ISREG(current.st_mode)
+                        and (current.st_dev, current.st_ino)
+                        == (created_metadata.st_dev, created_metadata.st_ino)
+                    ):
+                        os.unlink(path)
+                except OSError:
+                    logger.exception("Could not remove partially-created decoy %s", path)
+            raise
+        finally:
+            os.close(fd)
+
     def start(self, ebpf_engine=None):
         logger.info("Starting Honeypot Coordinator...")
-        
-        # 1. Create file decoys
+        if any(thread.is_alive() for thread in self.threads):
+            logger.error("Honeypot workers from an earlier lifecycle are still active; refusing to start again.")
+            return False
+        self.threads.clear()
+        self.stop_event.clear()
+        self.active_decoy_paths = []
+        self.decoy_hashes = {}
+        self._managed_decoys = {}
+
+        # A real file may already occupy a proposed decoy path. Never truncate,
+        # overwrite, or register it just because it is empty or non-empty.
         for path, content in self.decoys.items():
             try:
-                # Ensure directories exist
-                os.makedirs(os.path.dirname(path), exist_ok=True)
-                if not os.path.exists(path) or os.path.getsize(path) == 0:
-                    with open(path, "w") as f:
-                        f.write(content)
-                    logger.info(f"Deployed filesystem decoy: {path}")
-                    
-                # Compute and store SHA-256
-                h = hashlib.sha256()
-                with open(path, "rb") as f:
-                    h.update(f.read())
-                self.decoy_hashes[path] = h.hexdigest()
+                self._prepare_decoy(path, content)
             except Exception as e:
-                logger.error(f"Failed to deploy honeypot file {path}: {e}")
+                logger.error("Failed to create filesystem decoy %s: %s", path, e)
 
-        # 2. Register with eBPF engine
+        # Register only exact verified decoys, never every proposed path.
         if ebpf_engine:
-            ebpf_engine.register_honeypot_paths(list(self.decoys.keys()))
-            
-            # Start eBPF openat check thread
-            t = threading.Thread(target=self._check_ebpf_honeypots, args=(ebpf_engine,), daemon=True, name="honeypot-file-check")
+            if self.active_decoy_paths:
+                ebpf_engine.register_honeypot_paths(list(self.active_decoy_paths))
+            t = threading.Thread(
+                target=self._check_ebpf_honeypots,
+                args=(ebpf_engine,),
+                daemon=True,
+                name="honeypot-file-check",
+            )
             t.start()
             self.threads.append(t)
 
-        # 3. Start namespace decoy listeners
+        # Network namespace listeners remain host-dependent. Defining port numbers
+        # alone does not provision the namespace or activate network decoys.
         if self.libc and os.path.exists(f"/var/run/netns/{self.ns_name}"):
             for port in self.decoy_ports:
-                t = threading.Thread(target=self._run_port_listener, args=(port,), daemon=True, name=f"decoy-listener-{port}")
+                t = threading.Thread(
+                    target=self._run_port_listener,
+                    args=(port,),
+                    daemon=True,
+                    name=f"decoy-listener-{port}",
+                )
                 t.start()
                 self.threads.append(t)
         else:
-            logger.warning(f"Network namespace decoy listeners disabled (namespace '{self.ns_name}' not found or libc unavailable).")
+            logger.warning(
+                "Network namespace decoy listeners disabled (namespace '%s' not found or libc unavailable).",
+                self.ns_name,
+            )
+
+    def _remove_managed_decoy_if_unchanged(self, path: str, expected: dict) -> bool:
+        """Unlink only a file this process created whose identity and bytes are intact."""
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0)
+        )
+        try:
+            fd = os.open(path, flags)
+        except FileNotFoundError:
+            return False
+        except OSError as e:
+            logger.warning("Preserving managed decoy %s; cannot safely open it: %s", path, e)
+            return False
+        try:
+            metadata = os.fstat(fd)
+            identity = (metadata.st_dev, metadata.st_ino)
+            if not stat.S_ISREG(metadata.st_mode) or identity != (
+                expected["device"], expected["inode"]
+            ):
+                logger.warning("Preserving replaced or non-regular decoy path %s.", path)
+                return False
+            chunks = bytearray()
+            max_bytes = 4096
+            while len(chunks) <= max_bytes:
+                amount = min(1024, max_bytes + 1 - len(chunks))
+                if amount <= 0:
+                    return False
+                chunk = os.read(fd, amount)
+                if not chunk:
+                    break
+                chunks.extend(chunk)
+            if len(chunks) > max_bytes or self._hash_bytes(bytes(chunks)) != expected["sha256"]:
+                logger.warning("Preserving modified decoy path %s.", path)
+                return False
+        finally:
+            os.close(fd)
+
+        # Recheck pathname identity immediately before unlink; system parent
+        # directories are root-controlled, and a replaced file is never removed.
+        try:
+            current = os.lstat(path)
+            if not stat.S_ISREG(current.st_mode) or (
+                current.st_dev, current.st_ino
+            ) != (expected["device"], expected["inode"]):
+                logger.warning("Preserving swapped decoy path %s.", path)
+                return False
+            os.unlink(path)
+            logger.info("Removed coordinator-owned decoy: %s", path)
+            return True
+        except FileNotFoundError:
+            return False
+        except OSError as e:
+            logger.warning("Could not clean up coordinator-owned decoy %s: %s", path, e)
+            return False
 
     def stop(self):
         self.stop_event.set()
-        
-        # Remove file decoys
-        for path in self.decoys.keys():
-            if os.path.exists(path):
-                try:
-                    # Truncate to empty file instead of removing, to preserve systemd mount points
-                    with open(path, "w") as f:
-                        pass
-                    logger.info(f"Cleaned up filesystem decoy (truncated): {path}")
-                except Exception as e:
-                    logger.error(f"Failed to clean up decoy file {path}: {e}")
+        # Stop consumers before cleanup to avoid racing a background reader.
+        for thread in list(self.threads):
+            if thread is not threading.current_thread():
+                thread.join(timeout=2.0)
+        still_alive = [
+            thread for thread in self.threads
+            if thread is not threading.current_thread() and thread.is_alive()
+        ]
+        if still_alive:
+            # A worker may still be reading/logging an event. Preserve all files
+            # rather than unlinking under a live consumer; a later stop can retry.
+            logger.error(
+                "Preserving managed honeypots because %d worker thread(s) did not stop.",
+                len(still_alive),
+            )
+            return
+        self.threads.clear()
+
+        for path, metadata in list(self._managed_decoys.items()):
+            self._remove_managed_decoy_if_unchanged(path, metadata)
+        self._managed_decoys.clear()
+        self.active_decoy_paths = []
 
     def get_decoy_status(self) -> dict:
         return dict(self.status)
