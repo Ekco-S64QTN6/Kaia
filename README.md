@@ -292,7 +292,10 @@ nftables rules are runtime-only. `kaia-restore-blocks.service` reconstructs the
 currently active Kaia-managed blocks from the audit ledger before the Policy Gate
 accepts new requests. Replay folds approved block_ip and unblock_ip events in
 chronological order: a successful unblock is a tombstone for the earlier rule, while
-a later approved re-block restores it. Malformed records are skipped and logged.
+a later approved re-block restores it. Active-rule memory is bounded to the newest
+configured entries (default 500, maximum 10,000), reads are capped at 16 KiB per
+record, and symlinked ledgers are rejected. Malformed or oversized records are skipped
+and logged; the ledger remains append-only and its total growth needs separate monitoring.
 This behavior is covered by ledger tests, but boot-time replay and the live nftables
 path still need verification on the target host.
 
