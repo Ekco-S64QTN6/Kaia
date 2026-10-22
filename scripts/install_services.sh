@@ -175,10 +175,16 @@ if [ -L "$legacy_fim_db" ]; then
     exit 1
 fi
 if [ -f "$legacy_fim_db" ] && [ ! -e "$fim_db_destination" ]; then
-    cp -a "$legacy_fim_db" "$STATE_DIR/fim_audit.db"
-    chown root:kaiacord "$STATE_DIR/fim_audit.db"
-    chmod 640 "$STATE_DIR/fim_audit.db"
+    cp -- "$legacy_fim_db" "$fim_db_destination"
     echo "    migrated legacy FIM history ($(stat -c%s "$legacy_fim_db") bytes)"
+fi
+if [ -L "$fim_db_destination" ] || { [ -e "$fim_db_destination" ] && [ ! -f "$fim_db_destination" ]; }; then
+    echo "ERROR: FIM DB is not a regular file: $fim_db_destination" >&2
+    exit 1
+fi
+if [ -f "$fim_db_destination" ]; then
+    chown root:kaiacord "$fim_db_destination"
+    chmod 640 "$fim_db_destination"
 fi
 
 for SERVICE in kaia-policy-gate kaia-lockdown kaia-restore-blocks; do
