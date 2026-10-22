@@ -139,7 +139,7 @@ class HostExecutor:
         try:
             address = ipaddress.ip_address(target_ip)
             target_ip = address.compressed
-        except ValueError:
+        except (ValueError, TypeError):
             return False, "", f"Invalid IP address format: {target_ip}"
 
         if protocol not in ("all", "tcp", "udp"):
@@ -173,6 +173,11 @@ class HostExecutor:
             )
             if not ok:
                 error_text = (stderr or stdout).lower()
+                # _run_cmd reports a missing executable explicitly. Do not
+                # confuse that with nft successfully inspecting an absent
+                # Kaia table/chain; only the latter is idempotent success.
+                if "command executable not found:" in error_text:
+                    return False, "", f"Required nftables executable could not run: {stderr or stdout}"
                 if any(marker in error_text for marker in (
                     "no such file or directory", "does not exist", "no such table", "no such chain"
                 )):

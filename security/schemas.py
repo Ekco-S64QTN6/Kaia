@@ -23,7 +23,7 @@ class MitigationRequest(BaseModel):
     action: Literal["block_ip"] = "block_ip"
     target_ip: str  # Store as string for easy cleaning/validation
     protocol: Literal["tcp", "udp", "all"] = "all"
-    port: Optional[int] = Field(default=None, ge=1, le=65535)
+    port: Optional[int] = Field(default=None, strict=True, ge=1, le=65535)
     justification: str
     capability_token: str
     session_id: str
@@ -50,7 +50,7 @@ class UnblockRequest(BaseModel):
     action: Literal["unblock_ip"] = "unblock_ip"
     target_ip: str
     protocol: Literal["tcp", "udp", "all"] = "all"
-    port: Optional[int] = Field(default=None, ge=1, le=65535)
+    port: Optional[int] = Field(default=None, strict=True, ge=1, le=65535)
     justification: str
     capability_token: str
     session_id: str
