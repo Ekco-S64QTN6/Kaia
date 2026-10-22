@@ -52,6 +52,8 @@ What this changes:
   0750) and **migrates** existing audit/event data out of the checkout. Custom state
   paths must be below `/var/lib`, `/srv`, or `/mnt`; deploy paths must be below `/opt`.
   The installer rejects paths overlapping the source checkout or each other.
+- Refuses symlinked or non-regular legacy runtime files during migration and normalizes
+  existing ledger/DB files to `root:kaiacord` mode `0640`.
 - Installs `kaia-policy-gate`, `kaia-lockdown` and the new
   `kaia-restore-blocks` units, all pointing at `/opt/kaia`.
 - Aborts if `KAIA_CAPABILITY_TOKEN_SECRET` is missing, empty, or set to the value
