@@ -21,6 +21,7 @@ import time
 import json
 import uuid
 import socket
+import stat
 import asyncio
 import logging
 import argparse
@@ -560,10 +561,32 @@ def serialize_snapshot(
 
 # ==================== POLICY GATE COMMAND DISPATCHER ====================
 
+def _is_trusted_policy_gate_fallback_socket(sock_path: str) -> bool:
+    """Accept a fallback only inside a current-user-owned private directory."""
+    try:
+        parent = os.path.dirname(os.path.abspath(sock_path))
+        directory_stat = os.lstat(parent)
+        socket_stat = os.lstat(sock_path)
+    except OSError:
+        return False
+
+    directory_mode = stat.S_IMODE(directory_stat.st_mode)
+    return (
+        stat.S_ISDIR(directory_stat.st_mode)
+        and directory_stat.st_uid == os.geteuid()
+        and not (directory_mode & 0o077)
+        and (directory_mode & 0o300) == 0o300
+        and stat.S_ISSOCK(socket_stat.st_mode)
+        and socket_stat.st_uid == os.geteuid()
+        and socket_stat.st_nlink == 1
+    )
+
+
 def send_policy_gate_ipc(action: str, payload: Dict[str, Any], cap_token: Optional[str] = None) -> Tuple[bool, Any]:
     """
     Length-framed IPC client communicating with Policy Gate over Unix Domain Socket.
-    Fail-closed on socket or deserialization error.
+    The production socket is preferred; a fallback is accepted only in a private
+    per-user directory and only when it is a socket owned by the current user.
     """
     req_id = str(uuid.uuid4())
     nested = {
@@ -573,14 +596,19 @@ def send_policy_gate_ipc(action: str, payload: Dict[str, Any], cap_token: Option
         "capability_token": cap_token,
     }
 
-    sockets_to_try = []
+    fallback_default = os.path.join(
+        "/tmp", f"kaia-policy-gate-{os.getuid()}", "policy_gate.sock"
+    )
     if HAS_CONFIG:
         sockets_to_try = [config.POLICY_GATE_SOCKET, config.POLICY_GATE_SOCKET_FALLBACK]
     else:
-        sockets_to_try = ["/run/kaiacord/policy_gate.sock", "/tmp/policy_gate.sock"]
+        sockets_to_try = ["/run/kaiacord/policy_gate.sock", fallback_default]
 
     last_error = "Policy Gate socket unavailable"
-    for sock_path in sockets_to_try:
+    for index, sock_path in enumerate(sockets_to_try):
+        if index > 0 and not _is_trusted_policy_gate_fallback_socket(sock_path):
+            last_error = "Untrusted or unavailable fallback socket path"
+            continue
         if not os.path.exists(sock_path):
             continue
         try:

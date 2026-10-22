@@ -7,6 +7,7 @@ import hashlib
 import re
 import threading
 import subprocess
+import stat
 from datetime import datetime, UTC, timedelta
 from pydantic import ValidationError
 
@@ -185,10 +186,41 @@ class PolicyGate:
         try:
             os.makedirs(socket_dir, exist_ok=True)
         except PermissionError:
-            logger.warning(f"Permission denied to create directory {socket_dir}. Falling back to tmp socket.")
+            # The production daemon is privileged. It must never move its IPC
+            # endpoint into shared /tmp when the runtime directory is unhealthy.
+            if os.geteuid() == 0:
+                logger.critical(
+                    "Permission denied for %s; refusing to expose the root Policy Gate "
+                    "through a temporary fallback socket.",
+                    socket_dir,
+                )
+                self.is_running = False
+                return
+
             self.socket_path = config.POLICY_GATE_SOCKET_FALLBACK
             socket_dir = os.path.dirname(self.socket_path)
-            os.makedirs(socket_dir, exist_ok=True)
+            try:
+                os.makedirs(socket_dir, mode=0o700, exist_ok=True)
+                directory_stat = os.lstat(socket_dir)
+                directory_mode = stat.S_IMODE(directory_stat.st_mode)
+                if (
+                    not stat.S_ISDIR(directory_stat.st_mode)
+                    or directory_stat.st_uid != os.geteuid()
+                    or directory_mode & 0o077
+                    or directory_mode & 0o300 != 0o300
+                ):
+                    raise PermissionError(
+                        "fallback socket directory must be owned by the current user "
+                        "and private (0700)"
+                    )
+            except OSError as e:
+                logger.critical(
+                    "Cannot safely prepare the per-user Policy Gate fallback directory %s: %s",
+                    socket_dir,
+                    e,
+                )
+                self.is_running = False
+                return
 
         # Remove existing socket file if present
         if os.path.exists(self.socket_path):
