@@ -441,24 +441,3 @@ class PassiveDiscoveryEngine:
             except Exception:
                 pass
 
-
-        from security import threat_intel
-        try:
-            shodan = threat_intel.lookup_internetdb(ip)
-            tags = shodan.get("tags", [])
-            if tags:
-                tags_str = ",".join(tags)
-                conn = sqlite3.connect(config.ASSETS_DB_PATH)
-                cursor = conn.cursor()
-                # Append tags safely without duplicate appending
-                cursor.execute("SELECT hostname FROM assets WHERE ip = ? AND mac = ?", (ip, mac))
-                row = cursor.fetchone()
-                if row:
-                    curr_name = row[0]
-                    if "tags:" not in curr_name:
-                        new_name = f"{curr_name} (tags:{tags_str})"
-                        cursor.execute("UPDATE assets SET hostname = ? WHERE ip = ? AND mac = ?", (new_name, ip, mac))
-                conn.commit()
-                conn.close()
-        except Exception:
-            pass
