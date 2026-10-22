@@ -113,3 +113,15 @@ def test_missing_trusted_protected_file_alerts_before_startup_aborts(tmp_path, m
 
     assert events and events[0]["event_type"] == "tamper_detected"
     assert lockdowns
+
+
+def test_system_mode_refuses_to_bootstrap_a_missing_trusted_baseline(tmp_path, monkeypatch):
+    from security import tamper_detection as td
+
+    baseline = tmp_path / "missing-baseline.sha256"
+    monkeypatch.setattr(config, "TRUSTED_BASELINE_PATH", str(baseline))
+    monkeypatch.setattr(config, "STATE_DIR_IS_SYSTEM", True)
+    detector = td.TamperDetector()
+
+    with pytest.raises(RuntimeError, match="Trusted integrity baseline is missing"):
+        detector.start()
