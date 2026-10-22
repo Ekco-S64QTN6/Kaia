@@ -19,7 +19,14 @@
 #
 # Exit: 0 written, 1 error
 # ============================================================
-set -uo pipefail
+set -euo pipefail
+
+# Never leave a partial trust record behind if enumeration, hashing or writing fails.
+tmp=""
+cleanup() {
+    if [ -n "$tmp" ] && [ -e "$tmp" ]; then rm -f -- "$tmp"; fi
+}
+trap cleanup EXIT
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[1;36m'; NC='\033[0m'
 
@@ -57,26 +64,26 @@ if [ -z "${KAIA_CAPABILITY_TOKEN_SECRET:-}" ]; then
     export KAIA_CAPABILITY_TOKEN_SECRET="$secret"
 fi
 
-# Manual invocation after installation must use the same state directory as the
-# systemd units. install_services.sh writes a validated, root-owned state.env.
-if [ -z "${KAIA_STATE_DIR:-}" ] && [ -r /etc/kaia/state.env ]; then
+# A root-owned installer-generated state.env is authoritative for manual runs;
+# a caller's inherited environment must not redirect a privileged chown/chmod.
+if [ -r /etc/kaia/state.env ]; then
     state_line="$(grep -E "^KAIA_STATE_DIR=/" /etc/kaia/state.env | head -n 1 || true)"
     state_value="$(printf "%s" "$state_line" | cut -d= -f2-)"
     case "$state_value" in
         /*) ;;
-        *) state_value="" ;;
+        *) echo "ERROR: invalid KAIA_STATE_DIR in /etc/kaia/state.env." >&2; exit 1 ;;
     esac
     case "$state_value" in
-        *[!A-Za-z0-9_./-]*) state_value="" ;;
+        *[!A-Za-z0-9_./-]*) echo "ERROR: invalid characters in installed KAIA_STATE_DIR." >&2; exit 1 ;;
     esac
-    if [ -n "$state_value" ]; then
-        export KAIA_STATE_DIR="$state_value"
-    fi
+    export KAIA_STATE_DIR="$state_value"
 fi
-if [ -z "${KAIA_STATE_DIR:-}" ]; then
-    KAIA_STATE_DIR="/var/lib/kaia"
-fi
-STATE_DIR="$KAIA_STATE_DIR"
+KAIA_STATE_DIR="${KAIA_STATE_DIR:-/var/lib/kaia}"
+STATE_DIR="$(realpath -m -- "$KAIA_STATE_DIR")"
+case "$STATE_DIR" in
+    /var/lib/*|/srv/*|/mnt/*) ;;
+    *) echo "ERROR: KAIA_STATE_DIR must be below /var/lib, /srv, or /mnt." >&2; exit 1 ;;
+esac
 BASELINE="${STATE_DIR}/baseline.sha256"
 
 echo -e "${CYAN}═══════════════════════════════════════${NC}"
@@ -112,9 +119,18 @@ if [ "${#FILES[@]}" -eq 0 ]; then
 fi
 
 echo "  Hashing ${#FILES[@]} protected files..."
-mkdir -p "$STATE_DIR" && chmod 700 "$STATE_DIR"
+mkdir -p "$STATE_DIR"
+# Keep the installer contract: group-readable operator data under root:kaiacord 0750.
+# The baseline file itself is root:root 0600; the directory need not be 0700.
+if getent group kaiacord >/dev/null; then
+    chown root:kaiacord "$STATE_DIR"
+    chmod 750 "$STATE_DIR"
+else
+    echo -e "${RED}Required group 'kaiacord' is missing; run install_services.sh first.${NC}" >&2
+    exit 1
+fi
 
-tmp="$(mktemp "${STATE_DIR}/.baseline.XXXXXX")" || exit 1
+tmp="$(mktemp "${STATE_DIR}/.baseline.XXXXXX")"
 {
     echo "# Kaia trusted integrity baseline"
     echo "# Generated $(date -Iseconds) by $(logname 2>/dev/null || echo "uid=$EUID")"
@@ -136,9 +152,10 @@ if [ -f "$BASELINE" ]; then
     fi
 fi
 
-mv "$tmp" "$BASELINE"
-chmod 600 "$BASELINE"
-chown root:root "$BASELINE" 2>/dev/null || true
+chmod 600 "$tmp"
+chown root:root "$tmp"
+mv -f -- "$tmp" "$BASELINE"
+tmp=""
 
 echo
 echo -e "  ${GREEN}Baseline written: ${BASELINE}${NC}"
