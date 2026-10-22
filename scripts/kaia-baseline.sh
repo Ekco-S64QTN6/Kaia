@@ -110,9 +110,20 @@ if ! (
     cd "$PROJECT_DIR" && PYTHONPATH="${PROJECT_DIR}:${PROJECT_DIR}/core" "$PY" - <<'PYEOF'
 from security.tamper_detection import TamperDetector
 import os
+import stat
+
+# The installed checkout deliberately has no .env. That one absence is valid;
+# every other listed protected path must exist as a regular, non-symlink file.
 for f in sorted(TamperDetector().immutable_files):
-    if os.path.exists(f):
-        print(f)
+    try:
+        metadata = os.lstat(f)
+    except FileNotFoundError:
+        if os.path.basename(f) == ".env":
+            continue
+        raise RuntimeError(f"Missing protected file in integrity watchlist: {f}")
+    if not stat.S_ISREG(metadata.st_mode):
+        raise RuntimeError(f"Protected watchlist path is not a regular file: {f}")
+    print(os.path.abspath(f))
 PYEOF
 ) > "$files_tmp"; then
     echo -e "${RED}Could not enumerate protected files. Refusing to write a new baseline.${NC}" >&2
