@@ -1,13 +1,8 @@
 # Pending Setup — commands to run
 
-Work completed 2026-09-08 that needs privileged steps to take effect. Everything
-here needs `sudo`; none of it has been applied yet. Safe to leave for later — the
-system runs fine in its current state, it just isn't running the hardened
-configuration yet.
+This checklist records deployment findings last documented on **2026-09-08**. Most steps require `sudo`. Its statements about active services, privileges and installed units are historical observations, not a live host probe. Verify the current host before running commands or assuming a service is in the recorded state.
 
-**Current state:** the Policy Gate is running from the developer checkout at
-`~/github/Kaia` with `CAP_SYS_ADMIN` and `CAP_DAC_OVERRIDE`. The code and units
-for the hardened setup are committed but not installed.
+**Last recorded state (2026-09-08):** the Policy Gate was running from the developer checkout at `~/github/Kaia` with `CAP_SYS_ADMIN` and `CAP_DAC_OVERRIDE`; the hardened deployment was committed but not installed. Re-check `systemctl status kaia-policy-gate`, the unit's `WorkingDirectory` / `ExecStart`, and `KAIA_STATE_DIR` before following this checklist.
 
 ---
 
