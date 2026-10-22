@@ -109,3 +109,52 @@ def test_restart_healthy_service_denied_even_with_test_named_session(gate, monke
     assert result["status"] == "denied"
     assert "healthy" in result["message"].lower()
     assert executed == []
+
+def test_restart_frequency_check_fails_closed_when_database_is_unavailable(tmp_path, monkeypatch):
+    import config
+
+    monkeypatch.setattr(
+        config, "SECURITY_DB_PATH", str(tmp_path / "missing-parent" / "events.db")
+    )
+    gate = PolicyGate()
+
+    reserved, limit_exceeded, message = gate._reserve_service_restart(
+        "nginx", "unit-test", {"action": "restart_service"}
+    )
+
+    assert reserved is False
+    assert limit_exceeded is False
+    assert "denied" in message.lower()
+
+
+def test_restart_frequency_reservation_is_atomic_under_concurrency(tmp_path, monkeypatch):
+    import sqlite3
+    from concurrent.futures import ThreadPoolExecutor
+
+    import config
+    from security.db import initialize_db
+
+    db_path = tmp_path / "events.db"
+    monkeypatch.setattr(config, "SECURITY_DB_PATH", str(db_path))
+    monkeypatch.setattr(config, "RESTART_MAX_FREQUENCY_COUNT", 3)
+    monkeypatch.setattr(config, "RESTART_MAX_FREQUENCY_WINDOW_SECONDS", 300)
+    initialize_db()
+    gate = PolicyGate()
+
+    def reserve(index):
+        return gate._reserve_service_restart(
+            "nginx", f"session-{index}", {"action": "restart_service", "index": index}
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(reserve, range(8)))
+
+    assert sum(1 for reserved, _, _ in results if reserved) == 3
+    assert sum(1 for reserved, exceeded, _ in results if exceeded) == 5
+
+    with sqlite3.connect(db_path) as conn:
+        count = conn.execute(
+            "SELECT COUNT(*) FROM security_events WHERE type = 'service_restart_event'"
+        ).fetchone()[0]
+    assert count == 3
+
