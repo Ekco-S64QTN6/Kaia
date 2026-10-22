@@ -201,6 +201,14 @@ class TamperDetector:
         # previously baselined critical file is itself recorded as tampering,
         # rather than merely aborting startup without an alert.
         trusted = self._load_trusted_baseline()
+        baseline_path = getattr(config, "TRUSTED_BASELINE_PATH", None)
+        if not trusted and getattr(config, "STATE_DIR_IS_SYSTEM", False):
+            raise RuntimeError(
+                "Trusted integrity baseline is missing or unavailable in system mode "
+                f"({baseline_path}); refusing to start. Review the deployed files, "
+                "create the baseline with scripts/kaia-baseline.sh, then start the Policy Gate."
+            )
+
         for filepath in self.immutable_files:
             # The installer deliberately removes /opt/kaia/.env. In production,
             # the actual signing secret comes from /etc/kaia/secret.env.
@@ -221,11 +229,13 @@ class TamperDetector:
             )
 
         if not trusted:
+            # Development-only bootstrap. System mode refuses startup above because
+            # reconstructing trust from the current disk would erase evidence of
+            # edits made while the privileged service was stopped.
             logger.warning(
-                "No trusted integrity baseline at %s -- falling back to hashing the "
-                "current on-disk state. Modifications made while this daemon was "
-                "stopped CANNOT be detected. Create one with: sudo ./scripts/kaia-baseline.sh",
-                getattr(config, "TRUSTED_BASELINE_PATH", "<unset>"),
+                "No trusted integrity baseline at %s -- development bootstrap only: "
+                "modifications made while stopped cannot be detected.",
+                baseline_path,
             )
         else:
             current_paths = {

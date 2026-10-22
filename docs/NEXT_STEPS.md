@@ -61,7 +61,7 @@ Re-run the installer after changes.
 
 ---
 
-## 3. Baseline and start
+## 3. Review the deployed tree, record a trusted baseline, then start
 
 ```bash
 sudo /opt/kaia/scripts/kaia-baseline.sh
@@ -69,10 +69,8 @@ sudo systemctl start kaia-policy-gate
 systemctl status kaia-policy-gate --no-pager -n 15
 ```
 
-The baseline records SHA-256 hashes of every protected file to root-owned
-`/var/lib/kaia/baseline.sha256`. Without it, tamper detection hashes whatever is on
-disk at startup — so a file edited while the daemon was stopped simply *becomes* the
-baseline and is never reported.
+System mode refuses to start without a valid baseline. Review the deployed tree and expected diff first; never baseline a suspected compromise. The baseline records SHA-256 hashes of every protected file to root-owned
+`<KAIA_STATE_DIR>/baseline.sha256` (default: `/var/lib/kaia/baseline.sha256`). In unprivileged development mode only, a missing baseline permits a weaker current-disk bootstrap; edits made while stopped then cannot be detected.
 
 **Run the baseline only from a state you have reviewed.** Baselining a compromise
 makes the compromise the reference.
@@ -152,6 +150,6 @@ A reboot also clears any lockdown: nftables rules are runtime-only.
 - **Passive discovery has limited NBNS coverage.** A parser now handles first-level encoded names in responses from UDP port 137, with packet-level tests. Query names are not attributed to the querier. NBSTAT, compressed/alternate name forms and target-network validation remain open.
 - **Supply-chain monitoring is a first increment.** Completed pacman transactions are recorded, but AUR build/repository change tracking and dependency/signature attestation remain open.
 - **Tier 5 systems not yet implemented:** process/network/file behavioral baselines; alert-confidence scoring; secrets-exposure scanning; backup existence, recency and restorability monitoring; independent service/data-freshness supervision; expanded GeoLite2/CVE/passive-DNS/historical threat-intelligence stores and DuckDB analysis.
-- **Target-host acceptance tests remain required.** Verify the installed unit and trusted baseline, fanotify/BCC behavior, real block/unblock, UFW reload survival and two-step block/unblock replay across reboot. The 2026-09-08 setup notes above are historical, not a live system probe.
+- **Target-host acceptance tests remain required.** Verify the installed unit and trusted baseline, fanotify/BCC behavior, real block/unblock, UFW reload survival and two-step block/unblock replay across reboot. The 2026-09-08 setup notes above are historical, not a live system probe. In system mode, a missing baseline is a startup error rather than a weaker automatic bootstrap.
 - **Credential history:** the old KAIA_CAPABILITY_TOKEN_SECRET value remains in public Git history, though it was rotated on 2026-09-08 and the installer rejects it. Rotation is the mitigation; deleting history cannot make the published value secret again.
 - **Backup-drive note:** the last handoff mentioned pending sectors on sdb; re-check the device independently rather than treating that old note as current.
