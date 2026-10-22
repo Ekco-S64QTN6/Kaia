@@ -152,3 +152,14 @@ def test_baseline_script_propagates_watchlist_enumeration_failure():
     assert 'mapfile -t FILES < "$files_tmp"' in script
     assert "mapfile -t FILES < <(" not in script
     assert 'if [ -n "$files_tmp" ] && [ -e "$files_tmp" ]; then rm -f -- "$files_tmp"; fi' in script
+
+
+
+def test_baseline_script_refuses_missing_or_nonregular_watchlist_paths():
+    script = open("scripts/kaia-baseline.sh", encoding="utf-8").read()
+
+    assert "metadata = os.lstat(f)" in script
+    assert 'if os.path.basename(f) == ".env":' in script
+    assert "Missing protected file in integrity watchlist" in script
+    assert "Protected watchlist path is not a regular file" in script
+    assert "if os.path.exists(f):" not in script
