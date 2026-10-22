@@ -745,7 +745,7 @@ def dispatch_operator_command(cmd_line: str) -> Dict[str, Any]:
                 return {"success": False, "command": raw_cmd, "lines": output_lines}
 
         elif cmd == "show" and len(args) >= 2 and args[0] == "fim" and args[1] == "alerts":
-            fim_db_path = "/var/lib/secdaemon/fim_audit.db"
+            fim_db_path = config.FIM_DB_PATH
             if os.path.exists(fim_db_path):
                 import sqlite3
                 conn = sqlite3.connect(fim_db_path, timeout=1.0)
@@ -766,7 +766,7 @@ def dispatch_operator_command(cmd_line: str) -> Dict[str, Any]:
                     output_lines.append("No FIM integrity alerts recorded.")
                 return {"success": True, "command": raw_cmd, "lines": output_lines}
             else:
-                output_lines.append("FIM audit database (/var/lib/secdaemon/fim_audit.db) not found.")
+                output_lines.append(f"FIM audit database ({fim_db_path}) not found.")
                 return {"success": False, "command": raw_cmd, "lines": output_lines}
 
         elif cmd == "check" and len(args) >= 2 and args[0] == "threat":
