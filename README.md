@@ -151,8 +151,14 @@ export KAIA_DB_USER="kaiauser"
 export KAIA_DB_PASS="your_secure_password"
 export KAIA_DB_HOST="localhost"
 export KAIA_DB_NAME="kaiadb"
-export KAIA_CAPABILITY_TOKEN_SECRET="your_signing_secret_key"
+# Generate 32 random bytes (64 hex characters): openssl rand -hex 32
+# Paste that command's output verbatim in place of the placeholder below.
+export KAIA_CAPABILITY_TOKEN_SECRET="REPLACE_WITH_64_HEX_CHARACTERS_FROM_openssl_rand_-hex_32"
 ```
+
+The installer rejects a missing key, the historically leaked key, and anything other
+than exactly 64 hexadecimal characters. Do not use the illustrative placeholder as a
+real signing secret.
 
 ### 3. Virtual Environment & Dependencies
 ```bash
