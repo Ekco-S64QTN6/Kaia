@@ -113,3 +113,35 @@ def test_state_write_atomically_replaces_hardlink_without_changing_external_file
     assert target.read_text() == "replacement content"
     assert external.read_text() == "shared original"
     assert target.stat().st_ino != external.stat().st_ino
+
+
+
+def test_root_state_write_refuses_untrusted_workspace_ownership(tmp_path, monkeypatch):
+    workspace = tmp_path / "user-owned-workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(config, "WORKSPACE_DIR", str(workspace))
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+
+    target = workspace / "notes.txt"
+    ok, _, err = HostExecutor.execute_state_modification(str(target), "must not write")
+
+    assert ok is False
+    assert "root-owned workspace" in err
+    assert not target.exists()
+
+
+def test_root_state_write_refuses_group_or_world_writable_parent(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    public = workspace / "public"
+    public.mkdir(mode=0o777)
+    public.chmod(0o777)
+    monkeypatch.setattr(config, "WORKSPACE_DIR", str(workspace))
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+
+    target = public / "notes.txt"
+    ok, _, err = HostExecutor.execute_state_modification(str(target), "must not write")
+
+    assert ok is False
+    assert "non-root-controlled parent directory" in err
+    assert not target.exists()
