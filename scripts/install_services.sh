@@ -141,11 +141,24 @@ chmod 750 "$STATE_DIR/threat_intel"
 # Migrate any existing in-repo ledger/database exactly once.
 for f in audit_ledger.json security_events.db; do
     src="$KAIA_PROJECT_DIR/storage/security/$f"
-    if [ -f "$src" ] && [ ! -f "$STATE_DIR/$f" ]; then
-        cp -a "$src" "$STATE_DIR/$f"
-        chown root:kaiacord "$STATE_DIR/$f"
-        chmod 640 "$STATE_DIR/$f"
+    dst="$STATE_DIR/$f"
+    # Never follow a symlink while running as root; it could redirect ownership changes.
+    if [ -L "$src" ]; then
+        echo "ERROR: refusing to migrate symlinked runtime data: $src" >&2
+        exit 1
+    fi
+    if [ -L "$dst" ] || { [ -e "$dst" ] && [ ! -f "$dst" ]; }; then
+        echo "ERROR: runtime data destination is not a regular file: $dst" >&2
+        exit 1
+    fi
+    if [ -f "$src" ] && [ ! -e "$dst" ]; then
+        cp -- "$src" "$dst"
+        chown root:kaiacord "$dst"
+        chmod 640 "$dst"
         echo "    migrated $f ($(stat -c%s "$src") bytes)"
+    elif [ -f "$dst" ]; then
+        chown root:kaiacord "$dst"
+        chmod 640 "$dst"
     fi
 done
 
