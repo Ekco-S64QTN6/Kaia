@@ -213,7 +213,7 @@ class PolicyGate:
                     timestamp,
                     "service_restart_event",
                     "policy_gate",
-                    service_name[:128],
+                    "kaiacord",
                     payload_hash,
                     "approved",
                     str(session_id)[:128],
