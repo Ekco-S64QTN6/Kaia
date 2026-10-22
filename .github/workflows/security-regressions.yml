@@ -50,6 +50,7 @@ jobs:
             tests/test_lockdown_script_guards.py
             tests/test_mitigation_idempotent.py
             tests/test_network_discovery_resource_bounds.py
+            tests/test_network_discovery_netbios.py
             tests/test_negative_security.py
             tests/test_policy_gate_ipc.py
             tests/test_policy_gate_lockdown.py
