@@ -106,7 +106,7 @@ The following code paths were present in the reviewed source as of 2026-10-22. T
 - [x] `sys_enter_unlinkat` eBPF events are consumed and exposed in the syscall waterfall as attempts
 - [x] YARA generation escapes string literals; sandbox validation fails closed when prerequisites are missing
 - [x] Passive pacman transaction monitor for completed package operations, with persistent cursor and rotation handling
-- [x] Strict CSP, Host/Origin loopback authority/scheme/effective-port validation, and GitHub Actions regression workflow (latest recorded main run: 176 passed)
+- [x] Strict CSP, Host/Origin loopback authority/scheme/effective-port validation, and GitHub Actions regression workflow (latest verified main run: 182 passed ([run](https://github.com/Ekco-S64QTN6/Kaia/actions/runs/39829025529)))
 - [x] Trusted baseline via `scripts/kaia-baseline.sh` -> `/var/lib/kaia/baseline.sha256`
 
 ---

@@ -1,6 +1,6 @@
 # Documentation Map and Source of Truth
 
-**Last reconciled:** 2026-10-22  
+**Last reconciled:** 2026-10-22 (regression status refreshed after PR #45)  
 **Repository:** `Ekco-S64QTN6/Kaia`
 
 This page defines which documents are authoritative and how to interpret implementation claims.

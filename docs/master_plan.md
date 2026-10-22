@@ -684,7 +684,7 @@ This is the current repository status as of the audit date. It describes impleme
 - [x] Loopback-only Web HUD, telemetry WebSocket, interactive command console, strict self-hosted CSP, Host/Origin loopback checks for authority, scheme and effective port, and Policy Gate command dispatch. Host authority must match the actual local listener, and commands validate origin before body parsing. Command results currently arrive as completed responses, not incremental streaming.
 - [x] InternetDB IP validation, process-local serialized API requests and negative caching for authoritative HTTP 404 results, alongside existing IP reputation/CVE lookup functions.
 - [x] Passive pacman transaction monitoring for installed/upgraded/downgraded/reinstalled/removed packages after successful ALPM transaction completion. This is not package-signature verification or full AUR/repository dependency attestation.
-- [x] GitHub Actions regression workflow. Latest recorded main run on 2026-10-22: 176 passed, 0 failed ([run](https://github.com/Ekco-S64QTN6/Kaia/actions/runs/39821673337)). Kernel/privileged behavior is outside the proof supplied by those tests.
+- [x] GitHub Actions regression workflow. Latest verified main run on 2026-10-22: 182 passed, 0 failed ([run](https://github.com/Ekco-S64QTN6/Kaia/actions/runs/39829025529)). Kernel/privileged behavior is outside the proof supplied by those tests.
 
 **Partial, host-dependent or still unimplemented:**
 
