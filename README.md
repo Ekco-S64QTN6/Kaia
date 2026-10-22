@@ -48,7 +48,7 @@ This describes capabilities present in the repository. It is not proof that priv
 - **Threat intelligence:** InternetDB input validation, per-process serialized requests and negative caching for authoritative 404 responses are implemented alongside the existing reputation/CVE lookup paths.
 - **Package transactions:** a passive pacman-log monitor records install/upgrade/downgrade/reinstall/remove events after successful ALPM transaction completion. It is a first increment, not full supply-chain attestation.
 - **Operator UI:** the loopback-only web HUD has interactive command entry, bounded command dispatch through the Policy Gate, telemetry WebSocket updates, strict self-hosted CSP, and Host/Origin validation for loopback host, scheme and effective port on command and telemetry endpoints. Command results are returned after the request completes; incremental response streaming for long-running operations remains unfinished.
-- **Regression automation:** GitHub Actions compiles Python modules and runs the focused security regression suite. The latest recorded main run on 2026-10-22 passed 176 tests. This does not replace privileged host validation.
+- **Regression automation:** GitHub Actions compiles Python modules and runs the focused security regression suite. The latest verified main run on 2026-10-22 passed 182 tests ([run](https://github.com/Ekco-S64QTN6/Kaia/actions/runs/39829025529)). This does not replace privileged host validation.
 
 ### Still incomplete or host-dependent
 
