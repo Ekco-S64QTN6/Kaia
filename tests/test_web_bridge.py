@@ -337,3 +337,36 @@ def test_unblock_command_routes_through_policy_gate(monkeypatch):
     assert calls[1][1] == "unblock_ip"
     assert calls[1][2]["target_ip"] == "192.0.2.55"
     assert calls[1][2]["protocol"] == "all"
+
+
+def test_block_command_routes_complete_schema_payload_through_policy_gate(monkeypatch):
+    import core.web_bridge as bridge_module
+    calls = []
+    monkeypatch.setattr(
+        bridge_module, "generate_capability_token",
+        lambda capability, target, duration_seconds: calls.append(("token", capability, target)) or "signed",
+    )
+    monkeypatch.setattr(
+        bridge_module, "send_policy_gate_ipc",
+        lambda action, payload, token: calls.append(("ipc", action, payload, token)) or
+        (True, {"status": "success", "stdout": "rule installed"}),
+    )
+
+    result = bridge_module.dispatch_operator_command("block 192.0.2.55")
+
+    assert result["success"]
+    assert calls[0] == ("token", "block_ip", "192.0.2.55")
+    assert calls[1][1] == "block_ip"
+    assert calls[1][2]["justification"]
+    assert calls[1][2]["port"] is None
+
+
+def test_block_command_rejects_extra_arguments(monkeypatch):
+    import core.web_bridge as bridge_module
+    monkeypatch.setattr(
+        bridge_module, "send_policy_gate_ipc",
+        lambda *args, **kwargs: pytest.fail("malformed block command must not reach IPC"),
+    )
+    result = bridge_module.dispatch_operator_command("block 192.0.2.55 extra")
+    assert result["success"] is False
+    assert any("Usage: block <ip>" in line for line in result["lines"])
