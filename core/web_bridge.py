@@ -661,13 +661,29 @@ def dispatch_operator_command(cmd_line: str) -> Dict[str, Any]:
                 output_lines.append(f"[DENIED] block_ip rejected: {msg}")
                 return {"success": False, "command": raw_cmd, "lines": output_lines}
 
-        elif cmd == "unblock" and len(args) >= 1:
-            # Do not pretend this operation succeeded: the Policy Gate does not
-            # currently expose a dedicated, ledger-aware unblock_ip intent.
-            output_lines.append(
-                "[UNAVAILABLE] unblock_ip is not implemented in the Policy Gate. "
-                "No firewall rule was removed."
-            )
+        elif cmd == "unblock" and len(args) == 1:
+            ip = args[0]
+            token = generate_capability_token("unblock_ip", ip, duration_seconds=15)
+            payload = {
+                "target_ip": ip,
+                "protocol": "all",
+                "port": None,
+                "justification": "operator requested firewall rule removal",
+                "session_id": "sentinel_ui",
+            }
+            approved, resp = send_policy_gate_ipc("unblock_ip", payload, token)
+            if approved:
+                detail = resp.get("stdout", "") if isinstance(resp, dict) else ""
+                output_lines.append(f"[APPROVED] Firewall block for {ip} removed or already absent.")
+                if detail:
+                    output_lines.append(detail)
+                return {"success": True, "command": raw_cmd, "lines": output_lines}
+            msg = resp.get("message") if isinstance(resp, dict) else str(resp)
+            output_lines.append(f"[DENIED] unblock_ip rejected: {msg}")
+            return {"success": False, "command": raw_cmd, "lines": output_lines}
+
+        elif cmd == "unblock":
+            output_lines.append("Usage: unblock <ip>")
             return {"success": False, "command": raw_cmd, "lines": output_lines}
 
         elif cmd == "show" and len(args) >= 1 and args[0] == "rules":
