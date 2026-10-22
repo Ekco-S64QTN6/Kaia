@@ -210,10 +210,11 @@ def _is_cache_stale(last_updated_str: str) -> bool:
 
 def _fetch_internetdb_api(ip: str) -> dict:
     """
-    Fetch the InternetDB API at most once per second per process.
+    Fetch InternetDB while enforcing the per-process start-rate limit.
 
-    The lock protects request-start scheduling across concurrent threads; it is
-    not held during network I/O. The caller validates/canonicalizes the IP.
+    Requests are serialized through completion. This is deliberately conservative:
+    a slow response reduces throughput, but two threads cannot reserve a slot and
+    then be scheduled together into requests.get().
     """
     global _last_api_call_time
     try:
@@ -221,30 +222,30 @@ def _fetch_internetdb_api(ip: str) -> dict:
     except (ValueError, TypeError):
         return {}
 
+    url = f"{INTERNETDB_API_URL}/{ip}"
     with _api_rate_limit_lock:
-        now = time.monotonic()
-        delay = 1.0 - (now - _last_api_call_time)
-        if delay > 0:
-            time.sleep(delay)
-        # Timestamp the start slot while still under the lock so another caller
-        # cannot claim the same one-second interval.
+        elapsed = time.monotonic() - _last_api_call_time
+        if elapsed < 1.0:
+            time.sleep(1.0 - elapsed)
         _last_api_call_time = time.monotonic()
 
-    url = f"{INTERNETDB_API_URL}/{ip}"
-    try:
-        resp = requests.get(url, timeout=10)
-        if resp.status_code == 404:
-            logger.debug("InternetDB: No data for %s (404)", ip)
-            return {"_kaia_not_found": True}
-        resp.raise_for_status()
-        data = resp.json()
-        if not isinstance(data, dict):
-            logger.warning("InternetDB returned a non-object payload for %s", ip)
+        try:
+            # Keep request initiation within the serialized critical section.
+            # requests.get is bounded by timeout and returns only after receiving
+            # the response body with the default non-streaming behavior.
+            resp = requests.get(url, timeout=10)
+            if resp.status_code == 404:
+                logger.debug("InternetDB: No data for %s (404)", ip)
+                return {"_kaia_not_found": True}
+            resp.raise_for_status()
+            data = resp.json()
+            if not isinstance(data, dict):
+                logger.warning("InternetDB returned a non-object payload for %s", ip)
+                return {}
+            return data
+        except (requests.RequestException, ValueError, TypeError) as e:
+            logger.warning("InternetDB API request failed for %s: %s", ip, e)
             return {}
-        return data
-    except (requests.RequestException, ValueError, TypeError) as e:
-        logger.warning("InternetDB API request failed for %s: %s", ip, e)
-        return {}
 
 def _cache_internetdb_result(ip: str, api_data: dict, found: bool = True):
     """Cache a validated InternetDB result, including authoritative 404/no-data results."""
