@@ -45,3 +45,6 @@ deterministic suite, not every Python file under `tests/`: legacy scripts such a
 `verify_security.py` are manual/integration tools, and `test_advanced_security.py`
 contains host/database-backed tests that need isolation before it is safe for CI.
 Target-host checks remain separate.
+
+
+The current CI pass count changes as tests are added; current-facing docs link to the main-branch Actions history instead of embedding a number that becomes stale when the suite grows.
