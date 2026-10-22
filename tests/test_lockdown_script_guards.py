@@ -14,8 +14,8 @@ def test_lockdown_preserves_operator_state_access_and_private_snapshot_umask():
     script = Path("scripts/kaia-lockdown.sh").read_text()
 
     assert "umask 077" in script
-    assert 'chmod 750 "$STATE_DIR"' in script
-    assert 'chown root:kaiacord "$STATE_DIR"' in script
+    assert 'chmod 750 "$STATE_DIR"' not in script
+    assert 'chown root:kaiacord "$STATE_DIR"' not in script
     assert 'chmod 700 "$STATE_DIR"' not in script
 
 
@@ -44,3 +44,30 @@ def test_unlock_refuses_requested_missing_snapshot_before_firewall_flush():
     flush = script.index("nft flush ruleset")
 
     assert missing_snapshot_guard < no_restore_guard < flush
+
+
+def test_lockdown_parses_state_path_without_environment_or_shell_sourcing():
+    script = Path("scripts/kaia-lockdown.sh").read_text()
+
+    assert 'STATE_DIR="${KAIA_STATE_DIR:-/var/lib/kaia}"' not in script
+    assert '. /etc/kaia/state.env' not in script
+    assert 'STATE_CONFIG="/etc/kaia/state.env"' in script
+    assert "STATE_PATH_SAFE=0" in script
+    assert "state_dir_real=" in script
+    assert 'STATE_DIR="${state_line#*=}"' in script
+    assert 'SNAPSHOT="${STATE_DIR}/pre-lockdown.nft"' in script
+    assert r"\${STATE_DIR}" not in script
+    assert "0022" in script
+
+
+def test_lockdown_snapshot_uses_exclusive_temporary_files_and_never_follows_preexisting_temp_links():
+    script = Path("scripts/kaia-lockdown.sh").read_text()
+
+    assert 'snapshot_tmp="$(mktemp "$STATE_DIR/.pre-lockdown.XXXXXX"' in script
+    assert 'nft list ruleset > "$snapshot_tmp"' in script
+    assert 'if [ -L "$SNAPSHOT" ]; then' in script
+    assert 'chmod 600 "$SNAPSHOT"' in script
+    assert '"${SNAPSHOT}.tmp"' not in script
+    assert 'chown root:kaiacord "$STATE_DIR"' not in script
+    assert "Proceeding with lockdown anyway -- containment takes priority" in script
+    assert script.index("WARNING: ruleset snapshot FAILED") < script.index("LOCKDOWN_RULES=")
