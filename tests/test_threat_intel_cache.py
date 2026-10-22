@@ -44,8 +44,8 @@ def test_internetdb_404_is_cached_as_a_negative_result(monkeypatch, tmp_path):
         return SimpleNamespace(status_code=404)
 
     monkeypatch.setattr(threat_intel.requests, "get", not_found)
-    first = threat_intel.lookup_internetdb("203.0.113.42")
-    second = threat_intel.lookup_internetdb("203.0.113.42")
+    first = threat_intel.lookup_internetdb("8.8.8.8")
+    second = threat_intel.lookup_internetdb("8.8.8.8")
 
     assert first["found"] is False and first["source"] == "api-not-found"
     assert second["found"] is False and second["source"] == "cache"
@@ -64,7 +64,7 @@ def test_malformed_api_payload_is_not_cached_as_authoritative_data(monkeypatch, 
         ),
     )
 
-    result = threat_intel.lookup_internetdb("203.0.113.99")
+    result = threat_intel.lookup_internetdb("1.1.1.1")
 
     assert result["found"] is False
     assert result["source"] == "none"
@@ -102,9 +102,9 @@ def test_rate_limit_serializes_real_request_calls_across_threads(monkeypatch):
     threads = [
         threading.Thread(
             target=threat_intel._fetch_internetdb_api,
-            args=(f"192.0.2.{i}",),
+            args=(ip,),
         )
-        for i in (1, 2, 3)
+        for ip in ("8.8.8.8", "1.1.1.1", "9.9.9.9")
     ]
     for thread in threads:
         thread.start()
@@ -118,3 +118,45 @@ def test_rate_limit_serializes_real_request_calls_across_threads(monkeypatch):
         right - left >= 1.0
         for left, right in zip(request_starts, request_starts[1:])
     )
+
+
+@pytest.mark.parametrize("ip", [
+    "10.0.0.7",
+    "192.168.1.10",
+    "127.0.0.1",
+    "169.254.1.5",
+    "192.0.2.25",
+    "224.0.0.1",
+    "::1",
+    "fc00::1",
+])
+def test_non_global_ip_never_egresses_to_internetdb(monkeypatch, tmp_path, ip):
+    _redirect_cache(monkeypatch, tmp_path)
+    calls = []
+    monkeypatch.setattr(
+        threat_intel.requests,
+        "get",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    result = threat_intel.lookup_internetdb(ip)
+
+    assert result["found"] is False
+    assert result["source"] == "non-global"
+    assert result["ip"] == ip
+    assert calls == []
+
+
+def test_direct_internetdb_fetch_rejects_non_global_ip_before_rate_limit(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        threat_intel.requests,
+        "get",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+    monkeypatch.setattr(threat_intel, "_last_api_call_time", 0.0)
+
+    assert threat_intel._fetch_internetdb_api("192.168.0.4") == {}
+    assert calls == []
+    assert threat_intel._last_api_call_time == 0.0
+

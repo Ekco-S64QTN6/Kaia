@@ -218,8 +218,16 @@ def _fetch_internetdb_api(ip: str) -> dict:
     """
     global _last_api_call_time
     try:
-        ip = ipaddress.ip_address(str(ip)).compressed
+        address = ipaddress.ip_address(str(ip))
+        ip = address.compressed
     except (ValueError, TypeError):
+        return {}
+
+    # InternetDB is a public-host intelligence API, not an internal asset
+    # resolver. Never disclose private, loopback, link-local, reserved or
+    # otherwise non-global addresses to this third-party service.
+    if not address.is_global or address.is_multicast:
+        logger.debug("Skipping InternetDB request for non-global address %s", ip)
         return {}
 
     url = f"{INTERNETDB_API_URL}/{ip}"
@@ -298,12 +306,20 @@ def lookup_internetdb(ip: str) -> dict:
     transient request/parse failures are never cached as authoritative misses.
     """
     try:
-        ip = ipaddress.ip_address(str(ip)).compressed
+        address = ipaddress.ip_address(str(ip))
+        ip = address.compressed
     except (ValueError, TypeError):
         logger.warning("Refusing invalid InternetDB IP address: %r", ip)
         return {
             "ip": str(ip)[:64], "ports": [], "hostnames": [], "tags": [],
             "vulns": [], "cpes": [], "found": False, "source": "invalid",
+        }
+
+    if not address.is_global or address.is_multicast:
+        logger.debug("Skipping InternetDB lookup for non-global address %s", ip)
+        return {
+            "ip": ip, "ports": [], "hostnames": [], "tags": [],
+            "vulns": [], "cpes": [], "found": False, "source": "non-global",
         }
 
     initialize_intel()
