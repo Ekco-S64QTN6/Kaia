@@ -95,3 +95,53 @@ def test_ipc_payload_cannot_override_envelope_fields():
         assert "may not override envelope fields" in response["executor_response"]["message"]
     finally:
         left.close()
+
+
+def test_unblock_ip_requires_a_valid_scoped_capability(monkeypatch):
+    import os
+    os.environ.setdefault("KAIA_CAPABILITY_TOKEN_SECRET", "test_signing_secret_key_2026")
+    import config
+    import security.policy_gate as policy_gate_module
+    from security.policy_gate import generate_capability_token
+
+    monkeypatch.setattr(config, "GLOBAL_PERMISSIONS", {"unblock_ip"})
+    monkeypatch.setattr(config, "WORKSPACE_PERMISSIONS", {"unblock_ip"})
+    calls = []
+    monkeypatch.setattr(
+        policy_gate_module.HostExecutor,
+        "execute_unmitigation",
+        lambda *args: calls.append(args) or (True, "removed", ""),
+    )
+    monkeypatch.setattr(PolicyGate, "_log_audit", lambda *args, **kwargs: None)
+    monkeypatch.setattr(policy_gate_module, "log_security_event", lambda *args, **kwargs: None)
+
+    gate = PolicyGate()
+    target = "192.0.2.55"
+    token = generate_capability_token("unblock_ip", target, duration_seconds=30)
+    result = gate.evaluate_and_execute({
+        "action": "unblock_ip", "target_ip": target, "protocol": "all", "port": None,
+        "justification": "test unblocking", "capability_token": token, "session_id": "unit_test",
+    })
+
+    assert result["status"] == "success"
+    assert calls == [(target, "all", None)]
+
+
+def test_unblock_ip_rejects_invalid_capability_without_executor_call(monkeypatch):
+    import config
+    import security.policy_gate as policy_gate_module
+
+    monkeypatch.setattr(config, "GLOBAL_PERMISSIONS", {"unblock_ip"})
+    monkeypatch.setattr(config, "WORKSPACE_PERMISSIONS", {"unblock_ip"})
+    monkeypatch.setattr(PolicyGate, "_log_audit", lambda *args, **kwargs: None)
+    monkeypatch.setattr(policy_gate_module, "log_security_event", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        policy_gate_module.HostExecutor,
+        "execute_unmitigation",
+        lambda *args: pytest.fail("invalid tokens must not reach the executor"),
+    )
+    result = PolicyGate().evaluate_and_execute({
+        "action": "unblock_ip", "target_ip": "192.0.2.55", "protocol": "all", "port": None,
+        "justification": "test unblocking", "capability_token": "invalid", "session_id": "unit_test",
+    })
+    assert result["status"] == "denied"
