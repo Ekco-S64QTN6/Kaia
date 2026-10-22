@@ -67,9 +67,7 @@ systemctl status kaia-policy-gate --no-pager -n 15
 ```
 
 System mode refuses to start without a valid baseline. Review the deployed tree and expected diff first; never baseline a suspected compromise. The baseline records SHA-256 hashes of every protected file to root-owned
-`/var/lib/kaia/baseline.sha256`. Without it, tamper detection hashes whatever is on
-disk at startup — so a file edited while the daemon was stopped simply *becomes* the
-baseline and is never reported.
+`<KAIA_STATE_DIR>/baseline.sha256` (default: `/var/lib/kaia/baseline.sha256`). In unprivileged development mode only, a missing baseline permits a weaker current-disk bootstrap; edits made while stopped then cannot be detected.
 
 **Run the baseline only from a state you have reviewed.** Baselining a compromise
 makes the compromise the reference.
