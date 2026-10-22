@@ -60,7 +60,7 @@ def test_rule_compilation():
     assert "bad_indicator" in rule
     # IOC and metadata are quoted literals; metacharacters must not escape into rule syntax.
     assert '$ioc = "bad_indicator{}[/]"' in rule
-    assert "condition:\\n        any of them" in rule
+    assert "condition:\n        any of them" in rule
     assert "rule bad_indicator" not in rule
 
 
@@ -76,7 +76,7 @@ def test_yara_rule_validation(monkeypatch):
         calls.append((argv, kwargs))
         rule_path = Path(argv[-2])
         source = rule_path.read_text(encoding="utf-8")
-        stdout = "/tmp/kaia_benign_corpus/benign_0.txt\\n" if "Lorem ipsum" in source else ""
+        stdout = "/tmp/kaia_benign_corpus/benign_0.txt\n" if "Lorem ipsum" in source else ""
         return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
 
     monkeypatch.setattr(rule_engine.subprocess, "run", fake_sandbox)
@@ -296,3 +296,22 @@ def test_tamper_detector_sqlite_hash(tmp_path):
     # 6. Verify hash mismatch detects modification
     h3 = detector._compute_sqlite_prefix_hash(db_path, row_count)
     assert h1 != h3  # Tamper detected!
+
+
+def test_yara_literal_escaping_preserves_data_without_injecting_rule_syntax():
+    from security.rule_engine import RuleEngine
+
+    raw = 'quote" slash\\ newline\n rule fake_injected { condition: true }'
+    escaped = RuleEngine._escape_yara_literal(raw)
+    assert '\\\"' in escaped
+    assert "\\\\ " in escaped or escaped.endswith("\\\\")
+    assert "\\n" in escaped
+    rule = RuleEngine().compile_rule_text(
+        "literal_escape_test",
+        "Unit test",
+        "Valid description with enough characters",
+        raw,
+        "T1234",
+    )
+    assert '$ioc = "' + escaped + '"' in rule
+    assert "rule fake_injected {" not in rule
