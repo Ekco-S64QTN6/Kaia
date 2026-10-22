@@ -3,6 +3,7 @@ import psutil
 import logging
 import subprocess
 import hashlib
+import stat
 from datetime import datetime, UTC
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
@@ -172,7 +173,65 @@ def get_systemd_unit_status(unit_name: str) -> dict:
 
 # --- Script Sentinel Implementation ---
 
+SCRIPT_SENTINEL_MAX_BYTES = 32 * 1024 * 1024
+SCRIPT_SENTINEL_CHUNK_BYTES = 1024 * 1024
+
+
 class ScriptSentinelHandler(FileSystemEventHandler):
+    @staticmethod
+    def _hash_script_no_follow(filepath: str):
+        """Return a streaming SHA-256 for a regular script, or None if not a script.
+
+        A path event is untrusted input. Open the final component without following
+        symlinks or blocking on FIFOs, require a regular file, and bound both memory
+        and total bytes hashed so one event cannot exhaust the privileged daemon.
+        """
+        shell_script = filepath.endswith(".sh")
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0)
+        )
+        fd = None
+        try:
+            fd = os.open(filepath, flags)
+            metadata = os.fstat(fd)
+            if not stat.S_ISREG(metadata.st_mode):
+                return "unknown" if shell_script else None
+
+            is_script = shell_script
+            if not is_script:
+                head = os.read(fd, 128)
+                is_script = head.startswith(b"#!")
+            if not is_script:
+                return None
+
+            # Avoid large-file hashing loops on content that would be abnormal
+            # for a script. The alert is still emitted with an unavailable hash.
+            if metadata.st_size > SCRIPT_SENTINEL_MAX_BYTES:
+                return "unknown"
+
+            os.lseek(fd, 0, os.SEEK_SET)
+            digest = hashlib.sha256()
+            total = 0
+            while True:
+                chunk = os.read(fd, SCRIPT_SENTINEL_CHUNK_BYTES)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > SCRIPT_SENTINEL_MAX_BYTES:
+                    return "unknown"
+                digest.update(chunk)
+            return digest.hexdigest()
+        except OSError:
+            # Keep alerting on .sh path changes, but never follow a replacement
+            # symlink or block on a special file just to obtain its hash.
+            return "unknown" if shell_script else None
+        finally:
+            if fd is not None:
+                os.close(fd)
+
     def on_created(self, event):
         self._check_file(event.src_path)
 
@@ -182,39 +241,24 @@ class ScriptSentinelHandler(FileSystemEventHandler):
     def _check_file(self, filepath):
         if os.path.isdir(filepath):
             return
-        
+
         filename = os.path.basename(filepath)
         if filename.startswith(".") or "__pycache__" in filepath:
             return
 
-        is_script = False
-        if filepath.endswith(".sh"):
-            is_script = True
-        else:
-            try:
-                with open(filepath, "rb") as f:
-                    head = f.read(128)
-                    if head.startswith(b"#!"):
-                        is_script = True
-            except Exception:
-                pass
+        file_hash = self._hash_script_no_follow(filepath)
+        if file_hash is None:
+            return
 
-        if is_script:
-            logger.warning(f"Script Sentinel: script file change detected: {filepath}")
-            try:
-                with open(filepath, "rb") as f:
-                    file_hash = hashlib.sha256(f.read()).hexdigest()
-            except Exception:
-                file_hash = "unknown"
-            
-            log_security_event(
-                event_type="telemetry_script_sentinel_alert",
-                source="script_sentinel",
-                actor=filepath,
-                payload_hash=file_hash,
-                disposition="blocked",
-                session_id="system_sentinel"
-            )
+        logger.warning(f"Script Sentinel: script file change detected: {filepath}")
+        log_security_event(
+            event_type="telemetry_script_sentinel_alert",
+            source="script_sentinel",
+            actor=filepath,
+            payload_hash=file_hash,
+            disposition="blocked",
+            session_id="system_sentinel"
+        )
 
 _sentinel_observer = None
 
