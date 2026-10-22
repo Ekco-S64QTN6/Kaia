@@ -695,7 +695,7 @@ This is the current repository status as of the audit date. It describes impleme
 - [ ] **Network discovery limitation:** a basic NetBIOS Name Service response parser handles first-level encoded QNAMEs. Queries are ignored to avoid attributing a requested name to the querier. NBSTAT records, alternate/compressed name forms and broader edge-case coverage remain unfinished.
 - [ ] **Broader supply-chain integrity:** AUR build tracking, repository/metadata changes, dependency graph shifts and package signature/installed-content attestation are not implemented.
 - [ ] **Other Tier 5 capabilities:** process/network/file behavioral baselines, alert-confidence framework, secrets exposure scanning, backup existence/recency/restorability, independent health and data-freshness supervision, historical threat-intel snapshots, local GeoLite2/CVE/passive-DNS datasets and DuckDB-backed expansion.
-- [ ] **Target-host validation:** verify the actual systemd deployment, trusted baseline, live block/unblock, UFW reload survival, boot replay/tombstones, fanotify marks and BCC probe compilation on the deployed Arch Linux host.
+- [ ] **Target-host validation:** verify the actual systemd deployment, trusted baseline, live block/unblock, UFW reload survival, boot replay/tombstones, fanotify marks and BCC probe compilation on the deployed Arch Linux host. The baseline path now derives from `STATE_DIR`; confirm it matches the installed state directory after install or migration.
 
 **Recommended next steps:**
 

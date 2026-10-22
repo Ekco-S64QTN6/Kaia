@@ -3,7 +3,7 @@
 # RECORD TRUSTED INTEGRITY BASELINE
 #
 # Writes SHA-256 hashes of every tamper-protected file to
-# /var/lib/kaia/baseline.sha256 (root-owned, 0600).
+# ${KAIA_STATE_DIR}/baseline.sha256 (root-owned, 0600; default /var/lib/kaia).
 #
 # WHY: tamper detection otherwise hashes whatever is on disk when it
 # starts, so a file edited while the daemon was stopped simply becomes
@@ -23,8 +23,60 @@ set -uo pipefail
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[1;36m'; NC='\033[0m'
 
-PROJECT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
-STATE_DIR="/var/lib/kaia"
+PROJECT_DIR="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+
+# Parse only the intended key/value assignments. Never source a project-controlled
+# .env file as root; sourcing it would execute arbitrary shell code.
+_read_env_assignment() {
+    local file="$1" key="$2" line value
+    [ -r "$file" ] || return 1
+    line="$(grep -E "^(export )?${key}=" "$file" | head -n 1 || true)"
+    [ -n "$line" ] || return 1
+    line="$(printf "%s" "$line" | sed "s/^export //")"
+    value="$(printf "%s" "$line" | cut -d= -f2-)"
+    case "$value" in
+        \"*\") value="$(printf "%s" "$value" | sed "s/^\\\"//;s/\\\"$//")" ;;
+        \'*\') value="$(printf "%s" "$value" | sed "s/^\\\x27//;s/\\\x27$//")" ;;
+    esac
+    case "$value" in *[[:cntrl:]]*) return 1 ;; esac
+    [ -n "$value" ] || return 1
+    printf "%s" "$value"
+}
+
+# System-mode installs remove /opt/kaia/.env. Prefer the root-owned installer
+# secret; the checkout .env is only a development fallback.
+if [ -z "${KAIA_CAPABILITY_TOKEN_SECRET:-}" ]; then
+    secret="$(_read_env_assignment /etc/kaia/secret.env KAIA_CAPABILITY_TOKEN_SECRET || true)"
+    if [ -z "$secret" ]; then
+        secret="$(_read_env_assignment "$PROJECT_DIR/.env" KAIA_CAPABILITY_TOKEN_SECRET || true)"
+    fi
+    if [ -z "$secret" ]; then
+        echo "ERROR: KAIA_CAPABILITY_TOKEN_SECRET missing from /etc/kaia/secret.env and project .env." >&2
+        exit 1
+    fi
+    export KAIA_CAPABILITY_TOKEN_SECRET="$secret"
+fi
+
+# Manual invocation after installation must use the same state directory as the
+# systemd units. install_services.sh writes a validated, root-owned state.env.
+if [ -z "${KAIA_STATE_DIR:-}" ] && [ -r /etc/kaia/state.env ]; then
+    state_line="$(grep -E "^KAIA_STATE_DIR=/" /etc/kaia/state.env | head -n 1 || true)"
+    state_value="$(printf "%s" "$state_line" | cut -d= -f2-)"
+    case "$state_value" in
+        /*) ;;
+        *) state_value="" ;;
+    esac
+    case "$state_value" in
+        *[!A-Za-z0-9_./-]*) state_value="" ;;
+    esac
+    if [ -n "$state_value" ]; then
+        export KAIA_STATE_DIR="$state_value"
+    fi
+fi
+if [ -z "${KAIA_STATE_DIR:-}" ]; then
+    KAIA_STATE_DIR="/var/lib/kaia"
+fi
+STATE_DIR="$KAIA_STATE_DIR"
 BASELINE="${STATE_DIR}/baseline.sha256"
 
 echo -e "${CYAN}═══════════════════════════════════════${NC}"
@@ -40,14 +92,7 @@ PY="${PROJECT_DIR}/.venv/bin/python"
 [ -x "$PY" ] || PY="$(command -v python3)"
 [ -x "$PY" ] || { echo -e "${RED}No usable python interpreter.${NC}"; exit 1; }
 
-# config.py exits if KAIA_CAPABILITY_TOKEN_SECRET is unset, so load .env the
-# same way the daemon does. Never echo it.
-if [ -f "${PROJECT_DIR}/.env" ]; then
-    set -a
-    # shellcheck source=/dev/null
-    . "${PROJECT_DIR}/.env"
-    set +a
-fi
+# config.py now sees the validated capability token loaded above. Do not print it.
 
 # Ask the detector itself which files it protects, so this script and the
 # runtime watchlist cannot drift apart.

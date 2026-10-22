@@ -32,6 +32,11 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements-test.txt
 
+      - name: Validate shell-script syntax
+        run: |
+          set -euo pipefail
+          for script in scripts/*.sh; do bash -n "$script"; done
+
       - name: Compile all Python modules
         run: python -m compileall -q core security scripts tests
 
