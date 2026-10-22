@@ -118,3 +118,41 @@ def test_installer_rejects_untrusted_destination_path_ancestors_before_changes()
     assert "must be root-owned and not group/world-writable" in script
     assert "has a symlinked path component" in script
     assert "path component is not a directory" in script
+
+
+def test_geoip_updater_uses_private_temporary_paths_and_cleanup():
+    script = Path("scripts/update_geoip.sh").read_text()
+
+    assert 'set -euo pipefail' in script
+    assert 'umask 077' in script
+    assert 'TEMP_ROOT="$(mktemp -d /tmp/kaia-geoip.XXXXXX)"' in script
+    assert 'trap cleanup EXIT' in script
+    assert 'TEMP_TAR="${TEMP_ROOT}/download.tar.gz"' in script
+    assert 'CURL_CONFIG="${TEMP_ROOT}/curl.conf"' in script
+    assert 'curl --config "$CURL_CONFIG" --fail' in script
+    assert '/tmp/GeoLite2-City.tar.gz' not in script
+    assert '/tmp/GeoLite2-City-extracted' not in script
+
+
+def test_geoip_updater_validates_archive_paths_and_only_copies_one_regular_database():
+    script = Path("scripts/update_geoip.sh").read_text()
+
+    assert 'tarfile.open(archive_path, "r:gz")' in script
+    assert 'path.is_absolute() or ".." in path.parts' in script
+    assert 'member.isdir() or member.isfile()' in script
+    assert 'len(candidates) != 1' in script
+    assert 'open(output_path, "xb")' in script
+    assert 'max_size = 512 * 1024 * 1024' in script
+
+
+
+def test_geoip_updater_uses_installed_state_path_without_sourcing_config():
+    script = Path("scripts/update_geoip.sh").read_text()
+
+    assert 'STATE_CONFIG="/etc/kaia/state.env"' in script
+    assert 'state_line="$(grep -E \'^KAIA_STATE_DIR=\' "$STATE_CONFIG" || true)"' in script
+    assert '. /etc/kaia/state.env' not in script
+    assert 'GEOIP_DIR="${STATE_DIR}/threat_intel/geoip"' in script
+    assert 'GEOIP_DIR="${PROJECT_DIR}/storage/threat_intel/geoip"' in script
+    assert 'chown root:kaiacord -- "$MMDB_FILE"' in script
+    assert 'chmod 640 -- "$MMDB_FILE"' in script
