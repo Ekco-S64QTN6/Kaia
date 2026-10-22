@@ -50,3 +50,10 @@ def test_installer_rejects_symlinked_fim_history_migration():
 
     assert '[ -L "$fim_db_destination" ]' in script
     assert '[ -L "$legacy_fim_db" ]' in script
+    assert '[ -L "$src" ]' in script
+    assert '[ -L "$dst" ]' in script
+    assert 'cp -- "$src" "$dst"' in script
+    assert 'chown root:kaiacord "$dst"' in script
+    assert 'chmod 640 "$dst"' in script
+    assert 'cp -- "$legacy_fim_db" "$fim_db_destination"' in script
+    assert 'chown root:kaiacord "$fim_db_destination"' in script
