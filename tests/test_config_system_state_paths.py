@@ -66,7 +66,8 @@ def test_installer_persists_state_path_for_manual_unlock():
     assert '. /etc/kaia/state.env' in unlock
     baseline_script = (repo_root / "scripts/kaia-baseline.sh").read_text()
     assert "_read_env_assignment /etc/kaia/secret.env" in baseline_script
-    assert 'if [ -z "${KAIA_STATE_DIR:-}" ]; then' in baseline_script
+    assert 'KAIA_STATE_DIR="${KAIA_STATE_DIR:-/var/lib/kaia}"' in baseline_script
+    assert 'STATE_DIR="$(realpath -m -- "$KAIA_STATE_DIR")"' in baseline_script
     assert 'STATE_DIR="$KAIA_STATE_DIR"' in baseline_script
     assert 'BASELINE="${STATE_DIR}/baseline.sha256"' in baseline_script
     assert '. "${PROJECT_DIR}/.env"' not in baseline_script
@@ -123,7 +124,7 @@ def test_fim_audit_storage_is_configured_and_legacy_history_is_migrated():
     assert "self.db_path = config.FIM_DB_PATH" in fim
     assert "fim_db_path = config.FIM_DB_PATH" in hud
     assert 'legacy_fim_db="/var/lib/secdaemon/fim_audit.db"' in installer
-    assert 'cp -a "$legacy_fim_db" "$STATE_DIR/fim_audit.db"' in installer
+    assert 'cp -- "$legacy_fim_db" "$fim_db_destination"' in installer
     assert "/var/lib/secdaemon" not in unit
     assert "systemctl stop kaia-policy-gate.service" in installer
     assert "systemctl enable --now kaia-policy-gate.service" not in installer
