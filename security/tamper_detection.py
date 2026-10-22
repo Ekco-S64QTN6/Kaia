@@ -197,12 +197,20 @@ class TamperDetector:
         """Establish trusted baselines; do not start monitoring after a mismatch."""
         logger.info("Initializing tamper detection baseline hashes...")
 
+        # Read the trust record before checking file presence so deletion of a
+        # previously baselined critical file is itself recorded as tampering,
+        # rather than merely aborting startup without an alert.
+        trusted = self._load_trusted_baseline()
         for filepath in self.immutable_files:
             # The installer deliberately removes /opt/kaia/.env. In production,
             # the actual signing secret comes from /etc/kaia/secret.env.
             if filepath.endswith(".env") and not os.path.exists(filepath):
                 continue
             if not os.path.exists(filepath):
+                if os.path.abspath(filepath) in trusted:
+                    self._trigger_tamper_alert(
+                        filepath, "Trusted protected file is missing at startup", "missing"
+                    )
                 raise RuntimeError(f"FATAL: Critical system file missing: {filepath}")
 
         if not getattr(config, "TAMPER_ENFORCE", True):
@@ -212,7 +220,6 @@ class TamperDetector:
                 "emergency lockdown. This is monitor-only mode."
             )
 
-        trusted = self._load_trusted_baseline()
         if not trusted:
             logger.warning(
                 "No trusted integrity baseline at %s -- falling back to hashing the "
