@@ -245,7 +245,10 @@ custom paths must be below `/var/lib`, `/srv`, or `/mnt`), migrates existing run
 data, and installs the units. The installer rejects destinations that overlap the
 source checkout or each other. It validates the signing secret before
 changing files and stops an active Policy Gate before syncing monitored code. The
-installer enables but does **not start** the gate automatically. Review the deployed
+installer enables but does **not start** the gate automatically. It rejects
+unexpected symlinks before root ownership normalization, allowing only the tracked
+`static/dashboard -> ../core/web/static` link while it resolves within the tree.
+Review the deployed
 diff, write the trusted baseline, then start it:
 
     sudo /opt/kaia/scripts/kaia-baseline.sh
