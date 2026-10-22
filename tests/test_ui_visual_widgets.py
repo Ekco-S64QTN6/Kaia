@@ -86,3 +86,49 @@ def test_snapshot_contains_openat2_events_from_telemetry_engine():
     assert event["pid"] == 4321
     assert event["filename"] == "/tmp/test-file"
     assert event["disposition"] == "observed"
+
+
+def test_unlinkat_probe_is_registered_and_reaches_the_waterfall():
+    ebpf = (REPO_ROOT / "security" / "ebpf_telemetry.py").read_text()
+    bridge = (REPO_ROOT / "core" / "web_bridge.py").read_text()
+    waterfall = (STATIC / "js" / "waterfall.js").read_text()
+
+    assert "BPF_PERF_OUTPUT(delete_events)" in ebpf
+    assert 'self.bpf["delete_events"].open_perf_buffer(self._handle_delete_event)' in ebpf
+    assert "def _handle_delete_event" in ebpf
+    assert "def get_recent_deletes" in ebpf
+    assert "raw_deletes = ebpf_engine.get_recent_deletes(30)" in bridge
+    assert "/unlinkat/i" in waterfall
+    assert "UNLINKAT" in waterfall
+
+
+def test_snapshot_includes_unlinkat_attempt_events():
+    import time
+    from core.web_bridge import serialize_snapshot
+    from kaia_dashboard import CollectorManager
+
+    class FakeEBPFEngine:
+        bpf = object()
+
+        def get_recent_execs(self, n=20):
+            return []
+
+        def get_recent_opens(self, n=20):
+            return []
+
+        def get_recent_deletes(self, n=20):
+            return [{
+                "syscall": "sys_enter_unlinkat",
+                "pid": 5678,
+                "comm": "test-process",
+                "filename": "/tmp/test-file",
+                "timestamp": time.time(),
+            }]
+
+    snapshot = CollectorManager().take_snapshot()
+    data = serialize_snapshot(snapshot, ebpf_engine=FakeEBPFEngine(), proc_sampler=None)
+    event = next(item for item in data["ebpf_waterfall"] if item["syscall"] == "sys_enter_unlinkat")
+
+    assert event["pid"] == 5678
+    assert event["filename"] == "/tmp/test-file"
+    assert event["disposition"] == "observed"
