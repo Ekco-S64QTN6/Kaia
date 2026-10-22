@@ -39,7 +39,7 @@ This describes capabilities present in the repository. It is not proof that priv
 
 ### Implemented in the codebase
 
-- **Policy Gate and host execution:** typed request schemas, expiring capability tokens, permission-lattice checks, Unix-socket IPC, audit logging, allowlisted direct-argv execution, path containment and sandbox/resource controls.
+- **Policy Gate and host execution:** typed request schemas, expiring capability tokens, permission-lattice checks, Unix-socket IPC, audit logging, allowlisted direct-argv execution, descriptor-relative atomic workspace writes, symlink-resistant path traversal, root-ownership checks when running privileged, and sandbox/resource controls.
 - **Firewall lifecycle:** the block and unblock commands are routed through the Policy Gate. Unblock removes exact matching Kaia-owned nftables rules by handle; boot replay folds approved block/unblock events so a successful removal does not resurrect an older block.
 - **Filesystem honeypots:** decoys are created only with exclusive, no-follow creation at vacant paths. Existing files are preserved and not registered unless their contents exactly match a known decoy; shutdown only unlinks unchanged files created by that coordinator. Network-namespace listeners remain host-dependent.
 - **Integrity monitoring:** trusted-baseline validation, watchlist discovery, tamper alerts and lockdown circuit breaking are implemented. System mode refuses to start without a valid trusted baseline; only unprivileged development mode may bootstrap from current disk state.
