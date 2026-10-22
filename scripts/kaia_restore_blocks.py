@@ -32,8 +32,14 @@ logger = logging.getLogger("kaia-restore-blocks")
 MAX_BLOCKS = int(os.environ.get("KAIA_MAX_RESTORED_BLOCKS", "500"))
 
 
-def _effective_rule_key(ip: str, protocol: str, port):
-    """Normalize a ledger request to the exact rule shape HostExecutor creates."""
+def _effective_rule_key(ip: str, protocol: str, port, action: str = "block_ip"):
+    """Normalize a ledger request to the exact rule shape HostExecutor creates.
+
+    Older approved block records may contain protocol/port combinations that
+    the original executor accepted but effectively treated as an IP-wide rule.
+    Preserve those historical semantics when replaying blocks. New unblock
+    requests are stricter, because ambiguity must never delete a broader rule.
+    """
     address = ipaddress.ip_address(ip).compressed
     if protocol not in ("all", "tcp", "udp"):
         raise ValueError("unsupported protocol")
@@ -41,16 +47,25 @@ def _effective_rule_key(ip: str, protocol: str, port):
         isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535
     ):
         raise ValueError("invalid port")
-    if protocol == "all" and port is not None:
-        raise ValueError("port may only be specified with tcp or udp")
-    if protocol in ("tcp", "udp") and port is None:
-        raise ValueError("a port is required when protocol is tcp or udp")
-    return (address, protocol, port), {
-        "target_ip": address,
-        "protocol": protocol,
-        "port": port,
-    }
 
+    if action == "unblock_ip":
+        if protocol == "all" and port is not None:
+            raise ValueError("port may only be specified with tcp or udp")
+        if protocol in ("tcp", "udp") and port is None:
+            raise ValueError("a port is required when protocol is tcp or udp")
+        effective_protocol, effective_port = protocol, port
+    elif protocol in ("tcp", "udp") and port is not None:
+        effective_protocol, effective_port = protocol, port
+    else:
+        # Preserve the actual legacy executor behavior: protocol without a
+        # port, or a port with protocol='all', generated an IP-wide DROP rule.
+        effective_protocol, effective_port = "all", None
+
+    return (address, effective_protocol, effective_port), {
+        "target_ip": address,
+        "protocol": effective_protocol,
+        "port": effective_port,
+    }
 
 def collect_blocks(ledger_path: str) -> list:
     """Reconstruct the latest approved state for each firewall-rule key.
@@ -94,7 +109,7 @@ def collect_blocks(ledger_path: str) -> list:
             try:
                 if not isinstance(ip, str):
                     raise ValueError("target_ip must be a string")
-                key, normalized = _effective_rule_key(ip, protocol, port)
+                key, normalized = _effective_rule_key(ip, protocol, port, action)
             except (ValueError, TypeError):
                 malformed += 1
                 continue
