@@ -180,24 +180,27 @@ All validation must be performed by the Policy Gate before any action is taken.
 
 ## 4. Advanced Local Telemetry Pipeline & Kernel Observers
 
-### 4.1 High‑Performance File Integrity Monitoring (FIM) via `fanotify`
+### 4.1 File Integrity Monitoring (FIM) via fanotify
 
-The FIM subsystem must interface with the Linux kernel's native `fanotify` API using direct `ctypes` bindings (or equivalent low‑level system calls). The implementation must:
+**Target design:** use Linux fanotify through low-level system calls. The monitor may use FAN_CLASS_NOTIF to observe changes and audit them, but this mode does not delay the originating process for a scan verdict. It must not be described as pre-execution prevention. True permission-event enforcement would require a separate FAN_CLASS_CONTENT / FAN_OPEN_PERM design, with explicit timeout behavior, deadlock avoidance, cancellation semantics, and a tested fail-open/fail-closed policy.
 
-* Initialize a fanotify file descriptor with flags `FAN_CLASS_NOTIF`, `FAN_CLOEXEC`, and `FAN_NONBLOCK`.
-* Add a mark on **the entire mount point** of the monitored filesystem (e.g., the root or specific critical paths) with `FAN_MARK_ADD | FAN_MARK_MOUNT`, monitoring the events: `FAN_MODIFY`, `FAN_CREATE`, `FAN_ATTRIB`, and `FAN_ONDIR`. This provides mount‑wide coverage, capturing all file system modifications.
-* In addition to fanotify, **deep eBPF hooks** must be placed on `sys_enter_openat2` and `sys_enter_unlinkat` to capture file access attempts and deletions at the syscall layer before they complete.
-* For each fanotify event, consume the event file descriptor directly from the fanotify metadata structure, **read the file content synchronously via `/proc/self/fd/<fd>`** (eliminating TOCTOU races), and instantly execute cryptographic signature verification and YARA scanning on the binary headers **before the process context initialises**, blocking rootkits and payload drops in real time.
-* For eBPF events on `openat2`/`unlinkat`, feed the file path into the YARA engine or signature verifier immediately.
-* Log the event (timestamp, event type, PID, process comm, target path, YARA matches) to an append‑only SQLite audit trail located outside the monitored paths (e.g., `/var/lib/secdaemon/fim_audit.db`).
-* On an internal scanning error or engine crash, the telemetry thread must isolate the exception, log a critical warning to the append-only ledger, drop the associated transaction path via the Policy Gate, and trigger a graceful systemd unit restart sequence for the affected daemon.
-* Exclude the following paths from monitoring to prevent feedback loops and reduce noise:
-* `/var/log/*` – exclude `FAN_MODIFY` to avoid logging echo‑loops.
-* `/tmp/*`, `/var/tmp/*` – exclude `FAN_CREATE` to avoid transient compiler thrashing.
-* `/proc/*`, `/sys/*`, `/dev/*` – complete exclusion of virtual devices.
-* `/home/*/.cache/*` – omit browser cache synchronisation.
+The current implementation:
 
-All database operations must use a connection pool or context manager with proper error handling; any unhandled exception in the FIM thread must cause the entire daemon to terminate and restart.
+- Uses FAN_CLASS_NOTIF | FAN_CLOEXEC | FAN_NONBLOCK and attempts a mount mark with progressively narrower event masks when the kernel rejects a mask.
+- Keeps the fanotify event FD open while processing the event. It captures the file bytes from that descriptor (bounded to 64 MiB) and uses the same snapshot for executable-header detection, YARA matching and SHA-256.
+- Records oversized/non-regular scan skips and attempts lockdown for critical-path failures. The 64 MiB limit is an explicit resource bound, not proof that every file was scanned.
+- Still depends on the target kernel, capabilities and successful mount-mark setup. Where the mark fails, the daemon can fall back to the watchdog sentinel, which has different visibility and must be shown as degraded.
+
+The following remain target requirements or unfinished work:
+
+- Expand and validate the watched path set and exclusions for each supported deployment.
+- Verify the FIM SQLite audit store and alert path are outside monitored writable scopes.
+- Complete controlled event-to-verdict-to-response testing with a real target kernel.
+- Design permission-event enforcement separately if Kaia must prevent a process from opening/executing a file until a verdict is available. The current notification-only handler does not satisfy that goal.
+
+The eBPF sys_enter_openat2 and sys_enter_unlinkat probes currently record telemetry in userspace. The unlinkat record is created at syscall entry and represents an attempt, not confirmed successful deletion; successful-operation correlation and immediate YARA correlation are not yet implemented.
+
+
 
 ### 4.2 eBPF Hook Specifications & Telemetry Filtering
 
@@ -214,6 +217,8 @@ The tracking engine must inject kernel probes to maintain a non‑polling observ
 
 The eBPF programs must be written in a restricted C subset and compiled with the BCC or libbpf toolchain. On each event, the eBPF program must submit a structured record (e.g., via a perf buffer) containing the captured fields. The userspace counterpart must read these records, validate them against the defined schema, and forward them to the security event pipeline.
 
+**Current implementation note (2026-10-22):** the registered probe set includes execve, tcp_v4_connect, tcp_retransmit_skb, setuid/setreuid, openat (honeypot matches), openat2, and unlinkat. The dashboard exposes execve, openat2 and unlinkat events in its waterfall. This is not exhaustive syscall coverage; BCC/kernel compatibility and actual hook registration must be verified on the deployed host. unlinkat entries denote syscall-entry attempts.
+
 **Telemetry Sanitizer Rules:** Telemetry sanitization and string truncation must be executed safely on individual fields after schema validation has verified structural integrity, ensuring that truncation never invalidates the overall framing syntax of the data payload. Every incoming telemetry field (process name, IP address, hostname, etc.) must be validated against a character allowlist `[A-Za-z0-9_.-]`. All strings must be truncated to a predefined maximum length (e.g., 64 characters for hostnames, 16 for process comm). Any character outside the allowlist must be stripped or replaced with a safe placeholder to prevent injection of malicious control characters or shell metacharacters via network metadata.
 
 ---
@@ -227,6 +232,8 @@ To preserve operational stealth and prevent exploitation paths, Kaia must track 
 The discovery layer must open an unprivileged network frame interceptor bound to `AF_PACKET` with `ETH_P_ALL` on a specified network interface. It must continuously capture raw Ethernet frames and parse the headers.
 
 ### 5.2 Broadcast Protocol Extraction
+
+The following protocols are target requirements; the NetBIOS item below is still unimplemented as of the 2026-10-22 review. The currently supported parser set should be checked in security/network_discovery.py before claiming complete protocol coverage.
 
 The following protocols must be parsed from captured packets:
 
@@ -470,6 +477,8 @@ The curses dashboard is designed to be responsive to terminal resizing and works
   - `ESC` – clear input line
   - `Up/Down` – scroll through command history
 
+**Implementation status (2026-10-22):** the local web HUD has an interactive command console and returns structured lines from /api/command; the curses dashboard also has a command worker. Telemetry updates stream over WebSocket, but command output itself is still delivered as one completed response. Incremental command-response streaming for long-running operations remains unimplemented.
+
 ### 9.5 Multi‑Terminal Environment Integration
 The curses dashboard can occupy one terminal in a multi-terminal workstation. The loopback-only web HUD is a second presentation of the shared collector snapshot; it does not own an independent telemetry or authorization pipeline. The `main.py` script remains a debugging/headless fallback.
 
@@ -487,7 +496,7 @@ Tier 4: (Not applicable – no cognitive state)
 Tier 5: Enterprise Guardian Matrix (Future – includes advanced monitoring)
 ```
 
-### 10.2 Current Implementation Status (as of 2026-06-25)
+### 10.2 Historical Implementation Checkpoint (2026-06-25; superseded by §10.5)
 
 **Completed (Tier 1, Tier 2, and Tier 3 core):**
 
@@ -557,11 +566,16 @@ rather than the work being outstanding:
       for `"security/"`, so the file holding `KAIA_CAPABILITY_TOKEN_SECRET` — the most
       severe case — was exempt. Now matched on resolved paths.
 
-**Remaining (Tier 5, deferred):**
+**Historical remaining list (recorded 2026-09-08; updated status is in §10.5):**
 
-- [ ] **Dashboard Stage 2:** interactive command input + response streaming.
-- [ ] **Tier 5 enhancements:** expanded eBPF coverage, YARA/fanotify FIM breadth,
-      NetBIOS in passive discovery, DuckDB threat-intel expansion.
+- [~] **Dashboard Stage 2:** interactive command entry and dispatch now exist in the web HUD; long-running command output is still returned in one response rather than streamed incrementally.
+- [x] **Firewall unblock lifecycle:** unblock_ip, exact Kaia-rule removal and chronological block/unblock replay were implemented in October 2026.
+- [x] **eBPF unlinkat visibility:** the sys_enter_unlinkat perf buffer and waterfall lane were wired in October 2026. It records attempts at syscall entry, not confirmed successful deletions.
+- [x] **FIM/YARA hardening:** scanning now uses the original event descriptor's bounded byte snapshot; rule validation fails closed when isolated prerequisites are unavailable, and generated string literals are escaped.
+- [x] **Basic package monitoring:** a passive pacman.log monitor records completed transactions; AUR/repository/dependency attestation remains future work.
+- [ ] **Still outstanding:** expanded eBPF/FIM breadth, NetBIOS parsing, broader offline threat-intelligence stores, true execution-blocking FIM, response streaming and the other Tier 5 extensions in §11.
+
+
 
 ### 10.3 Immediate Action Items (Priority Order)
 
@@ -611,24 +625,32 @@ to this public repository in 4 commits and remained the live signing key. Rotate
 value outright. History still contains it; rotation is the mitigation, since scrubbing
 does not un-publish a value that was public.
 
-**Blocked on privileged setup (see `docs/NEXT_STEPS.md`).** The hardened
-deployment is committed but not installed: the Policy Gate still runs from the
-developer checkout with `CAP_SYS_ADMIN` and `CAP_DAC_OVERRIDE`, the ledger is still
-inside the working tree, and the mitigation path has never been exercised against a
-real nftables ruleset. Four `sudo` steps, documented there.
+**Historical deployment checkpoint (2026-09-08; verify before acting).** The
+then-current host was recorded as running from a developer checkout with excess
+capabilities and without the hardened deployment. That is not a live reading of the
+current host. See `docs/NEXT_STEPS.md` for service, deployment-path, state-directory,
+baseline and firewall checks; do not assume the recorded state is unchanged.
 
-Current priorities:
+**Current priorities (audit snapshot 2026-10-22):**
 
-1. **Dashboard Stage 2** — command input panel and response streaming. The largest
-   remaining piece of declared-but-unbuilt functionality.
-2. **Live-fire the mitigation path.** The new `inet kaia_block` table is unit-tested at
-   the command-construction level but has not been exercised against a real ruleset.
-   Block a throwaway address, confirm with `nft list table inet kaia_block`, then
-   `ufw reload` and confirm the rule survives.
-3. **Persistence of blocks across reboot.** `inet kaia_block` is runtime-only; a reboot
-   clears every block Kaia has applied. Decide whether blocks should be re-applied at
-   boot from the audit ledger, or remain deliberately ephemeral.
-4. **Tier 5 stretch goals** — expanded eBPF, YARA/fanotify breadth, NetBIOS discovery.
+1. **Verify the deployed host before reliance.** Inspect the active unit's ExecStart,
+   WorkingDirectory, state directory and trusted baseline; do not infer deployment
+   state from repository code.
+2. **Live-fire the firewall lifecycle.** Test block, ufw reload, reboot replay, unblock,
+   and a second reboot proving an approved removal stays removed. Use TEST-NET addresses
+   and record the service/journal output.
+3. **Design execution-blocking FIM as a separate subsystem.** Current FAN_CLASS_NOTIF
+   is observational. A permission-event design needs explicit timeout, deadlock,
+   process-response and fail-open/fail-closed semantics plus kernel tests.
+4. **Complete telemetry coverage.** Validate available BCC probes on the target kernel;
+   implement and test missing NetBIOS parsing, broader file/process/network hooks and
+   required event-to-detection correlation.
+5. **Finish remaining Tier 5 work incrementally:** command-response streaming, broader
+   supply-chain attestation, behavioral baselines, alert-confidence scoring, secrets
+   exposure detection, backup restorability and independent service/data-freshness
+   supervision. Use §10.5 and §11 as the current tracking baseline.
+
+
 
 ### 10.4 Negative Testing Requirements
 
@@ -647,49 +669,58 @@ All negative test cases must assert that the operation is denied, logged in the 
 
 ### 10.5 Implementation and Verification Status (audit snapshot: 2026-10-22)
 
-This status was reconciled against the repository tree, implementation, service definitions and existing tests. It describes code present on the repository branch at the time of review, not the state of any particular host. The deployment checklist in `docs/NEXT_STEPS.md` remains the guide for operational verification.
+This is the current repository status as of the audit date. It describes implementation and automated tests on main, not the state of a specific installed host.
 
-**Implemented in the repository (not equivalent to live-fire proof):**
+**Implemented in the repository:**
 
-- [x] Policy Gate, capability-token validation, request schemas, executor boundary, IPC framing guards and audit writes.
-- [x] Executor path containment, argv execution without a shell, command allowlists, sandbox wrappers and cgroup resource ceilings.
-- [x] Trusted integrity baselines, discovered security-module watchlists, tamper alert latching and a lockdown-rate circuit breaker.
-- [x] Curses collector/snapshot pipeline and loopback web telemetry bridge. Web mutations must remain Policy Gate clients, never direct shell dispatch.
-- [x] Passive AF_PACKET discovery and cache-backed InternetDB/optional GeoIP enrichment. This is not active scanning or a complete network inventory.
-- [x] Regression tests for negative security, IPC, path containment, firewall command construction, ledger replay and dashboard behavior.
+- [x] Policy Gate, typed request schemas, expiring target-scoped capability tokens, permission-lattice checks, Unix-socket IPC, audit writes and constrained host execution.
+- [x] Firewall block and unblock intents. Unblock inspects Kaia's own nftables chain and deletes exact matching handles; it never flushes the chain or deletes rules solely because an IP matches.
+- [x] Ledger-aware block replay. Approved block/unblock events are folded chronologically by normalized rule scope, including legacy block-only records; failed or denied unblocks do not remove desired state.
+- [x] Trusted integrity baseline parsing, coverage/mismatch checks, security-file watchlist and lockdown alert latching/circuit breaking. Missing baseline remains a weaker bootstrap state and must be operationally resolved.
+- [x] FIM event handling keeps the original fanotify event FD open and uses the same bounded (64 MiB max) byte snapshot for executable-header detection, YARA and hashing. This eliminates pathname-reopen substitution, but does not block the originating process.
+- [x] YARA rule generation escapes arbitrary text as literals; rule-name/path and duplicate checks are enforced in RuleEngine; missing isolated validator prerequisites fail closed instead of validating in-process.
+- [x] eBPF source includes a sys_enter_unlinkat perf callback and a waterfall lane for observed deletion attempts. A syscall-entry event is not proof that unlink completed; all probes remain kernel/BCC dependent.
+- [x] Loopback-only Web HUD, telemetry WebSocket, interactive command console, strict self-hosted CSP, and Policy Gate command dispatch. Command results currently arrive as completed responses, not incremental streaming.
+- [x] InternetDB IP validation, process-local serialized API requests and negative caching for authoritative HTTP 404 results, alongside existing IP reputation/CVE lookup functions.
+- [x] Passive pacman transaction monitoring for installed/upgraded/downgraded/reinstalled/removed packages after successful ALPM transaction completion. This is not package-signature verification or full AUR/repository dependency attestation.
+- [x] GitHub Actions regression workflow. Latest recorded main run on 2026-10-22: 156 passed, 0 failed. Kernel/privileged behavior is outside the proof supplied by those tests.
 
-**Partial, optional or not yet demonstrated as complete controls:**
+**Partial, host-dependent or still unimplemented:**
 
-- [ ] **Execution-blocking FIM.** The current fanotify class is notification mode; an event is not a permission gate that blocks the originating process pending a scan verdict. A true blocking design requires separate implementation and kernel-level verification.
-- [ ] **Complete eBPF coverage.** Probes depend on BCC, supported hooks, kernel capabilities and active registration. Missing events mean missing visibility, not a clean host.
-- [ ] **YARA end-to-end enforcement.** Source generation, isolated validation, runtime scanner activation, event delivery and response behavior must be tested together. Saving a rule file alone is not activation.
-- [ ] **Live firewall/recovery path.** Unit tests do not prove the kernel accepts a rule, UFW reload preserves it, or boot recovery restores it. The live-fire checklist remains required.
-- [ ] **Independent health supervision, supply-chain/package tracking, behavioral baselines, alert-confidence scoring, secrets scanning and backup-restorability checks.** These remain planned enhancements.
-- [ ] **Automated regression enforcement.** A CI workflow and successful Actions run are necessary before claiming continuous pass status. Platform-specific integrations still need target-host validation.
+- [ ] **Execution-blocking FIM.** Notification-mode fanotify sees events but does not hold processes pending a security verdict. A separate permission-event design is still required.
+- [ ] **Complete kernel telemetry.** Probe availability depends on BCC, kernel version/symbols, capabilities and successful registration. Current unlinkat records attempts, not successful deletions; additional coverage/correlation remains.
+- [ ] **End-to-end FIM/YARA response.** Source generation, isolated validation and same-FD scanning exist, but kernel event availability and the complete event-to-verdict-to-response path require controlled host tests.
+- [ ] **Incremental command-response streaming** for long-running diagnostics/sandbox execution. Interactive command entry and one-shot responses are already implemented.
+- [ ] **Network discovery gap:** NetBIOS Name Service parsing is still listed in the spec but is not yet implemented.
+- [ ] **Broader supply-chain integrity:** AUR build tracking, repository/metadata changes, dependency graph shifts and package signature/installed-content attestation are not implemented.
+- [ ] **Other Tier 5 capabilities:** process/network/file behavioral baselines, alert-confidence framework, secrets exposure scanning, backup existence/recency/restorability, independent health and data-freshness supervision, historical threat-intel snapshots, local GeoLite2/CVE/passive-DNS datasets and DuckDB-backed expansion.
+- [ ] **Target-host validation:** verify the actual systemd deployment, trusted baseline, live block/unblock, UFW reload survival, boot replay/tombstones, fanotify marks and BCC probe compilation on the deployed Arch Linux host.
 
-**Near-term priority order:**
+**Recommended next steps:**
 
-1. Verify/install the root-owned system-mode deployment and create a trusted baseline from a reviewed known-good state.
-2. Exercise firewall block, removal, reload survival, boot replay and panic recovery with documentation/test addresses on the target Arch Linux host.
-3. Run selected regression tests in CI and resolve failures before expanding the matrix.
-4. Design permission-event FIM as a distinct enforcement subsystem; do not relabel the existing notification monitor as blocking.
-5. Expand and validate telemetry hooks, independent health supervision and remaining Tier 5 capabilities in small, independently testable changes.
+1. Verify deployment and trusted baseline on the actual host.
+2. Live-test block → UFW reload → reboot restore → unblock → second reboot (the rule must stay absent).
+3. Design execution permission FIM separately from notification-mode observation.
+4. Fill telemetry/discovery gaps with feature-specific tests and target-kernel evidence.
+5. Implement the remaining Tier 5 features in separate, independently testable PRs.
+
+
 
 ## 11. Advanced Monitoring Capabilities (Optional Future Enhancements)
 
-While not required for the core security model, the following capabilities may be incrementally added to enhance Kaia's visibility and operational confidence. They are listed as **optional** and should not delay the completion of Tier 1–3.
+This section is the backlog of capabilities not yet complete after the 2026-10-22 implementation review. A checked-in module or partial observer is not equivalent to full end-to-end enforcement.
 
-- **Supply Chain Monitoring:** Track package installations (pacman logs, AUR), repository changes, and dependency graph shifts.
-- **Baseline Drift Detection:** Establish behavioral baselines for processes, network connections, and file activity; alert on deviations.
-- **Alert Confidence Framework:** Classify alerts by confidence (Informational, Low, Medium, High, Critical) to reduce operator fatigue.
-- **Secrets Exposure Detection:** Scan for API keys, tokens, and credentials in logs, configuration files, and source code.
-- **Backup Awareness:** Validate backup existence, recency, and restorability to ensure recovery readiness.
-- **Threat Intelligence Enrichment:** Expand offline enrichment with GeoLite2, local CVE databases, and historical InternetDB snapshots.
-- **Self‑Health Monitoring:** Continuous verification of Kaia's own services, database health, and data freshness, with self‑reporting of degraded states.
+- **Supply-chain monitoring:** a basic pacman.log monitor is now implemented for completed package transactions. Still missing: AUR build-source tracking, repository/metadata-change detection, dependency-graph drift and package signature/installed-content attestation.
+- **Baseline drift detection:** behavioral baselines for processes, network connections and file activity, with deviation alerts.
+- **Alert confidence framework:** classify alerts (Informational, Low, Medium, High, Critical) with explainable confidence inputs and operator-visible uncertainty.
+- **Secrets exposure detection:** scan configured source/config/log scopes for keys and credentials while redacting matched values from telemetry.
+- **Backup awareness:** validate configured backup existence, recency and restorability; do not infer restore readiness from file presence alone.
+- **Threat-intelligence expansion:** InternetDB validation, throttling and negative cache are implemented. Local GeoLite2, richer local CVE tables, passive DNS maps, historical snapshots and optional DuckDB analysis remain future work.
+- **Self-health monitoring:** provide independent service supervision and explicit freshness/availability signals for the Policy Gate, collectors, databases, FIM, eBPF and threat-intel cache.
+- **Telemetry expansion:** implement missing NetBIOS parsing and broader kernel hook/correlation coverage. unlinkat telemetry currently records syscall-entry attempts, not completed deletions.
+- **Execution-blocking FIM:** separately design and test permission-event enforcement; notification-mode fanotify remains observational.
 
-These items are considered Tier 5 or beyond and may be implemented incrementally as time permits.
-
----
+These are the remaining Tier 5 or beyond items. See §10.5 for priority order and current implementation evidence.
 
 ## 12. Rigid Scope Boundaries (Negative Constraints)
 
