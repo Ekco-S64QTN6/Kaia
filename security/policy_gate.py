@@ -7,6 +7,7 @@ import hashlib
 import re
 import threading
 import subprocess
+import time
 import stat
 from datetime import datetime, UTC, timedelta
 from pydantic import ValidationError
@@ -365,6 +366,7 @@ class PolicyGate:
                 break
 
     MAX_IPC_FRAME_BYTES = 1024 * 1024
+    MAX_IPC_FRAME_READ_SECONDS = 5.0
     MAX_IPC_CLIENTS = 16
 
     def _handle_client_with_slot(self, conn):
@@ -374,13 +376,27 @@ class PolicyGate:
             self._client_slots.release()
 
     def _read_frame(self, conn):
-        # Bound untrusted length before attempting to read the payload.
-        header = bytearray()
-        while len(header) < 4:
-            packet = conn.recv(4 - len(header))
-            if not packet:
-                return None
-            header.extend(packet)
+        # Enforce one deadline for the whole frame, not a fresh timeout for each
+        # recv(). Otherwise a client can drip bytes just before every timeout and
+        # occupy one of the small fixed worker slots indefinitely.
+        deadline = time.monotonic() + self.MAX_IPC_FRAME_READ_SECONDS
+
+        def read_exactly(size):
+            data = bytearray()
+            while len(data) < size:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("IPC frame read deadline exceeded")
+                conn.settimeout(remaining)
+                packet = conn.recv(min(65536, size - len(data)))
+                if not packet:
+                    return None
+                data.extend(packet)
+            return data
+
+        header = read_exactly(4)
+        if header is None:
+            return None
         length = int.from_bytes(header, byteorder="big")
         if length <= 0 or length > self.MAX_IPC_FRAME_BYTES:
             raise ValueError(
@@ -388,12 +404,9 @@ class PolicyGate:
                 f"{self.MAX_IPC_FRAME_BYTES} bytes"
             )
 
-        payload_data = bytearray()
-        while len(payload_data) < length:
-            packet = conn.recv(min(65536, length - len(payload_data)))
-            if not packet:
-                return None
-            payload_data.extend(packet)
+        payload_data = read_exactly(length)
+        if payload_data is None:
+            return None
 
         payload = json.loads(payload_data.decode("utf-8"))
         if not isinstance(payload, dict):
@@ -412,7 +425,9 @@ class PolicyGate:
             request_payload = self._read_frame(conn)
             if not request_payload:
                 return
-            
+            # Restore a fresh bounded write timeout after the absolute read deadline.
+            conn.settimeout(5.0)
+
             # Validate the envelope before flattening untrusted local IPC data.
             action = request_payload.get("action")
             nested_payload = request_payload.get("payload", {})
