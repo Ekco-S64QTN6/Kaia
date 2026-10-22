@@ -66,10 +66,7 @@ sudo systemctl start kaia-policy-gate
 systemctl status kaia-policy-gate --no-pager -n 15
 ```
 
-The baseline records SHA-256 hashes of every protected file to root-owned
-`/var/lib/kaia/baseline.sha256`. Without it, tamper detection hashes whatever is on
-disk at startup — so a file edited while the daemon was stopped simply *becomes* the
-baseline and is never reported.
+System mode refuses to start without a valid trusted baseline. The baseline records SHA-256 hashes of protected files to root-owned `<KAIA_STATE_DIR>/baseline.sha256` (default `/var/lib/kaia/baseline.sha256`). The FIM audit DB lives at `<KAIA_STATE_DIR>/fim_audit.db`; the installer migrates legacy history from `/var/lib/secdaemon/fim_audit.db` when the destination does not already exist.
 
 **Run the baseline only from a state you have reviewed.** Baselining a compromise
 makes the compromise the reference.
