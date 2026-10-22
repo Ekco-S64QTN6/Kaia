@@ -125,3 +125,30 @@ def test_system_mode_refuses_to_bootstrap_a_missing_trusted_baseline(tmp_path, m
 
     with pytest.raises(RuntimeError, match="Trusted integrity baseline is missing"):
         detector.start()
+
+
+def test_detector_fails_closed_when_security_watchlist_cannot_be_enumerated(monkeypatch):
+    real_listdir = td.os.listdir
+    security_dir = os.path.abspath(os.path.join(config.WORKSPACE_DIR, "security"))
+
+    def fail_security_listdir(path):
+        if os.path.abspath(path) == security_dir:
+            raise PermissionError("simulated directory enumeration failure")
+        return real_listdir(path)
+
+    monkeypatch.setattr(td.os, "listdir", fail_security_listdir)
+    with pytest.raises(RuntimeError, match="Could not enumerate protected security modules"):
+        td.TamperDetector()
+
+
+def test_baseline_script_propagates_watchlist_enumeration_failure():
+    script = open("scripts/kaia-baseline.sh", encoding="utf-8").read()
+
+    # Process substitution masks the command's non-zero exit status in Bash.
+    # Capture into a checked command group before reading any paths instead.
+    assert 'files_tmp="$(mktemp)"' in script
+    assert 'if ! (' in script
+    assert ') > "$files_tmp"; then' in script
+    assert 'mapfile -t FILES < "$files_tmp"' in script
+    assert "mapfile -t FILES < <(" not in script
+    assert 'if [ -n "$files_tmp" ] && [ -e "$files_tmp" ]; then rm -f -- "$files_tmp"; fi' in script
