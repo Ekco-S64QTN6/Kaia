@@ -45,7 +45,7 @@ def test_internetdb_404_is_cached_as_a_negative_result(monkeypatch, tmp_path):
 
     monkeypatch.setattr(threat_intel.requests, "get", not_found)
     first = threat_intel.lookup_internetdb("8.8.8.8")
-    second = threat_intel.lookup_internetdb("203.0.113.42")
+    second = threat_intel.lookup_internetdb("8.8.8.8")
 
     assert first["found"] is False and first["source"] == "api-not-found"
     assert second["found"] is False and second["source"] == "cache"

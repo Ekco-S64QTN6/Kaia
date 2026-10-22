@@ -226,7 +226,7 @@ def _fetch_internetdb_api(ip: str) -> dict:
     # InternetDB is a public-host intelligence API, not an internal asset
     # resolver. Never disclose private, loopback, link-local, reserved or
     # otherwise non-global addresses to this third-party service.
-    if not address.is_global:
+    if not address.is_global or address.is_multicast:
         logger.debug("Skipping InternetDB request for non-global address %s", ip)
         return {}
 
@@ -315,7 +315,7 @@ def lookup_internetdb(ip: str) -> dict:
             "vulns": [], "cpes": [], "found": False, "source": "invalid",
         }
 
-    if not address.is_global:
+    if not address.is_global or address.is_multicast:
         logger.debug("Skipping InternetDB lookup for non-global address %s", ip)
         return {
             "ip": ip, "ports": [], "hostnames": [], "tags": [],
