@@ -2,12 +2,16 @@ import os
 import re
 import sys
 import tempfile
+import stat
 import subprocess
 import logging
 import threading
 import config
 
 logger = logging.getLogger(__name__)
+
+SYSTEMD_RUN_BINARY = "/usr/bin/systemd-run"
+YARA_BINARY = "/usr/bin/yara"
 
 HAS_YARA = False
 try:
@@ -60,132 +64,219 @@ class RuleEngine:
             except Exception as e:
                 logger.error(f"Failed to create benign corpus file {filepath}: {e}")
 
-    def compile_rule_text(self, rule_name: str, author: str, threat_description: str, target_ioc_indicator: str, mitre_framework_id: str = None) -> str:
-        # Escape indicator and strip yara metacharacters
-        escaped_ioc = re.escape(target_ioc_indicator)
-        for char in ['{', '}', '[', ']', '/', '\\']:
-            escaped_ioc = escaped_ioc.replace(char, '')
-            
-        mitre_id = mitre_framework_id or ""
-        
-        rule_text = f"""rule {rule_name} {{
+    @staticmethod
+    def _escape_yara_literal(value: str) -> str:
+        """Encode arbitrary UTF-8 text as a YARA quoted string without source injection."""
+        encoded = value.encode("utf-8")
+        escaped = []
+        for byte in encoded:
+            if byte == 0x5C:
+                escaped.append("\\\\")
+            elif byte == 0x22:
+                escaped.append("\\\"")
+            elif byte == 0x0A:
+                escaped.append("\\n")
+            elif byte == 0x0D:
+                escaped.append("\\r")
+            elif byte == 0x09:
+                escaped.append("\\t")
+            elif 0x20 <= byte <= 0x7E:
+                escaped.append(chr(byte))
+            else:
+                escaped.append(f"\\x{byte:02X}")
+        return "".join(escaped)
+
+    def compile_rule_text(
+        self,
+        rule_name: str,
+        author: str,
+        threat_description: str,
+        target_ioc_indicator: str,
+        mitre_framework_id: str = None,
+    ) -> str:
+        """Build a YARA rule using escaped literal strings, not YARA source fragments."""
+        author_literal = self._escape_yara_literal(author)
+        description_literal = self._escape_yara_literal(threat_description)
+        ioc_literal = self._escape_yara_literal(target_ioc_indicator)
+        mitre_literal = self._escape_yara_literal(mitre_framework_id or "")
+
+        return f"""rule {rule_name} {{
     meta:
-        author = "{author}"
-        description = "{threat_description}"
-        mitre_id = "{mitre_id}"
+        author = "{author_literal}"
+        description = "{description_literal}"
+        mitre_id = "{mitre_literal}"
     strings:
-        $ioc = "{escaped_ioc}"
+        $ioc = "{ioc_literal}"
     condition:
         any of them
 }}
 """
-        return rule_text
-
     def validate_rule(self, rule_text: str) -> tuple:
+        """Validate a YARA rule only in the required isolated systemd service.
+
+        There is deliberately no in-process fallback: a missing executable or
+        unavailable service manager means we cannot prove the rule is safe to
+        activate, so rule ingestion fails closed.
         """
-        Validates the YARA rule by running it in an isolated systemd sandbox.
-        Returns (is_valid, error_message).
-        """
-        # 1. Ephemeral tempfile write
-        fd, rule_path = tempfile.mkstemp(suffix=".yar", prefix="yara_rule_")
+        fd = -1
+        rule_path = None
         try:
+            fd, rule_path = tempfile.mkstemp(suffix=".yar", prefix="kaia-yara-")
             with os.fdopen(fd, "w", encoding="utf-8") as f:
+                fd = -1
                 f.write(rule_text)
-        except Exception as e:
-            return False, f"Failed to write temp rule file: {e}"
+                f.flush()
+                os.fsync(f.fileno())
 
-        # 2. Run systemd-run validation sandbox
-        cmd = [
-            "systemd-run",
-            "--scope",
-            "-p", "PrivateTmp=yes",
-            "-p", "ProtectSystem=strict",
-            "-p", "PrivateNetwork=yes",
-            "-p", "DynamicUser=yes",
-            "-p", "NoNewPrivileges=yes",
-            "-p", "CapabilityBoundingSet=",
-            "-p", "SystemCallFilter=@system-service",
-            "-p", "RestrictAddressFamilies=none",
-            "-p", f"BindReadOnlyPaths={rule_path}:{rule_path}",
-            "-p", f"BindReadOnlyPaths={self.benign_corpus_dir}:{self.benign_corpus_dir}",
-            "yara", rule_path, self.benign_corpus_dir
-        ]
-        
-        try:
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=5.0)
-            # Cleanup temp rule file
-            try:
-                os.remove(rule_path)
-            except Exception:
-                pass
-                
-            if res.returncode != 0:
-                # Compile or runtime error
-                err = res.stderr.strip() or res.stdout.strip() or "YARA validation failed"
-                if "Failed to find executable" in err or "No such file or directory" in err or "not found" in err:
-                    raise FileNotFoundError("yara binary not found in path")
-                return False, f"YARA validation syntax error: {err}"
-                
-            if res.stdout.strip():
-                # Matched benign files
+            # DynamicUser cannot read a root-only 0600 temporary file. The path
+            # is random, the file is immutable during the check, and the
+            # transient service bind-mounts it read-only.
+            os.chmod(rule_path, stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
+
+            cmd = [
+                SYSTEMD_RUN_BINARY,
+                "--wait",
+                "--pipe",
+                "--collect",
+                "--quiet",
+                "-p", "PrivateTmp=yes",
+                "-p", "ProtectSystem=strict",
+                "-p", "PrivateNetwork=yes",
+                "-p", "DynamicUser=yes",
+                "-p", "NoNewPrivileges=yes",
+                "-p", "CapabilityBoundingSet=",
+                "-p", "SystemCallFilter=@system-service",
+                "-p", "RestrictAddressFamilies=none",
+                "-p", f"BindReadOnlyPaths={rule_path}:{rule_path}",
+                "-p", f"BindReadOnlyPaths={self.benign_corpus_dir}:{self.benign_corpus_dir}",
+                "--",
+                YARA_BINARY, rule_path, self.benign_corpus_dir,
+            ]
+            env = {
+                "PATH": "/usr/bin:/bin",
+                "HOME": "/root",
+                "LANG": "C.UTF-8",
+                "LC_ALL": "C",
+            }
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+                shell=False,
+                env=env,
+                timeout=10.0,
+            )
+
+            if result.returncode != 0:
+                err = (result.stderr or result.stdout or "Sandboxed YARA validation failed").strip()
+                lower = err.lower()
+                if "failed to find executable" in lower or "no such file or directory" in lower or "not found" in lower:
+                    return False, f"Required sandbox/YARA executable is unavailable; refusing to activate rule: {err}"
+                return False, f"Sandboxed YARA validation failed: {err}"
+
+            if result.stdout.strip():
                 return False, "False positive detected: rule matched benign corpus files."
-                
             return True, ""
-        except FileNotFoundError:
-            # systemd-run or yara not installed
-            logger.warning("systemd-run or yara binary not found. Falling back to local validation.")
-            # Local validation fallback
-            if not HAS_YARA:
-                try:
-                    os.remove(rule_path)
-                except Exception:
-                    pass
-                return True, "" # Fail-open if yara is missing
-            try:
-                rules = yara.compile(source=rule_text)
-                for entry in os.listdir(self.benign_corpus_dir):
-                    filepath = os.path.join(self.benign_corpus_dir, entry)
-                    if os.path.isfile(filepath):
-                        matches = rules.match(filepath=filepath)
-                        if matches:
-                            return False, "False positive detected locally on benign corpus."
-                try:
-                    os.remove(rule_path)
-                except Exception:
-                    pass
-                return True, ""
-            except Exception as e:
-                try:
-                    os.remove(rule_path)
-                except Exception:
-                    pass
-                return False, f"Local YARA compile error: {e}"
-        except Exception as e:
-            try:
-                os.remove(rule_path)
-            except Exception:
-                pass
-            return False, f"Validation system error: {e}"
 
-    def add_rule(self, rule_name: str, author: str, threat_description: str, target_ioc_indicator: str, mitre_framework_id: str = None) -> tuple:
-        """Compiles, validates, and stores a new IOC rule."""
-        rule_text = self.compile_rule_text(rule_name, author, threat_description, target_ioc_indicator, mitre_framework_id)
-        
+        except FileNotFoundError as exc:
+            logger.error("Required YARA validation sandbox is unavailable: %s", exc)
+            return False, "Required sandbox/YARA executable is unavailable; refusing to activate rule."
+        except subprocess.TimeoutExpired:
+            return False, "Sandboxed YARA validation timed out; refusing to activate rule."
+        except Exception as exc:
+            logger.error("YARA validation failed closed: %s", exc, exc_info=True)
+            return False, f"Sandboxed YARA validation error: {exc}"
+        finally:
+            if fd >= 0:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+            if rule_path:
+                try:
+                    os.unlink(rule_path)
+                except FileNotFoundError:
+                    pass
+                except OSError as exc:
+                    logger.error("Could not remove temporary YARA file %s: %s", rule_path, exc)
+
+    def add_rule(
+        self,
+        rule_name: str,
+        author: str,
+        threat_description: str,
+        target_ioc_indicator: str,
+        mitre_framework_id: str = None,
+    ) -> tuple:
+        """Validate and activate a generated IOC rule, refusing partial activation."""
+        if not isinstance(rule_name, str) or not re.fullmatch(r"[a-zA-Z0-9_]{3,64}", rule_name):
+            return False, "Invalid rule name: expected 3-64 alphanumeric/underscore characters."
+        if not isinstance(author, str) or not 1 <= len(author) <= 128:
+            return False, "Author must contain between 1 and 128 characters."
+        if not isinstance(threat_description, str) or not 10 <= len(threat_description) <= 256:
+            return False, "Threat description must contain between 10 and 256 characters."
+        if not isinstance(target_ioc_indicator, str) or not 4 <= len(target_ioc_indicator) <= 128:
+            return False, "IOC indicator must contain between 4 and 128 characters."
+        if mitre_framework_id is not None and not re.fullmatch(r"T[0-9]{4}", str(mitre_framework_id)):
+            return False, "Invalid MITRE framework ID."
+        if not HAS_YARA:
+            return False, "yara-python is required to activate rules; refusing to save an inactive rule."
+
+        os.makedirs(self.rules_dir, exist_ok=True)
+        filepath = os.path.join(self.rules_dir, f"{rule_name}.yar")
+        if os.path.exists(filepath):
+            return False, f"Rule '{rule_name}' already exists; refusing to overwrite it."
+
+        rule_text = self.compile_rule_text(
+            rule_name, author, threat_description, target_ioc_indicator, mitre_framework_id
+        )
         ok, err = self.validate_rule(rule_text)
         if not ok:
             return False, err
-            
-        # Write to stored rules directory
-        filename = f"{rule_name}.yar"
-        filepath = os.path.join(self.rules_dir, filename)
+
+        temp_path = None
         try:
-            with open(filepath, "w", encoding="utf-8") as f:
+            fd, temp_path = tempfile.mkstemp(prefix=".kaia-rule-", suffix=".tmp", dir=self.rules_dir)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(rule_text)
-            logger.info(f"Saved new YARA rule: {filepath}")
+                f.flush()
+                os.fsync(f.fileno())
+
+            # Hard-link creation is atomic and refuses a concurrent duplicate
+            # rather than replacing an existing active rule.
+            os.link(temp_path, filepath)
+            os.unlink(temp_path)
+            temp_path = None
             self.reload_rules()
+            if self.scanner is None:
+                # Do not report successful activation when the runtime scanner
+                # cannot compile the rules directory.
+                try:
+                    os.unlink(filepath)
+                except OSError:
+                    pass
+                self.reload_rules()
+                return False, "Validated rule could not be activated by the runtime scanner."
+            logger.info("Saved and activated new YARA rule: %s", filepath)
             return True, ""
-        except Exception as e:
-            return False, f"Failed to save rule file: {e}"
+        except FileExistsError:
+            return False, f"Rule '{rule_name}' already exists; refusing to overwrite it."
+        except Exception as exc:
+            logger.error("Failed to persist/activate YARA rule %s: %s", rule_name, exc)
+            if os.path.exists(filepath):
+                try:
+                    os.unlink(filepath)
+                except OSError:
+                    pass
+            self.reload_rules()
+            return False, f"Failed to save or activate rule: {exc}"
+        finally:
+            if temp_path:
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    pass
 
     def reload_rules(self):
         if not HAS_YARA:
