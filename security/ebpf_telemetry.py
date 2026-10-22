@@ -10,6 +10,9 @@ from collections import deque
 
 logger = logging.getLogger(__name__)
 
+# Bound pending honeypot detections separately from the bounded dashboard histories.
+HONEYPOT_HITS_MAX_ENTRIES = 1000
+
 HAS_BCC = False
 try:
     from bcc import BPF
@@ -213,7 +216,8 @@ class EBPFTelemetryEngine:
         self.conn_deque = deque(maxlen=500)
         self.retrans_deque = deque(maxlen=500)
         self.priv_deque = deque(maxlen=500)
-        self.honeypot_hits = []
+        self.honeypot_hits = deque(maxlen=HONEYPOT_HITS_MAX_ENTRIES)
+        self.honeypot_dropped_events = 0
         self.honeypot_lock = threading.Lock()
         
         self.lock = threading.Lock()
@@ -416,6 +420,10 @@ class EBPFTelemetryEngine:
         clean_comm = clean.get("comm", "")
         clean_filename = clean.get("path", "")
         with self.honeypot_lock:
+            # Keep the newest bounded window. Record overflow so an event burst
+            # cannot silently convert into unbounded root-process memory use.
+            if len(self.honeypot_hits) == HONEYPOT_HITS_MAX_ENTRIES:
+                self.honeypot_dropped_events += 1
             self.honeypot_hits.append({
                 "pid": clean_pid,
                 "comm": clean_comm,
@@ -448,5 +456,12 @@ class EBPFTelemetryEngine:
     def get_honeypot_hits(self) -> list:
         with self.honeypot_lock:
             hits = list(self.honeypot_hits)
+            dropped = self.honeypot_dropped_events
             self.honeypot_hits.clear()
-            return hits
+            self.honeypot_dropped_events = 0
+        if dropped:
+            logger.warning(
+                "Honeypot telemetry queue overflowed; %d older hit(s) were dropped before consumption.",
+                dropped,
+            )
+        return hits
