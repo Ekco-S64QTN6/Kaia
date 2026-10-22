@@ -37,7 +37,8 @@ for optional_test in \
   tests/test_host_executor_unmitigation.py \
   tests/test_fim_event_descriptor.py \
   tests/test_threat_intel_cache.py \
-  tests/test_supply_chain_monitor.py; do
+  tests/test_supply_chain_monitor.py \
+  tests/test_script_sentinel_security.py; do
   if [[ -f "$optional_test" ]]; then
     tests+=("$optional_test")
   fi
