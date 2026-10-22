@@ -415,3 +415,23 @@ def test_honeypot_reuses_only_exact_existing_decoy_content_without_owning_cleanu
         coordinator.stop()
 
     assert path.read_text() == exact_content
+
+
+
+def test_honeypot_skips_existing_fifo_without_blocking(tmp_path, monkeypatch):
+    path = tmp_path / "credentials.txt"
+    os.mkfifo(path)
+
+    coordinator = HoneypotCoordinator()
+    coordinator.decoys = {str(path): "known harmless decoy content"}
+    engine = _FakeHoneypotEngine()
+
+    _start_test_honeypot(coordinator, engine, monkeypatch)
+    try:
+        assert path.is_fifo()
+        assert str(path) not in engine.registered_paths
+        assert str(path) not in coordinator._managed_decoys
+    finally:
+        coordinator.stop()
+
+    assert path.is_fifo()
