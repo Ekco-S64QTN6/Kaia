@@ -23,6 +23,7 @@ tests=(
   tests/test_policy_gate_lockdown.py
   tests/test_restore_blocks_ledger.py
   tests/test_tamper_baseline_fail_closed.py
+  tests/test_baseline_state_path_guard.py
   tests/test_ui_visual_widgets.py
   tests/test_web_bridge.py
   tests/test_web_bridge_guards.py
