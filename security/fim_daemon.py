@@ -7,6 +7,7 @@ import hashlib
 import logging
 import threading
 import select
+import stat
 import config
 from security.db import log_security_event
 
@@ -33,6 +34,10 @@ O_LARGEFILE = 0x00008000
 # valid descriptor; AT_FDCWD is the documented "relative to cwd" value. It is
 # ignored when pathname is absolute, but passing a bogus fd is a latent trap.
 AT_FDCWD = -100
+
+# Bound the in-memory byte snapshot used for YARA. Oversized files are
+# explicitly reported as skipped instead of silently reopening a pathname.
+MAX_FIM_SCAN_BYTES = 64 * 1024 * 1024
 
 class FanotifyEventMetadata(ctypes.Structure):
     _fields_ = [
@@ -248,20 +253,33 @@ class FIMDaemon:
                         event_mask = metadata.mask
                         
                         if event_fd >= 0:
+                            filepath = ""
                             try:
-                                proc_path = f"/proc/self/fd/{event_fd}"
-                                filepath = os.readlink(proc_path)
-                                os.close(event_fd)
-                                
-                                # Process path
-                                self._handle_event(filepath, event_pid, event_mask)
+                                # Keep the kernel-supplied event descriptor alive
+                                # until its contents have been captured and scanned.
+                                # Reopening its pathname after closing this FD lets a
+                                # rename/symlink replacement substitute different bytes.
+                                filepath = os.readlink(f"/proc/self/fd/{event_fd}")
+                                self._handle_event(filepath, event_pid, event_mask, event_fd)
                             except Exception as e:
-                                logger.error(f"Error handling FIM event metadata: {e}")
+                                logger.critical("FIM event processing failed for %s: %s", filepath or "<unknown>", e)
+                                try:
+                                    log_security_event(
+                                        event_type="fim_event_processing_failure",
+                                        source="fim_daemon",
+                                        actor=filepath or "<unknown>",
+                                        payload_hash="",
+                                        disposition="blocked",
+                                        session_id="system_protection",
+                                    )
+                                except Exception:
+                                    logger.exception("Could not record FIM event processing failure")
+                            finally:
                                 try:
                                     os.close(event_fd)
-                                except Exception:
+                                except OSError:
                                     pass
-                                    
+
                         offset += metadata.event_len
         except Exception as ex:
             logger.critical(f"FATAL Exception in FIMDaemon: {ex}")
@@ -279,21 +297,78 @@ class FIMDaemon:
                 pass
             raise ex
 
-    def _handle_event(self, filepath: str, pid: int, mask: int):
-        # Exclude directories/files by prefix
+    def _is_excluded_path(self, filepath: str) -> bool:
+        """Check exclusions by path-component boundaries rather than prefixes."""
+        normalized = os.path.abspath(filepath.removesuffix(" (deleted)"))
         for prefix in self.exclude_prefixes:
-            if filepath.startswith(prefix):
-                return
-                
-        # Gather comm
+            root = os.path.abspath(prefix)
+            try:
+                if os.path.commonpath((normalized, root)) == root:
+                    return True
+            except ValueError:
+                continue
+        return False
+
+    def _is_security_critical_path(self, filepath: str) -> bool:
+        """Identify trust/control files whose skipped or failed scan is critical."""
+        normalized = os.path.abspath(filepath.removesuffix(" (deleted)"))
+        workspace = os.path.abspath(config.WORKSPACE_DIR)
+        try:
+            if os.path.commonpath((normalized, workspace)) != workspace:
+                return normalized in {
+                    "/etc/kaia/secret.env",
+                    "/etc/systemd/system/kaia-policy-gate.service",
+                    "/etc/systemd/system/kaia-lockdown.service",
+                }
+        except ValueError:
+            return False
+        relative = os.path.relpath(normalized, workspace).replace(os.sep, "/")
+        return (
+            relative == ".env"
+            or relative == "core/config.py"
+            or relative.startswith("security/")
+            or relative in {
+                "scripts/kaia-lockdown.sh",
+                "scripts/kaia-baseline.sh",
+                "scripts/kaia-unlock.sh",
+            }
+        )
+
+    @staticmethod
+    def _read_event_snapshot(event_fd: int) -> tuple:
+        """Read bytes from the kernel-supplied FD under a strict memory ceiling."""
+        metadata = os.fstat(event_fd)
+        if not stat.S_ISREG(metadata.st_mode):
+            return None, metadata.st_size, "not_regular_file"
+        if metadata.st_size > MAX_FIM_SCAN_BYTES:
+            return None, metadata.st_size, "size_limit_exceeded"
+
+        content = bytearray()
+        offset = 0
+        while True:
+            remaining = MAX_FIM_SCAN_BYTES + 1 - len(content)
+            if remaining <= 0:
+                return None, metadata.st_size, "size_limit_exceeded"
+            chunk = os.pread(event_fd, min(1024 * 1024, remaining), offset)
+            if not chunk:
+                break
+            content.extend(chunk)
+            offset += len(chunk)
+            if len(content) > MAX_FIM_SCAN_BYTES:
+                return None, metadata.st_size, "size_limit_exceeded"
+        return bytes(content), metadata.st_size, None
+
+    def _handle_event(self, filepath: str, pid: int, mask: int, event_fd: int):
+        if self._is_excluded_path(filepath):
+            return
+
         comm = "unknown"
         try:
-            with open(f"/proc/{pid}/comm", "r") as f:
+            with open(f"/proc/{pid}/comm", "r", encoding="utf-8", errors="replace") as f:
                 comm = f.read().strip()
         except Exception:
             pass
 
-        # Check mask type
         if mask & FAN_CREATE:
             event_type = "create"
         elif mask & FAN_ATTRIB:
@@ -302,54 +377,102 @@ class FIMDaemon:
             event_type = "modify"
         else:
             event_type = "close_write"
-        
-        # Check ELF or shebang
-        is_executable = False
-        try:
-            if os.path.isfile(filepath):
-                with open(filepath, "rb") as f:
-                    hdr = f.read(4)
-                    if hdr.startswith(b"\x7fELF") or hdr.startswith(b"#!"):
-                        is_executable = True
-        except Exception:
-            pass
-            
-        yara_matches = []
-        if is_executable and self.yara_scanner:
-            try:
-                matches = self.yara_scanner.match(filepath)
-                if matches:
-                    yara_matches = [m.rule for m in matches]
-            except Exception as e:
-                logger.error(f"YARA matching failed for {filepath}: {e}")
 
-        # Compute SHA-256
+        content, observed_size, skip_reason = self._read_event_snapshot(event_fd)
         sha = ""
-        if os.path.isfile(filepath):
+        yara_matches = []
+
+        if skip_reason:
+            logger.warning(
+                "FIM scan skipped for %s (%s; observed size=%s)",
+                filepath, skip_reason, observed_size,
+            )
+            event_type = f"scan_skipped_{skip_reason}"
             try:
-                h = hashlib.sha256()
-                with open(filepath, "rb") as f:
-                    while chunk := f.read(8192):
-                        h.update(chunk)
-                sha = h.hexdigest()
+                log_security_event(
+                    event_type="fim_scan_skipped",
+                    source="fim_daemon",
+                    actor=filepath,
+                    payload_hash="",
+                    disposition="blocked",
+                    session_id="system_protection",
+                )
             except Exception:
-                pass
+                logger.exception("Failed to record FIM scan skip for %s", filepath)
+            if self._is_security_critical_path(filepath):
+                try:
+                    from security.policy_gate import trigger_lockdown
+                    trigger_lockdown(f"FIM scan unavailable for protected file: {filepath} ({skip_reason})")
+                except Exception as e:
+                    logger.critical("Lockdown failed after FIM scan skip for %s: %s", filepath, e)
+        else:
+            # Header detection, signature scan and digest all consume precisely
+            # the same captured content; none reopens the mutable pathname.
+            sha = hashlib.sha256(content).hexdigest()
+            is_executable = content.startswith(b"\x7fELF") or content.startswith(b"#!")
+            if is_executable and self.yara_scanner:
+                try:
+                    matches = self.yara_scanner.match(data=content)
+                    if matches:
+                        yara_matches = [m.rule for m in matches]
+                except Exception as e:
+                    logger.error("YARA matching failed for %s: %s", filepath, e)
+                    yara_matches = ["SCAN_ERROR"]
+                    try:
+                        log_security_event(
+                            event_type="fim_yara_scan_error",
+                            source="fim_daemon",
+                            actor=filepath,
+                            payload_hash=sha[:32] if sha else "",
+                            disposition="blocked",
+                            session_id="system_protection",
+                        )
+                    except Exception:
+                        logger.exception("Failed to record YARA scan error for %s", filepath)
+                    if self._is_security_critical_path(filepath):
+                        try:
+                            from security.policy_gate import trigger_lockdown
+                            trigger_lockdown(f"YARA scanning failed for protected file: {filepath}")
+                        except Exception as lockdown_error:
+                            logger.critical(
+                                "Lockdown failed after YARA scan error on %s: %s",
+                                filepath, lockdown_error,
+                            )
 
         yara_str = ",".join(yara_matches) if yara_matches else ""
         ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
-        # Write to local database
         conn = None
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = sqlite3.connect(self.db_path, timeout=2.0)
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(
+                """
                 INSERT INTO fim_events (timestamp, event_type, pid, comm, path, yara_matches, sha256)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (ts, event_type, pid, comm, filepath, yara_str, sha))
+                """,
+                (ts, event_type, pid, comm, filepath, yara_str, sha),
+            )
             conn.commit()
         except Exception as e:
-            logger.error(f"FIM audit database insert failed: {e}")
+            logger.error("FIM audit database insert failed for %s: %s", filepath, e)
+            try:
+                log_security_event(
+                    event_type="fim_audit_write_failure",
+                    source="fim_daemon",
+                    actor=filepath,
+                    payload_hash=sha[:32] if sha else "",
+                    disposition="blocked",
+                    session_id="system_protection",
+                )
+            except Exception:
+                logger.exception("Failed to report FIM audit write failure")
+            if self._is_security_critical_path(filepath):
+                try:
+                    from security.policy_gate import trigger_lockdown
+                    trigger_lockdown(f"FIM audit persistence failed for protected file: {filepath}")
+                except Exception as lockdown_error:
+                    logger.critical("Lockdown failed after FIM persistence error: %s", lockdown_error)
         finally:
             try:
                 if conn:
@@ -357,25 +480,25 @@ class FIMDaemon:
             except Exception:
                 pass
 
-        # Trigger security alert on YARA matches
         if yara_matches:
-            logger.critical(f"YARA Match on path {filepath}: {yara_str}")
+            logger.critical("YARA result for %s: %s", filepath, yara_str)
             try:
                 log_security_event(
-                    event_type="fim_yara_match",
+                    event_type="fim_yara_match" if "SCAN_ERROR" not in yara_matches else "fim_yara_scan_error",
                     source="fim_daemon",
                     actor=filepath,
                     payload_hash=sha[:32] if sha else "",
                     disposition="blocked",
-                    session_id="system_protection"
+                    session_id="system_protection",
                 )
             except Exception as e:
-                logger.error(f"Failed to log fim_yara_match security event: {e}")
-                
-            # If yara match occurs in core security or configs, trigger lockdown
-            if "security/" in filepath or "core/config.py" in filepath:
+                logger.error("Failed to log YARA result for %s: %s", filepath, e)
+
+            if "SCAN_ERROR" not in yara_matches and self._is_security_critical_path(filepath):
                 try:
                     from security.policy_gate import trigger_lockdown
                     trigger_lockdown(f"FIM YARA Match on core file: {filepath}")
                 except Exception as e:
-                    logger.error(f"Failed to trigger lockdown for YARA match: {e}")
+                    logger.error("Failed to trigger lockdown for YARA match: %s", e)
+
+
