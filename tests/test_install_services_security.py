@@ -103,3 +103,18 @@ def test_installer_does_not_precreate_or_chmod_real_world_honeypot_paths():
     assert 'touch /etc/api_keys.json /var/backups/credentials.txt /root/.ssh/authorized_keys.bak' not in script
     assert 'chmod 600 /etc/api_keys.json /var/backups/credentials.txt /root/.ssh/authorized_keys.bak' not in script
     assert "exclusive, no-follow" in script
+
+
+def test_installer_rejects_untrusted_destination_path_ancestors_before_changes():
+    script = Path("scripts/install_services.sh").read_text()
+
+    validate_function = script.index("validate_root_controlled_path()")
+    deploy_check = script.index('validate_root_controlled_path "$DEPLOY_DIR" DEPLOY_DIR')
+    state_check = script.index('validate_root_controlled_path "$STATE_DIR" STATE_DIR')
+    stop_gate = script.index("systemctl stop kaia-policy-gate.service")
+    rsync = script.index("rsync -a --delete")
+
+    assert validate_function < deploy_check < state_check < stop_gate < rsync
+    assert "must be root-owned and not group/world-writable" in script
+    assert "has a symlinked path component" in script
+    assert "path component is not a directory" in script
