@@ -41,8 +41,8 @@ This describes capabilities present in the repository. It is not proof that priv
 
 - **Policy Gate and host execution:** typed request schemas, expiring capability tokens, permission-lattice checks, Unix-socket IPC, audit logging, allowlisted direct-argv execution, path containment and sandbox/resource controls.
 - **Firewall lifecycle:** the block and unblock commands are routed through the Policy Gate. Unblock removes exact matching Kaia-owned nftables rules by handle; boot replay folds approved block/unblock events so a successful removal does not resurrect an older block.
-- **Integrity monitoring:** trusted-baseline validation, watchlist discovery, tamper alerts and lockdown circuit breaking are implemented. Startup without a trusted baseline still has a weaker bootstrap path; review and establish the baseline before relying on integrity guarantees.
-- **File event handling:** the fanotify handler keeps the original event descriptor open, scans and hashes the same captured bytes, and caps the snapshot at 64 MiB. Its audit database lives in configured `KAIA_STATE_DIR`; the installer migrates legacy FIM history from `/var/lib/secdaemon`. YARA validation now fails closed when the isolated validator is unavailable, and generated IOC strings are escaped as literals.
+- **Integrity monitoring:** trusted-baseline validation, watchlist discovery, tamper alerts and lockdown circuit breaking are implemented. System mode refuses to start without a valid trusted baseline; only unprivileged development mode may bootstrap from current disk state.
+- **File event handling:** the fanotify handler keeps the original event descriptor open, scans and hashes the same captured bytes, and caps the snapshot at 64 MiB. Its audit database uses the configured `KAIA_STATE_DIR` (`fim_audit.db`), and the installer migrates legacy history from `/var/lib/secdaemon/fim_audit.db`. YARA validation fails closed when the isolated validator is unavailable, and generated IOC strings are escaped as literals.
 - **eBPF telemetry:** the probe source includes execve, openat2, network-connect/retransmit, privilege-transition and unlinkat events. Unlinkat records are surfaced in the waterfall as syscall-entry attempts, not proof a deletion succeeded.
 - **Passive discovery:** ARP, IPv4/UDP mDNS, LLMNR and SSDP observations are recorded from traffic on the selected interface; basic NetBIOS Name Service response QNAME decoding is included. It is not a complete inventory and query names are not attributed to queriers.
 - **Threat intelligence:** InternetDB input validation, per-process serialized requests and negative caching for authoritative 404 responses are implemented alongside the existing reputation/CVE lookup paths.
@@ -235,10 +235,15 @@ sudo scripts/install_services.sh
 
 That deploys a root-owned copy to `/opt/kaia` (0644 files, 0755 dirs, root:root),
 provisions the configured state directory (default `/var/lib/kaia`), migrates any
-in-repo ledger, and installs the units. The baseline and audit/event files use the
-same `KAIA_STATE_DIR`; the baseline script reads the installed secret and state
-configuration without sourcing the deployed checkout. Re-run the installer after
-changes — the checkout is the source, `/opt/kaia` is what runs.
+in-repo ledger, and installs the units. It validates the signing secret before
+changing files and stops an active Policy Gate before syncing monitored code. The
+installer enables but does **not start** the gate automatically. Review the deployed
+diff, write the trusted baseline, then start it:
+
+    sudo /opt/kaia/scripts/kaia-baseline.sh
+    sudo systemctl start kaia-policy-gate.service
+
+The checkout is the source; `/opt/kaia` is what runs.
 
 ### Privileges
 
@@ -341,10 +346,11 @@ compromise the reference. The script shows a diff against the previous baseline
 before replacing it, and enumerates files via the detector itself so the two cannot
 drift apart.
 
-With no trusted baseline present the daemon has a weaker bootstrap path: it warns that
-modifications made while it was stopped cannot be detected. Create the baseline only
-after reviewing the source and deployment state; do not treat bootstrap hashing as
-equivalent to verification against a previously trusted baseline.
+System mode refuses to start without a valid trusted baseline. Only unprivileged
+development mode may bootstrap from the current disk state, where changes made while
+the daemon was stopped cannot be detected. Record a baseline only after reviewing
+the deployed source and deployment state; never treat bootstrap hashing as equivalent
+to verification against a previously trusted baseline.
 
 ### Monitor-only mode
 
