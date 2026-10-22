@@ -194,7 +194,7 @@ The current implementation:
 The following remain target requirements or unfinished work:
 
 - Support mount-wide marking with the desired MODIFY, CREATE, ATTRIB and directory events where the target kernel accepts them; document the actual degraded mask when it does not.
-- Keep the feedback/noise exclusions explicit: /var/log, /tmp, /var/tmp, /proc, /sys, /dev and per-user cache paths. Verify their exact effect for every deployment rather than implying full coverage from a successful mount mark.
+- Preserve the intended event-specific noise rules: suppress FAN_MODIFY under /var/log; suppress FAN_CREATE under /tmp and /var/tmp; exclude /proc, /sys and /dev completely; exclude per-user cache paths. The current implementation has a simpler whole-prefix exclusion list and does not yet express each event-specific policy separately. Verify the actual effect for every deployment rather than implying full coverage from a successful mount mark.
 - Verify the FIM SQLite audit store and alert path are outside monitored writable scopes; log storage and all database writes must have explicit failure behavior.
 - Complete controlled event-to-verdict-to-response testing with a real target kernel, including thread failure and service restart behavior. The current handler attempts lockdown on critical-path failures but is not a permission-event gate.
 - Design permission-event enforcement separately if Kaia must prevent a process from opening/executing a file until a verdict is available. The current notification-only handler does not satisfy that goal.
