@@ -68,7 +68,8 @@ def test_installer_persists_state_path_for_manual_unlock():
     assert "_read_env_assignment /etc/kaia/secret.env" in baseline_script
     assert 'KAIA_STATE_DIR="${KAIA_STATE_DIR:-/var/lib/kaia}"' in baseline_script
     assert 'STATE_DIR="$(realpath -m -- "$KAIA_STATE_DIR")"' in baseline_script
-    assert 'STATE_DIR="$KAIA_STATE_DIR"' in baseline_script
+    assert "root-owned installer-generated state.env is authoritative" in baseline_script
+    assert 'STATE_DIR="$(realpath -m -- "$KAIA_STATE_DIR")"' in baseline_script
     assert 'BASELINE="${STATE_DIR}/baseline.sha256"' in baseline_script
     assert '. "${PROJECT_DIR}/.env"' not in baseline_script
 
