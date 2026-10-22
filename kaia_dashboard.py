@@ -544,7 +544,7 @@ class ContainmentCollector(threading.Thread):
                     pass
             
             fim_alerts = []
-            fim_db_path = "/var/lib/secdaemon/fim_audit.db"
+            fim_db_path = config.FIM_DB_PATH
             if os.path.exists(fim_db_path):
                 try:
                     conn = sqlite3.connect(fim_db_path, timeout=1.0)
@@ -1784,7 +1784,7 @@ class KaiamonUI:
 
                 elif cmd == "show" and len(args) >= 2 and args[0] == "fim" and args[1] == "alerts":
                     self._add_response("Querying recent FIM alerts...")
-                    fim_db_path = "/var/lib/secdaemon/fim_audit.db"
+                    fim_db_path = config.FIM_DB_PATH
                     if os.path.exists(fim_db_path):
                         try:
                             conn = sqlite3.connect(fim_db_path, timeout=1.0)

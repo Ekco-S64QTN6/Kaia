@@ -13,6 +13,7 @@ tests=(
   tests/test_host_executor_absolute_paths.py
   tests/test_host_executor_path_containment.py
   tests/test_install_services_security.py
+  tests/test_dashboard_fim_state_path.py
   tests/test_kaia_cli.py
   tests/test_lockdown_failure_reporting.py
   tests/test_lockdown_script_guards.py
