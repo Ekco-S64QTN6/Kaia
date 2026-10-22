@@ -323,3 +323,95 @@ def test_yara_literal_escaping_preserves_data_without_injecting_rule_syntax():
     assert '$ioc = "' + escaped + '"' in rule
     assert "\\n rule fake_injected {" in rule
     assert "\nrule fake_injected {" not in rule
+
+
+class _FakeHoneypotEngine:
+    def __init__(self):
+        self.registered_paths = []
+        self.hits = []
+
+    def register_honeypot_paths(self, paths):
+        self.registered_paths.extend(paths)
+
+    def get_honeypot_hits(self):
+        hits = list(self.hits)
+        self.hits.clear()
+        return hits
+
+
+def _start_test_honeypot(coordinator, engine, monkeypatch):
+    # Avoid depending on a host network namespace or starting an infinite polling loop.
+    coordinator.libc = None
+    monkeypatch.setattr(coordinator, "_check_ebpf_honeypots", lambda _engine: None)
+    coordinator.start(engine)
+
+
+def test_honeypot_preserves_existing_real_file_and_does_not_register_it(tmp_path, monkeypatch):
+    path = tmp_path / "api_keys.json"
+    original = '{"real_api_key": "must-not-be-truncated"}'
+    path.write_text(original)
+
+    coordinator = HoneypotCoordinator()
+    coordinator.decoys = {str(path): '{"note": "decoy"}'}
+    engine = _FakeHoneypotEngine()
+
+    _start_test_honeypot(coordinator, engine, monkeypatch)
+    try:
+        assert path.read_text() == original
+        assert str(path) not in engine.registered_paths
+        assert str(path) not in coordinator.decoy_hashes
+    finally:
+        coordinator.stop()
+
+    assert path.read_text() == original
+
+
+def test_honeypot_creates_and_cleans_up_only_its_unchanged_decoy(tmp_path, monkeypatch):
+    path = tmp_path / "decoy.txt"
+    coordinator = HoneypotCoordinator()
+    coordinator.decoys = {str(path): "known harmless decoy content"}
+    engine = _FakeHoneypotEngine()
+
+    _start_test_honeypot(coordinator, engine, monkeypatch)
+    assert path.read_text() == "known harmless decoy content"
+    assert engine.registered_paths == [str(path)]
+    assert str(path) in coordinator._managed_decoys
+
+    coordinator.stop()
+
+    assert not path.exists()
+
+
+def test_honeypot_preserves_replacement_file_during_cleanup(tmp_path, monkeypatch):
+    path = tmp_path / "decoy.txt"
+    coordinator = HoneypotCoordinator()
+    coordinator.decoys = {str(path): "known harmless decoy content"}
+    engine = _FakeHoneypotEngine()
+
+    _start_test_honeypot(coordinator, engine, monkeypatch)
+    path.unlink()
+    real_content = "replacement data that must survive"
+    path.write_text(real_content)
+
+    coordinator.stop()
+
+    assert path.read_text() == real_content
+    assert str(path) in engine.registered_paths
+
+
+def test_honeypot_reuses_only_exact_existing_decoy_content_without_owning_cleanup(tmp_path, monkeypatch):
+    path = tmp_path / "decoy.txt"
+    exact_content = "known harmless decoy content"
+    path.write_text(exact_content)
+    coordinator = HoneypotCoordinator()
+    coordinator.decoys = {str(path): exact_content}
+    engine = _FakeHoneypotEngine()
+
+    _start_test_honeypot(coordinator, engine, monkeypatch)
+    try:
+        assert engine.registered_paths == [str(path)]
+        assert str(path) not in coordinator._managed_decoys
+    finally:
+        coordinator.stop()
+
+    assert path.read_text() == exact_content
