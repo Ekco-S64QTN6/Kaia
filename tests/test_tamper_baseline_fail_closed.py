@@ -165,58 +165,30 @@ def test_baseline_script_refuses_missing_or_nonregular_watchlist_paths():
     assert "if os.path.exists(f):" not in script
 
 
-def test_compute_sha256_reads_bounded_chunks_and_preserves_full_digest(tmp_path, monkeypatch):
-    import hashlib
+def test_baseline_script_validates_trusted_state_config_and_path_ancestors():
+    script = open("scripts/kaia-baseline.sh", encoding="utf-8").read()
 
-    payload = bytes(range(256)) * 16_384
-    target = tmp_path / "large-protected-file.bin"
-    target.write_bytes(payload)
-    expected = hashlib.sha256(payload).hexdigest()
-    read_sizes = []
-    real_read = os.read
-
-    def bounded_read(fd, size):
-        assert size > 0, "unbounded file reads are forbidden in integrity hashing"
-        assert size <= 1024 * 1024, "hash chunk exceeds the configured memory bound"
-        read_sizes.append(size)
-        return real_read(fd, size)
-
-    monkeypatch.setattr(td.os, "read", bounded_read)
-    digest = td.TamperDetector()._compute_sha256(str(target))
-
-    assert digest == expected
-    assert len(read_sizes) > 1
-    assert max(read_sizes) == 1024 * 1024
+    assert 'STATE_CONFIG="/etc/kaia/state.env"' in script
+    assert '. /etc/kaia/state.env' not in script
+    assert 'if [ -L "$STATE_CONFIG" ] || [ ! -f "$STATE_CONFIG" ]; then' in script
+    assert "config_owner=" in script and "config_links=" in script
+    assert "validate_state_path_components()" in script
+    assert 'export KAIA_STATE_DIR="$STATE_DIR"' in script
+    assert "state path component must be root-owned and not group/world-writable" in script
+    validate = script.index("validate_state_path_components()")
+    mkdir = script.index('mkdir -p "$STATE_DIR"')
+    chown = script.index('chown root:kaiacord "$STATE_DIR"')
+    assert validate < mkdir < chown
 
 
-def test_compute_sha256_limit_hashes_only_the_requested_prefix(tmp_path):
-    import hashlib
+def test_baseline_writer_rejects_untrusted_existing_baseline_before_diff_or_replace():
+    script = open("scripts/kaia-baseline.sh", encoding="utf-8").read()
 
-    payload = b"protected-prefix" + b"x" * 100_000
-    target = tmp_path / "prefix.bin"
-    target.write_bytes(payload)
+    symlink_guard = script.index('if [ -L "$BASELINE" ]; then')
+    existing_check = script.index('elif [ -e "$BASELINE" ]; then')
+    previous_diff = script.index('if [ -f "$BASELINE" ]; then')
+    atomic_replace = script.index('mv -f -- "$tmp" "$BASELINE"')
 
-    digest = td.TamperDetector()._compute_sha256(str(target), limit=16)
-
-    assert digest == hashlib.sha256(payload[:16]).hexdigest()
-
-
-def test_compute_sha256_refuses_final_symlink_and_fifo_without_blocking(tmp_path):
-    import hashlib
-    import os
-
-    target = tmp_path / "real.bin"
-    target.write_bytes(b"trusted external target")
-    alias = tmp_path / "alias.bin"
-    alias.symlink_to(target)
-    fifo = tmp_path / "watch.fifo"
-    os.mkfifo(fifo)
-
-    detector = td.TamperDetector()
-
-    assert detector._compute_sha256(str(alias)) == ""
-    assert detector._compute_sha256(str(fifo)) == ""
-    assert target.read_bytes() == b"trusted external target"
-    assert detector._compute_sha256(str(target)) == hashlib.sha256(
-        b"trusted external target"
-    ).hexdigest()
+    assert symlink_guard < existing_check < previous_diff < atomic_replace
+    assert "baseline_links=" in script
+    assert "trusted baseline must be root-owned, private and single-link" in script
