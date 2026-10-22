@@ -1,6 +1,8 @@
 import subprocess
 import os
 import pwd
+import ipaddress
+import re
 
 SYSTEM_BINARIES = {
     "ss": "/usr/bin/ss",
@@ -61,17 +63,14 @@ class HostExecutor:
     @staticmethod
     def execute_mitigation(target_ip: str, protocol: str, port: int = None) -> tuple:
         """Adds an nftables drop rule for the IP."""
-        import socket
         try:
-            socket.inet_aton(target_ip)
-        except socket.error:
-            try:
-                socket.inet_pton(socket.AF_INET6, target_ip)
-            except socket.error:
-                return False, "", f"Invalid IP address format: {target_ip}"
+            address = ipaddress.ip_address(target_ip)
+            target_ip = address.compressed
+        except ValueError:
+            return False, "", f"Invalid IP address format: {target_ip}"
 
         # Detect address family so the rule uses the right selector.
-        is_v6 = ":" in target_ip
+        is_v6 = address.version == 6
         saddr_sel = "ip6" if is_v6 else "ip"
 
         table = config.NFT_BLOCK_TABLE
@@ -114,6 +113,86 @@ class HostExecutor:
         cmd += ["drop"]
 
         return HostExecutor._run_cmd(cmd)
+
+    @staticmethod
+    def execute_unmitigation(target_ip: str, protocol: str = "all", port: int = None) -> tuple:
+        """Remove exact matching Kaia-managed nftables drop rule(s), idempotently.
+
+        Rules are removed by their nftables handles, never by flushing a chain or
+        deleting rules that merely share an IP. An absent rule is a successful
+        desired state; command/permission failures are reported as errors.
+        """
+        try:
+            address = ipaddress.ip_address(target_ip)
+            target_ip = address.compressed
+        except ValueError:
+            return False, "", f"Invalid IP address format: {target_ip}"
+
+        if protocol not in ("all", "tcp", "udp"):
+            return False, "", f"Invalid protocol: {protocol}"
+        if isinstance(port, bool) or (port is not None and (
+            not isinstance(port, int) or not 1 <= port <= 65535
+        )):
+            return False, "", f"Invalid port: {port}"
+        if protocol == "all" and port is not None:
+            return False, "", "A port may only be specified with tcp or udp"
+        if protocol in ("tcp", "udp") and port is None:
+            return False, "", "A port is required when protocol is tcp or udp"
+
+        family = "ip6" if address.version == 6 else "ip"
+        expected = [family, "saddr", target_ip]
+        if protocol in ("tcp", "udp"):
+            expected.extend([protocol, "dport", str(port)])
+        expected.append("drop")
+
+        table = config.NFT_BLOCK_TABLE
+        chain = config.NFT_BLOCK_CHAIN
+        sudo = [] if os.geteuid() == 0 else [SYSTEM_BINARIES["sudo"]]
+        nft = SYSTEM_BINARIES["nft"]
+        removed = 0
+
+        # Re-read after each deletion so stale handles or concurrent changes do
+        # not cause a different rule to be deleted accidentally.
+        for _ in range(128):
+            ok, stdout, stderr = HostExecutor._run_cmd(
+                sudo + [nft, "-a", "list", "chain", "inet", table, chain]
+            )
+            if not ok:
+                error_text = (stderr or stdout).lower()
+                if any(marker in error_text for marker in (
+                    "no such file or directory", "does not exist", "no such table", "no such chain"
+                )):
+                    return True, f"No matching Kaia firewall rule (removed {removed}).", ""
+                return False, "", f"Failed to inspect Kaia firewall rules: {stderr or stdout}"
+
+            match_handle = None
+            for line in stdout.splitlines():
+                expression, marker, comment = line.partition("#")
+                if not marker:
+                    continue
+                if expression.split() != expected:
+                    continue
+                handle_match = re.search(r"\bhandle\s+(\d+)\s*$", comment.strip())
+                if handle_match:
+                    match_handle = handle_match.group(1)
+                    break
+
+            if match_handle is None:
+                message = (
+                    f"Removed {removed} matching Kaia firewall rule(s)."
+                    if removed else "No matching Kaia firewall rule existed."
+                )
+                return True, message, ""
+
+            ok, _, stderr = HostExecutor._run_cmd(
+                sudo + [nft, "delete", "rule", "inet", table, chain, "handle", match_handle]
+            )
+            if not ok:
+                return False, "", f"Failed to delete matching firewall handle {match_handle}: {stderr}"
+
+            removed += 1
+
+        return False, "", "Refusing to continue: more than 128 duplicate matching firewall rules found."
 
     @staticmethod
     def execute_service_control(service_name: str) -> tuple:
