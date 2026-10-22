@@ -174,3 +174,19 @@ def test_block_ip_schema_rejects_invalid_ip_and_ambiguous_port_scope(monkeypatch
     ]:
         with pytest.raises(ValidationError):
             MitigationRequest(**{**base, **changes})
+
+
+def test_mitigation_and_unblock_schemas_reject_boolean_ports():
+    from pydantic import ValidationError
+    from security.schemas import MitigationRequest, UnblockRequest
+
+    for model in (MitigationRequest, UnblockRequest):
+        with pytest.raises(ValidationError):
+            model(
+                target_ip="192.0.2.9",
+                protocol="tcp",
+                port=True,
+                justification="strict numeric port test",
+                capability_token="test-token",
+                session_id="unit_test",
+            )
