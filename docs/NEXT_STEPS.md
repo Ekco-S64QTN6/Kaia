@@ -132,7 +132,9 @@ After the live-fire steps above, test both states. Use two separate reboot cycle
 - Inspect the audit ledger and restore-service log if the rule returns.
 
 These are target-host acceptance tests. CI verifies ledger folding and command construction,
-not kernel/firewall-manager integration.
+not kernel/firewall-manager integration. The replay parser caps active memory to the newest
+configured rules and reads one record at a time with a 16 KiB maximum; it does not yet
+compact or impose a total-size limit on the append-only ledger.
 
 ## If something goes wrong
 
