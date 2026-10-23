@@ -24,6 +24,7 @@ tests=(
   tests/test_negative_security.py
   tests/test_policy_gate_ipc.py
   tests/test_policy_gate_lockdown.py
+  tests/test_policy_gate_audit_redaction.py
   tests/test_restore_blocks_ledger.py
   tests/test_tamper_baseline_fail_closed.py
   tests/test_baseline_state_path_guard.py

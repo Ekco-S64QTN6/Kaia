@@ -99,7 +99,9 @@ class AuditRecord(BaseModel):
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     actor: str = "kaiacord"
     request: Dict[str, Any] = Field(default_factory=dict)
+    # Legacy field retained for reading historical ledgers; new writers leave it null.
     capability_token: Optional[str] = None
+    capability_token_metadata: Optional[str] = None
     result: Literal["approved", "denied"]
     reason: Optional[str] = None
     validator: str = "policy_gate"
