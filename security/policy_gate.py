@@ -366,6 +366,7 @@ class PolicyGate:
                 break
 
     MAX_IPC_FRAME_BYTES = 1024 * 1024
+    MAX_IPC_RESPONSE_BYTES = 4 * 1024 * 1024
     MAX_IPC_FRAME_READ_SECONDS = 5.0
     MAX_IPC_CLIENTS = 16
 
@@ -415,9 +416,26 @@ class PolicyGate:
 
     def _write_frame(self, conn, response_dict):
         payload_bytes = json.dumps(response_dict).encode('utf-8')
+        if len(payload_bytes) > self.MAX_IPC_RESPONSE_BYTES:
+            logger.warning(
+                "Policy Gate IPC response exceeded %d bytes; returning a bounded error frame.",
+                self.MAX_IPC_RESPONSE_BYTES,
+            )
+            response_dict = {
+                "request_id": response_dict.get("request_id", ""),
+                "approved": False,
+                "executor_response": {
+                    "status": "error",
+                    "message": (
+                        "Policy Gate IPC response exceeded the "
+                        f"{self.MAX_IPC_RESPONSE_BYTES}-byte safety limit."
+                    ),
+                },
+                "audit_id": response_dict.get("audit_id", ""),
+            }
+            payload_bytes = json.dumps(response_dict).encode('utf-8')
         header = len(payload_bytes).to_bytes(4, byteorder='big')
         conn.sendall(header + payload_bytes)
-
     def _handle_client(self, conn):
         """Handles a single connection transaction."""
         conn.settimeout(5.0)

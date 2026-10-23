@@ -249,3 +249,32 @@ def test_ipc_frame_timeout_is_bounded_by_a_single_deadline():
     gate = PolicyGate()
     assert gate.MAX_IPC_FRAME_READ_SECONDS > 0
     assert gate.MAX_IPC_FRAME_READ_SECONDS <= 10.0
+
+
+def test_ipc_writer_replaces_oversized_response_with_bounded_error_frame():
+    gate = PolicyGate()
+    gate.MAX_IPC_RESPONSE_BYTES = 1024
+    left, right = socket.socketpair()
+    try:
+        gate._write_frame(right, {
+            "request_id": "large-response",
+            "approved": True,
+            "executor_response": {"status": "success", "stdout": "x" * 10000},
+            "audit_id": "audit_test",
+        })
+
+        header = bytearray()
+        while len(header) < 4:
+            header.extend(left.recv(4 - len(header)))
+        length = int.from_bytes(header, "big")
+        assert 0 < length <= gate.MAX_IPC_RESPONSE_BYTES
+
+        body = bytearray()
+        while len(body) < length:
+            body.extend(left.recv(length - len(body)))
+        response = json.loads(body.decode("utf-8"))
+        assert response["approved"] is False
+        assert "exceeded" in response["executor_response"]["message"].lower()
+    finally:
+        left.close()
+        right.close()
