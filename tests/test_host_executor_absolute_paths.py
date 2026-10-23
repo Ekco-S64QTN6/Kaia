@@ -1,7 +1,7 @@
 """Regression tests for the privileged execution boundary."""
 
 import os
-from unittest.mock import MagicMock
+import sys
 
 import pytest
 
@@ -21,7 +21,7 @@ def test_registered_host_binaries_are_absolute(command):
 
 
 def test_run_cmd_rejects_path_lookup(monkeypatch):
-    monkeypatch.setattr("security.host_executor.subprocess.run", lambda *a, **k: pytest.fail("must not launch"))
+    monkeypatch.setattr("security.host_executor.subprocess.Popen", lambda *a, **k: pytest.fail("must not launch"))
     ok, _, error = HostExecutor._run_cmd(["systemctl", "restart", "kaia-policy-gate"])
     assert not ok
     assert "absolute executable path" in error
@@ -30,15 +30,20 @@ def test_run_cmd_rejects_path_lookup(monkeypatch):
 def test_run_cmd_does_not_inherit_capability_signing_secret(monkeypatch):
     monkeypatch.setenv("KAIA_CAPABILITY_TOKEN_SECRET", "must-not-reach-children")
     calls = []
+    real_popen = __import__("subprocess").Popen
 
-    def fake_run(argv, **kwargs):
-        calls.append((argv, kwargs))
-        return MagicMock(returncode=0, stdout="ok", stderr="")
+    def inspect_popen(argv, **kwargs):
+        calls.append((argv, kwargs.copy()))
+        return real_popen(argv, **kwargs)
 
-    monkeypatch.setattr("security.host_executor.subprocess.run", fake_run)
-    ok, stdout, _ = HostExecutor._run_cmd([SYSTEM_BINARIES["ss"], "-n"])
+    monkeypatch.setattr("security.host_executor.subprocess.Popen", inspect_popen)
+    ok, stdout, stderr = HostExecutor._run_cmd([
+        sys.executable,
+        "-c",
+        "import os; print('leaked' if 'KAIA_CAPABILITY_TOKEN_SECRET' in os.environ else 'ok')",
+    ])
 
-    assert ok and stdout == "ok"
+    assert ok and stdout == "ok" and stderr == ""
     argv, kwargs = calls[0]
     assert os.path.isabs(argv[0])
     assert kwargs["shell"] is False

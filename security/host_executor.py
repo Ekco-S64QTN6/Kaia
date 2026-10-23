@@ -6,6 +6,9 @@ import re
 import stat
 import uuid
 import errno
+import selectors
+import signal
+import time
 
 SYSTEM_BINARIES = {
     "ss": "/usr/bin/ss",
@@ -23,6 +26,10 @@ import logging
 import config
 
 logger = logging.getLogger(__name__)
+
+# Bound combined stdout/stderr retained from every privileged child process.
+MAX_SUBPROCESS_OUTPUT_BYTES = 2 * 1024 * 1024
+SUBPROCESS_READ_CHUNK_BYTES = 64 * 1024
 
 class HostExecutor:
     @staticmethod
@@ -624,6 +631,10 @@ class HostExecutor:
 
     @staticmethod
     def _run_cmd(cmd: list) -> tuple:
+        """Run an allowlisted argv command with bounded output and a hard deadline."""
+        process = None
+        selector = None
+        pipes = []
         try:
             if not isinstance(cmd, list) or not cmd or not isinstance(cmd[0], str):
                 return False, "", "HostExecutor requires a non-empty argv list."
@@ -632,21 +643,131 @@ class HostExecutor:
                     f"HostExecutor requires an absolute executable path; rejected: {cmd[0]!r}"
                 )
             logger.info(f"HostExecutor running: {' '.join(cmd)}")
-            result = subprocess.run(
+            process = subprocess.Popen(
                 cmd,
-                capture_output=True,
-                text=True,
-                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=False,
                 shell=False,
+                close_fds=True,
+                start_new_session=True,
                 env=HostExecutor._build_child_environment(),
-                timeout=config.TIMEOUT_SECONDS,
             )
-            if result.returncode == 0:
-                return True, result.stdout.strip(), result.stderr.strip()
-            return False, result.stdout.strip(), result.stderr.strip()
+            captured = {"stdout": bytearray(), "stderr": bytearray()}
+            total_captured = 0
+            output_exceeded = False
+            timed_out = False
+            deadline = time.monotonic() + config.TIMEOUT_SECONDS
+            selector = selectors.DefaultSelector()
+            for stream_name, pipe in (("stdout", process.stdout), ("stderr", process.stderr)):
+                pipes.append(pipe)
+                os.set_blocking(pipe.fileno(), False)
+                selector.register(pipe, selectors.EVENT_READ, stream_name)
+
+            def terminate_process_group():
+                # start_new_session gives the subprocess its own process group;
+                # kill descendants too, so inherited stdout/stderr pipes cannot
+                # remain open after the command exceeds its budget.
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                except OSError:
+                    try:
+                        process.kill()
+                    except OSError:
+                        pass
+                try:
+                    process.wait(timeout=1.0)
+                except subprocess.TimeoutExpired:
+                    try:
+                        process.kill()
+                    except OSError:
+                        pass
+                    try:
+                        process.wait(timeout=1.0)
+                    except subprocess.TimeoutExpired:
+                        logger.error("HostExecutor child process did not exit after kill")
+
+            # Read both streams concurrently with non-blocking descriptors. Once
+            # the combined capture budget is reached, read at most one extra byte
+            # to distinguish an exact-fit output from an overflow, then kill the
+            # process group instead of buffering the remaining output.
+            while selector.get_map() or process.poll() is None:
+                remaining_time = deadline - time.monotonic()
+                if remaining_time <= 0:
+                    timed_out = True
+                    break
+                events = selector.select(min(remaining_time, 0.1))
+                for key, _ in events:
+                    stream_name = key.data
+                    remaining_bytes = MAX_SUBPROCESS_OUTPUT_BYTES - total_captured
+                    read_size = min(
+                        SUBPROCESS_READ_CHUNK_BYTES,
+                        max(1, remaining_bytes + 1),
+                    )
+                    try:
+                        chunk = os.read(key.fileobj.fileno(), read_size)
+                    except BlockingIOError:
+                        continue
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                        key.fileobj.close()
+                        continue
+                    if len(chunk) > remaining_bytes:
+                        if remaining_bytes > 0:
+                            captured[stream_name].extend(chunk[:remaining_bytes])
+                            total_captured += remaining_bytes
+                        output_exceeded = True
+                        break
+                    captured[stream_name].extend(chunk)
+                    total_captured += len(chunk)
+                if output_exceeded:
+                    break
+
+            if timed_out or output_exceeded:
+                terminate_process_group()
+            else:
+                process.wait()
+
+            if timed_out:
+                return False, "", f"Command timed out after {config.TIMEOUT_SECONDS}s."
+            stdout_text = captured["stdout"].decode("utf-8", errors="replace").strip()
+            stderr_text = captured["stderr"].decode("utf-8", errors="replace").strip()
+            if output_exceeded:
+                return (
+                    False,
+                    stdout_text,
+                    f"Command output exceeded the {MAX_SUBPROCESS_OUTPUT_BYTES}-byte combined "
+                    "capture limit; process group was terminated.",
+                )
+            return process.returncode == 0, stdout_text, stderr_text
         except FileNotFoundError as e:
             return False, "", f"Command executable not found: {e}"
         except subprocess.TimeoutExpired:
             return False, "", f"Command timed out after {config.TIMEOUT_SECONDS}s."
         except Exception as e:
             return False, "", str(e)
+        finally:
+            if selector is not None:
+                try:
+                    selector.close()
+                except Exception:
+                    pass
+            for pipe in pipes:
+                try:
+                    pipe.close()
+                except Exception:
+                    pass
+            if process is not None and process.poll() is None:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except OSError:
+                    try:
+                        process.kill()
+                    except OSError:
+                        pass
+                try:
+                    process.wait(timeout=1.0)
+                except Exception:
+                    pass
