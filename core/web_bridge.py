@@ -604,7 +604,10 @@ def send_policy_gate_ipc(action: str, payload: Dict[str, Any], cap_token: Option
     last_error = "Policy Gate socket unavailable"
     for index, sock_path in enumerate(sockets_to_try):
         if index > 0 and not _is_trusted_policy_gate_fallback_socket(sock_path):
-            last_error = "Untrusted or unavailable fallback socket path"
+            # Do not overwrite a specific primary-socket protocol failure with
+            # the expected fact that the fallback socket was unavailable.
+            if last_error == "Policy Gate socket unavailable":
+                last_error = "Untrusted or unavailable fallback socket path"
             continue
         if not os.path.exists(sock_path):
             continue
