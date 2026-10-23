@@ -243,3 +243,79 @@ async def test_policy_gate_client_rejects_untrusted_fallback_socket(tmp_path):
         assert not _is_trusted_policy_gate_fallback_socket(str(socket_path))
     finally:
         listener.close()
+
+
+def test_policy_gate_client_rejects_oversized_response_header_and_closes_socket(monkeypatch):
+    import core.web_bridge as web_bridge_module
+
+    class FakeSocket:
+        def __init__(self):
+            self.closed = False
+            self.recv_calls = 0
+
+        def settimeout(self, timeout):
+            return None
+
+        def connect(self, path):
+            return None
+
+        def sendall(self, data):
+            return None
+
+        def recv(self, size):
+            self.recv_calls += 1
+            assert self.recv_calls == 1, "client must reject length before reading body"
+            return (web_bridge_module.MAX_POLICY_GATE_RESPONSE_BYTES + 1).to_bytes(4, "big")
+
+        def close(self):
+            self.closed = True
+
+    fake_socket = FakeSocket()
+    monkeypatch.setattr(web_bridge_module, "HAS_CONFIG", True)
+    monkeypatch.setattr(web_bridge_module.os.path, "exists", lambda path: path == web_bridge_module.config.POLICY_GATE_SOCKET)
+    monkeypatch.setattr(web_bridge_module.socket, "socket", lambda *args, **kwargs: fake_socket)
+
+    approved, response = web_bridge_module.send_policy_gate_ipc("diagnostics", {})
+
+    assert approved is False
+    assert "Invalid IPC response frame length" in response["message"]
+    assert fake_socket.closed is True
+    assert fake_socket.recv_calls == 1
+
+
+def test_policy_gate_client_rejects_non_object_response_and_closes_socket(monkeypatch):
+    import core.web_bridge as web_bridge_module
+
+    class FakeSocket:
+        def __init__(self):
+            self.closed = False
+            self.chunks = iter([
+                (2).to_bytes(4, "big"),
+                b"[]",
+            ])
+
+        def settimeout(self, timeout):
+            return None
+
+        def connect(self, path):
+            return None
+
+        def sendall(self, data):
+            return None
+
+        def recv(self, size):
+            return next(self.chunks)
+
+        def close(self):
+            self.closed = True
+
+    fake_socket = FakeSocket()
+    monkeypatch.setattr(web_bridge_module, "HAS_CONFIG", True)
+    monkeypatch.setattr(web_bridge_module.os.path, "exists", lambda path: path == web_bridge_module.config.POLICY_GATE_SOCKET)
+    monkeypatch.setattr(web_bridge_module.socket, "socket", lambda *args, **kwargs: fake_socket)
+
+    approved, response = web_bridge_module.send_policy_gate_ipc("diagnostics", {})
+
+    assert approved is False
+    assert "must be a JSON object" in response["message"]
+    assert fake_socket.closed is True

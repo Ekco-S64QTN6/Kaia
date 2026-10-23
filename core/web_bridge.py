@@ -67,6 +67,7 @@ from security.ebpf_telemetry import EBPFTelemetryEngine
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 TELEMETRY_BROADCAST_INTERVAL_SEC = 0.20  # 5 updates per second
+MAX_POLICY_GATE_RESPONSE_BYTES = 4 * 1024 * 1024
 ALLOWED_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 STATIC_DIR = os.path.join(CORE_DIR, "web", "static")
@@ -583,11 +584,7 @@ def _is_trusted_policy_gate_fallback_socket(sock_path: str) -> bool:
 
 
 def send_policy_gate_ipc(action: str, payload: Dict[str, Any], cap_token: Optional[str] = None) -> Tuple[bool, Any]:
-    """
-    Length-framed IPC client communicating with Policy Gate over Unix Domain Socket.
-    The production socket is preferred; a fallback is accepted only in a private
-    per-user directory and only when it is a socket owned by the current user.
-    """
+    """Send a bounded, length-framed request to the trusted Policy Gate socket."""
     req_id = str(uuid.uuid4())
     nested = {
         "request_id": req_id,
@@ -611,6 +608,7 @@ def send_policy_gate_ipc(action: str, payload: Dict[str, Any], cap_token: Option
             continue
         if not os.path.exists(sock_path):
             continue
+        s = None
         try:
             s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             s.settimeout(2.5)
@@ -622,30 +620,41 @@ def send_policy_gate_ipc(action: str, payload: Dict[str, Any], cap_token: Option
 
             header_resp = bytearray()
             while len(header_resp) < 4:
-                p = s.recv(4 - len(header_resp))
-                if not p:
+                packet = s.recv(4 - len(header_resp))
+                if not packet:
                     raise RuntimeError("IPC connection closed before response header")
-                header_resp.extend(p)
+                header_resp.extend(packet)
             length = int.from_bytes(header_resp, byteorder="big")
+            if length <= 0 or length > MAX_POLICY_GATE_RESPONSE_BYTES:
+                raise ValueError(
+                    f"Invalid IPC response frame length {length}; maximum is "
+                    f"{MAX_POLICY_GATE_RESPONSE_BYTES} bytes"
+                )
 
             payload_resp = bytearray()
             while len(payload_resp) < length:
-                p = s.recv(length - len(payload_resp))
-                if not p:
+                packet = s.recv(min(65536, length - len(payload_resp)))
+                if not packet:
                     raise RuntimeError("IPC connection closed before response payload")
-                payload_resp.extend(p)
-            s.close()
+                payload_resp.extend(packet)
 
-            resp = json.loads(payload_resp.decode("utf-8"))
-            approved = resp.get("approved", False)
-            exec_res = resp.get("executor_response", {})
+            response = json.loads(payload_resp.decode("utf-8"))
+            if not isinstance(response, dict):
+                raise ValueError("IPC response must be a JSON object")
+            approved = response.get("approved", False)
+            exec_res = response.get("executor_response", {})
             return approved, exec_res
-        except Exception as e:
-            last_error = str(e)
+        except Exception as exc:
+            last_error = str(exc)
             continue
+        finally:
+            if s is not None:
+                try:
+                    s.close()
+                except OSError:
+                    pass
 
     return False, {"message": f"Policy Gate offline or unreachable: {last_error}"}
-
 
 def dispatch_operator_command(cmd_line: str) -> Dict[str, Any]:
     """
