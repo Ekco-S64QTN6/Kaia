@@ -43,7 +43,8 @@ for optional_test in \
   tests/test_supply_chain_monitor.py \
   tests/test_script_sentinel_security.py \
   tests/test_ebpf_telemetry_resource_bounds.py \
-  tests/test_dashboard_query_resource_bounds.py; do
+  tests/test_dashboard_query_resource_bounds.py \
+  tests/test_geoip_archive_limits.py; do
   if [[ -f "$optional_test" ]]; then
     tests+=("$optional_test")
   fi

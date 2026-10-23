@@ -128,23 +128,32 @@ def test_geoip_updater_uses_private_temporary_paths_and_cleanup():
     assert 'TEMP_ROOT="$(mktemp -d /tmp/kaia-geoip.XXXXXX)"' in script
     assert 'trap cleanup EXIT' in script
     assert 'TEMP_TAR="${TEMP_ROOT}/download.tar.gz"' in script
-    assert 'CURL_CONFIG="${TEMP_ROOT}/curl.conf"' in script
-    assert 'curl --config "$CURL_CONFIG" --fail' in script
+    assert 'python3 "$PROJECT_DIR/scripts/download_geoip_archive.py" "$TEMP_TAR"' in script
+    assert 'python3 "$PROJECT_DIR/scripts/validate_geoip_archive.py" "$TEMP_TAR" "$MMDB_FILE"' in script
+    assert 'CURL_CONFIG=' not in script
+    assert 'curl --config' not in script
     assert '/tmp/GeoLite2-City.tar.gz' not in script
     assert '/tmp/GeoLite2-City-extracted' not in script
 
 
 def test_geoip_updater_validates_archive_paths_and_only_copies_one_regular_database():
     script = Path("scripts/update_geoip.sh").read_text()
+    downloader = Path("scripts/download_geoip_archive.py").read_text()
+    validator = Path("scripts/validate_geoip_archive.py").read_text()
 
-    assert 'tarfile.open(archive_path, "r:gz")' in script
-    assert 'path.is_absolute() or ".." in path.parts' in script
-    assert 'member.isdir() or member.isfile()' in script
-    assert 'len(candidates) != 1' in script
-    assert 'open(output_path, "xb")' in script
-    assert 'max_size = 512 * 1024 * 1024' in script
-
-
+    assert 'python3 "$PROJECT_DIR/scripts/validate_geoip_archive.py" "$TEMP_TAR" "$MMDB_FILE"' in script
+    assert 'requests.get(GEOIP_DOWNLOAD_URL' in downloader
+    assert 'stream=True' in downloader
+    assert 'if total + len(chunk) > MAX_ARCHIVE_BYTES:' in downloader
+    assert 'tarfile.open(fileobj=archive_file, mode="r|gz")' in validator
+    assert 'path.is_absolute() or ".." in path.parts' in validator
+    assert 'if member.isdir():' in validator
+    assert 'if not member.isfile():' in validator
+    assert 'candidate_count != 1' in validator
+    assert 'os.O_EXCL' in validator and 'getattr(os, "O_NOFOLLOW", 0)' in validator
+    assert 'MAX_ARCHIVE_MEMBERS = 4096' in validator
+    assert 'MAX_MMDB_BYTES = 512 * 1024 * 1024' in validator
+    assert 'getmembers()' not in validator
 
 def test_geoip_updater_uses_installed_state_path_without_sourcing_config():
     script = Path("scripts/update_geoip.sh").read_text()
