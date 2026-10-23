@@ -39,8 +39,8 @@ def test_internetdb_404_is_cached_as_a_negative_result(monkeypatch, tmp_path):
     _redirect_cache(monkeypatch, tmp_path)
     calls = []
 
-    def not_found(url, timeout):
-        calls.append((url, timeout))
+    def not_found(url, timeout, stream):
+        calls.append((url, timeout, stream))
         return SimpleNamespace(status_code=404)
 
     monkeypatch.setattr(threat_intel.requests, "get", not_found)
@@ -50,6 +50,7 @@ def test_internetdb_404_is_cached_as_a_negative_result(monkeypatch, tmp_path):
     assert first["found"] is False and first["source"] == "api-not-found"
     assert second["found"] is False and second["source"] == "cache"
     assert len(calls) == 1
+    assert calls[0][2] is True
 
 
 def test_malformed_api_payload_is_not_cached_as_authoritative_data(monkeypatch, tmp_path):
@@ -86,7 +87,8 @@ def test_rate_limit_serializes_real_request_calls_across_threads(monkeypatch):
         with clock_lock:
             clock["now"] += seconds
 
-    def fake_get(url, timeout):
+    def fake_get(url, timeout, stream):
+        assert stream is True
         with request_lock:
             request_starts.append(monotonic())
         return SimpleNamespace(
