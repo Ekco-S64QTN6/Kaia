@@ -655,13 +655,18 @@ class SystemSecurityCollector(threading.Thread):
                         try:
                             record = json.loads(line)
                             result = record.get("result", "")
-                            cap_token_str = record.get("capability_token")
-                            
+                            # New audit rows store only non-replayable capability
+                            # metadata; older rows may still contain the raw token.
+                            cap_token_str = (
+                                record.get("capability_token_metadata")
+                                or record.get("capability_token")
+                            )
+
                             if not cap_token_str:
                                 continue
-                                
+
                             token_data = json.loads(cap_token_str)
-                            sig = token_data.get("signature")
+                            sig = token_data.get("signature") or token_data.get("fingerprint")
                             if not sig or sig in seen_signatures:
                                 continue
                             seen_signatures.add(sig)

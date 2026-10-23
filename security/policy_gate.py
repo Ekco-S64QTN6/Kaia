@@ -778,16 +778,43 @@ class PolicyGate:
             try:
                 if hasattr(request, "model_dump"):
                     req_dict = request.model_dump()
-                    cap_token = getattr(request, 'capability_token', None)
+                    cap_token = getattr(request, "capability_token", None)
                     sess_id = request.session_id
                 else:
                     req_dict = dict(request)
-                    cap_token = req_dict.get('capability_token')
-                    sess_id = req_dict.get('session_id', 'default_session')
+                    cap_token = req_dict.get("capability_token")
+                    sess_id = req_dict.get("session_id", "default_session")
+
+                # Capability tokens are bearer credentials. Keep scope, expiry and
+                # a one-way fingerprint for audit correlation, but never persist the
+                # raw JSON token or its HMAC signature in either audit field.
+                token_metadata = None
+                if isinstance(cap_token, str) and cap_token:
+                    try:
+                        parsed_token = json.loads(cap_token)
+                        if isinstance(parsed_token, dict):
+                            token_metadata_dict = {
+                                key: parsed_token[key]
+                                for key in ("capability", "target", "issued_at", "expires", "issued_by")
+                                if isinstance(parsed_token.get(key), str)
+                            }
+                            token_metadata_dict["fingerprint"] = hashlib.sha256(
+                                cap_token.encode("utf-8")
+                            ).hexdigest()
+                            token_metadata = json.dumps(
+                                token_metadata_dict, sort_keys=True, separators=(",", ":")
+                            )
+                    except (TypeError, ValueError):
+                        logger.warning("Could not parse capability token metadata for audit record")
+
+                # The structured request is logged too, so redact its token copy as well.
+                if "capability_token" in req_dict:
+                    req_dict["capability_token"] = "[REDACTED]" if cap_token else None
 
                 record = AuditRecord(
                     request=req_dict,
-                    capability_token=cap_token,
+                    capability_token=None,
+                    capability_token_metadata=token_metadata,
                     result=result,
                     reason=reason,
                     executor=executor,
