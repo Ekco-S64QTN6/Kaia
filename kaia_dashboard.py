@@ -306,6 +306,34 @@ def query_gate_diagnostics(query_type: str, args: list = None) -> Tuple[bool, st
     return False, "Policy Gate offline"
 
 
+def _get_honeypot_trigger_summary(conn) -> tuple:
+    """Return total matching events and latest actor/timestamp without loading history."""
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT COUNT(*) FROM security_events
+        WHERE type IN ('honeypot_port_trigger', 'honeypot_file_access')
+        """
+    )
+    count_row = cursor.fetchone()
+    total_triggers = count_row[0] if count_row and count_row[0] else 0
+    last_actor = "None"
+    last_timestamp = "None"
+    if total_triggers:
+        cursor.execute(
+            """
+            SELECT actor, timestamp FROM security_events
+            WHERE type IN ('honeypot_port_trigger', 'honeypot_file_access')
+            ORDER BY timestamp DESC LIMIT 1
+            """
+        )
+        latest = cursor.fetchone()
+        if latest:
+            last_actor = latest[0]
+            last_timestamp = latest[1]
+    return total_triggers, last_actor, last_timestamp
+
+
 class ThreatIntelCollector(threading.Thread):
     """Pane 2: Threat Intelligence data collector."""
     def __init__(self, stop_event: threading.Event) -> None:
@@ -446,17 +474,7 @@ class ThreatIntelCollector(threading.Thread):
             if os.path.exists(config.SECURITY_DB_PATH):
                 try:
                     conn = sqlite3.connect(config.SECURITY_DB_PATH)
-                    cursor = conn.cursor()
-                    cursor.execute("""
-                        SELECT actor, timestamp FROM security_events
-                        WHERE type IN ('honeypot_port_trigger', 'honeypot_file_access')
-                        ORDER BY timestamp DESC
-                    """)
-                    rows = cursor.fetchall()
-                    total_triggers = len(rows)
-                    if rows:
-                        last_ip = rows[0][0]
-                        last_time = rows[0][1]
+                    total_triggers, last_ip, last_time = _get_honeypot_trigger_summary(conn)
                     conn.close()
                 except Exception:
                     pass
