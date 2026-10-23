@@ -12,6 +12,10 @@ import config
 
 logger = logging.getLogger(__name__)
 
+# Bound untrusted third-party JSON before decoding it into Python objects.
+INTERNETDB_MAX_RESPONSE_BYTES = 1024 * 1024
+INTERNETDB_RESPONSE_CHUNK_BYTES = 64 * 1024
+
 # Local threat intel directories
 THREAT_INTEL_DIR = str(config.THREAT_INTEL_DIR)
 REPUTATION_DB_PATH = os.path.join(THREAT_INTEL_DIR, "reputation.db")
@@ -238,19 +242,36 @@ def _fetch_internetdb_api(ip: str) -> dict:
         _last_api_call_time = time.monotonic()
 
         try:
-            # Keep request initiation within the serialized critical section.
-            # requests.get is bounded by timeout and returns only after receiving
-            # the response body with the default non-streaming behavior.
-            resp = requests.get(url, timeout=10)
-            if resp.status_code == 404:
-                logger.debug("InternetDB: No data for %s (404)", ip)
-                return {"_kaia_not_found": True}
-            resp.raise_for_status()
-            data = resp.json()
-            if not isinstance(data, dict):
-                logger.warning("InternetDB returned a non-object payload for %s", ip)
-                return {}
-            return data
+            # Stream instead of allowing requests.get()/resp.json() to buffer an
+            # unbounded third-party response in memory. The decoded object stays
+            # below a small fixed byte budget before JSON parsing begins.
+            resp = requests.get(url, timeout=10, stream=True)
+            try:
+                if resp.status_code == 404:
+                    logger.debug("InternetDB: No data for %s (404)", ip)
+                    return {"_kaia_not_found": True}
+                resp.raise_for_status()
+
+                body = bytearray()
+                for chunk in resp.iter_content(chunk_size=INTERNETDB_RESPONSE_CHUNK_BYTES):
+                    if not chunk:
+                        continue
+                    if len(body) + len(chunk) > INTERNETDB_MAX_RESPONSE_BYTES:
+                        raise ValueError(
+                            "InternetDB response exceeds the "
+                            f"{INTERNETDB_MAX_RESPONSE_BYTES}-byte safety limit"
+                        )
+                    body.extend(chunk)
+
+                data = json.loads(body)
+                if not isinstance(data, dict):
+                    logger.warning("InternetDB returned a non-object payload for %s", ip)
+                    return {}
+                return data
+            finally:
+                close_response = getattr(resp, "close", None)
+                if callable(close_response):
+                    close_response()
         except (requests.RequestException, ValueError, TypeError) as e:
             logger.warning("InternetDB API request failed for %s: %s", ip, e)
             return {}

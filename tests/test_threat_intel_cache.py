@@ -60,7 +60,8 @@ def test_malformed_api_payload_is_not_cached_as_authoritative_data(monkeypatch, 
         lambda *args, **kwargs: SimpleNamespace(
             status_code=200,
             raise_for_status=lambda: None,
-            json=lambda: ["not", "an", "object"],
+            iter_content=lambda chunk_size: iter([b'["not", "an", "object"]']),
+            close=lambda: None,
         ),
     )
 
@@ -91,7 +92,8 @@ def test_rate_limit_serializes_real_request_calls_across_threads(monkeypatch):
         return SimpleNamespace(
             status_code=200,
             raise_for_status=lambda: None,
-            json=lambda: {"ports": []},
+            iter_content=lambda chunk_size: iter([b'{"ports": []}']),
+            close=lambda: None,
         )
 
     monkeypatch.setattr(threat_intel.time, "monotonic", monotonic)
@@ -159,4 +161,61 @@ def test_direct_internetdb_fetch_rejects_non_global_ip_before_rate_limit(monkeyp
     assert threat_intel._fetch_internetdb_api("192.168.0.4") == {}
     assert calls == []
     assert threat_intel._last_api_call_time == 0.0
+
+
+def test_internetdb_response_size_is_bounded_before_json_parsing(monkeypatch):
+    requested_chunks = []
+    closed = []
+    chunks = [
+        b'{"ports": []}',
+        b" " * (threat_intel.INTERNETDB_MAX_RESPONSE_BYTES - len(b'{"ports": []}')),
+        b"x",
+    ]
+
+    def iter_content(chunk_size):
+        requested_chunks.append(chunk_size)
+        return iter(chunks)
+
+    response = SimpleNamespace(
+        status_code=200,
+        raise_for_status=lambda: None,
+        iter_content=iter_content,
+        close=lambda: closed.append(True),
+    )
+    monkeypatch.setattr(threat_intel.requests, "get", lambda *args, **kwargs: response)
+    monkeypatch.setattr(threat_intel, "_last_api_call_time", 0.0)
+
+    result = threat_intel._fetch_internetdb_api("8.8.4.4")
+
+    assert result == {}
+    assert requested_chunks == [threat_intel.INTERNETDB_RESPONSE_CHUNK_BYTES]
+    assert closed == [True]
+
+
+def test_internetdb_response_uses_streaming_and_closes_after_valid_json(monkeypatch):
+    calls = []
+    closed = []
+    payload = b'{"ports": [80, 443], "hostnames": ["example.test"]}'
+
+    def fake_get(url, timeout, stream):
+        calls.append({"url": url, "timeout": timeout, "stream": stream})
+        return SimpleNamespace(
+            status_code=200,
+            raise_for_status=lambda: None,
+            iter_content=lambda chunk_size: iter([payload[:7], payload[7:]]),
+            close=lambda: closed.append(True),
+        )
+
+    monkeypatch.setattr(threat_intel.requests, "get", fake_get)
+    monkeypatch.setattr(threat_intel, "_last_api_call_time", 0.0)
+
+    result = threat_intel._fetch_internetdb_api("8.8.8.8")
+
+    assert result == {"ports": [80, 443], "hostnames": ["example.test"]}
+    assert calls == [{
+        "url": f"{threat_intel.INTERNETDB_API_URL}/8.8.8.8",
+        "timeout": 10,
+        "stream": True,
+    }]
+    assert closed == [True]
 
