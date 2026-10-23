@@ -37,6 +37,7 @@ tests=(
 
 # Feature-specific tests are included as soon as their source files are present.
 for optional_test in \
+  tests/test_host_executor_output_limits.py \
   tests/test_host_executor_unmitigation.py \
   tests/test_fim_event_descriptor.py \
   tests/test_threat_intel_cache.py \
