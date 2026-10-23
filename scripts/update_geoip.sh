@@ -119,13 +119,11 @@ else
     mkdir -p -- "$GEOIP_DIR"
 fi
 
-URL="https://download.maxmind.com/geoip/databases/GeoLite2-City/download?suffix=tar.gz"
 # Never use predictable shared /tmp filenames: a symlink there could redirect
 # a privileged download or make cleanup remove files that this run did not create.
 TEMP_ROOT="$(mktemp -d /tmp/kaia-geoip.XXXXXX)"
 TEMP_TAR="${TEMP_ROOT}/download.tar.gz"
 TEMP_DIR="${TEMP_ROOT}/extracted"
-CURL_CONFIG="${TEMP_ROOT}/curl.conf"
 MMDB_FILE="${TEMP_DIR}/GeoLite2-City.mmdb"
 
 cleanup() {
@@ -134,70 +132,19 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -- "$TEMP_DIR"
-printf 'user = "%s:%s"\n' "$MAXMIND_ACCOUNT_ID" "$MAXMIND_LICENSE_KEY" > "$CURL_CONFIG"
-chmod 600 -- "$CURL_CONFIG"
 
 echo -e "${COLOR_BLUE}Downloading GeoLite2 City database...${COLOR_RESET}"
-if curl --config "$CURL_CONFIG" --fail --silent --show-error --location --output "$TEMP_TAR" "$URL"; then
+if python3 "$PROJECT_DIR/scripts/download_geoip_archive.py" "$TEMP_TAR"; then
     echo -e "${COLOR_GREEN}Download complete.${COLOR_RESET}"
 else
-    echo -e "${COLOR_RED}Error: Failed to download database.${COLOR_RESET}" >&2
+    echo -e "${COLOR_RED}Error: Failed to download database within the archive size limit.${COLOR_RESET}" >&2
     exit 1
 fi
 
-# Do not run tar's general-purpose extractor on a downloaded archive. Validate
-# every member and copy only the single expected regular MMDB member to a new
-# file inside our private temporary directory; paths, links, devices, and other
-# archive members are never materialized on disk.
+# Parse the archive as a bounded stream and materialize only the one expected
+# regular MMDB member. Never buffer all tar headers or invoke a general extractor.
 echo -e "${COLOR_BLUE}Validating and extracting database...${COLOR_RESET}"
-if ! python3 - "$TEMP_TAR" "$MMDB_FILE" <<'PYEOF'
-import os
-import sys
-import tarfile
-from pathlib import PurePosixPath
-
-archive_path, output_path = sys.argv[1:3]
-max_size = 512 * 1024 * 1024
-
-try:
-    with tarfile.open(archive_path, "r:gz") as archive:
-        candidates = []
-        for member in archive.getmembers():
-            path = PurePosixPath(member.name)
-            if path.is_absolute() or ".." in path.parts:
-                raise ValueError("archive contains an absolute or parent-traversal path")
-            if not (member.isdir() or member.isfile()):
-                raise ValueError("archive contains a link or special file")
-            if member.isfile() and path.name == "GeoLite2-City.mmdb":
-                if len(path.parts) != 2 or not path.parts[0].startswith("GeoLite2-City_"):
-                    raise ValueError("MMDB file is not at the expected archive path")
-                candidates.append(member)
-
-        if len(candidates) != 1:
-            raise ValueError("archive must contain exactly one expected GeoLite2-City.mmdb file")
-
-        source = archive.extractfile(candidates[0])
-        if source is None:
-            raise ValueError("MMDB archive entry could not be read")
-        total = 0
-        with source, open(output_path, "xb") as destination:
-            while True:
-                chunk = source.read(1024 * 1024)
-                if not chunk:
-                    break
-                total += len(chunk)
-                if total > max_size:
-                    raise ValueError("MMDB database exceeds the 512 MiB safety limit")
-                destination.write(chunk)
-            if total == 0:
-                raise ValueError("MMDB database is empty")
-            destination.flush()
-            os.fsync(destination.fileno())
-except Exception as exc:
-    print(f"Error: rejected GeoLite2 archive: {exc}", file=sys.stderr)
-    sys.exit(1)
-PYEOF
-then
+if ! python3 "$PROJECT_DIR/scripts/validate_geoip_archive.py" "$TEMP_TAR" "$MMDB_FILE"; then
     echo -e "${COLOR_RED}Error: archive validation or extraction failed.${COLOR_RESET}" >&2
     exit 1
 fi
