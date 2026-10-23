@@ -12,6 +12,10 @@ import config
 
 logger = logging.getLogger(__name__)
 
+# Passive discovery must not let spoofed IP/MAC pairs grow persistent state forever.
+ASSET_DB_MAX_ENTRIES = 10000
+ASSET_DB_PRUNE_INTERVAL = 100
+
 def get_default_interface() -> str:
     try:
         if os.path.exists("/proc/net/route"):
@@ -74,6 +78,9 @@ class PassiveDiscoveryEngine:
         self.enrichment_queue = Queue(maxsize=256)
         self.enrichment_thread = None
         self.enrichment_dropped = 0
+        self.asset_db_max_entries = ASSET_DB_MAX_ENTRIES
+        self.asset_db_prune_interval = ASSET_DB_PRUNE_INTERVAL
+        self._assets_since_prune = 0
 
     def start(self):
         if self.thread and self.thread.is_alive():
@@ -98,6 +105,11 @@ class PassiveDiscoveryEngine:
                     PRIMARY KEY (ip, mac)
                 )
             """)
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_assets_last_seen ON assets(last_seen)"
+            )
+            # Trim any oversized database from a previous version on startup.
+            self._prune_asset_database(conn)
             conn.commit()
         except Exception as e:
             logger.error(f"Failed to initialize assets database: {e}")
@@ -394,6 +406,26 @@ class PassiveDiscoveryEngine:
         except (ValueError, UnicodeDecodeError):
             return ""
 
+    def _prune_asset_database(self, conn):
+        """Keep persistent passive-discovery inventory within a hard row ceiling."""
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM assets")
+        count_row = cursor.fetchone()
+        asset_count = count_row[0] if count_row and isinstance(count_row[0], int) else 0
+        excess = max(0, asset_count - self.asset_db_max_entries)
+        if excess:
+            cursor.execute(
+                """
+                DELETE FROM assets WHERE rowid IN (
+                    SELECT rowid FROM assets
+                    ORDER BY last_seen ASC, rowid ASC
+                    LIMIT ?
+                )
+                """,
+                (excess,),
+            )
+        self._assets_since_prune = 0
+
     def _log_asset(self, ip: str, mac: str, hostname: str, vector: str):
         now = time.time()
 
@@ -426,6 +458,7 @@ class PassiveDiscoveryEngine:
                 (ip, mac),
             )
             row = cursor.fetchone()
+            is_new_asset = row is None
             if row:
                 db_hostname, first_seen = row
                 final_hostname = db_hostname if db_hostname != "Unknown" else hostname
@@ -441,6 +474,9 @@ class PassiveDiscoveryEngine:
                     """,
                     (ip, mac, hostname, vendor, vector, ts_str, ts_str),
                 )
+                self._assets_since_prune += 1
+                if self._assets_since_prune >= self.asset_db_prune_interval:
+                    self._prune_asset_database(conn)
             conn.commit()
             saved = True
         except Exception as e:
