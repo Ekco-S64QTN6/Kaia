@@ -223,3 +223,29 @@ def test_policy_gate_fallback_path_is_scoped_to_current_uid():
 
     expected_parent = os.path.join("/tmp", f"kaia-policy-gate-{os.getuid()}")
     assert os.path.dirname(config.POLICY_GATE_SOCKET_FALLBACK) == expected_parent
+
+def test_ipc_payload_uses_one_absolute_deadline_across_partial_reads(monkeypatch):
+    import security.policy_gate as policy_gate_module
+
+    gate = PolicyGate()
+    gate.MAX_IPC_FRAME_READ_SECONDS = 5.0
+    left, right = socket.socketpair()
+    try:
+        # Advertise a longer frame, but send only its first payload byte. Fake
+        # monotonic time crosses the one deadline between payload recv attempts;
+        # a timeout-resetting-per-recv implementation would not reject this yet.
+        left.sendall((100).to_bytes(4, "big") + b"{")
+        clock = iter([0.0, 0.0, 0.0, 6.0])
+        monkeypatch.setattr(policy_gate_module.time, "monotonic", lambda: next(clock))
+
+        with pytest.raises(TimeoutError, match="frame read deadline"):
+            gate._read_frame(right)
+    finally:
+        left.close()
+        right.close()
+
+
+def test_ipc_frame_timeout_is_bounded_by_a_single_deadline():
+    gate = PolicyGate()
+    assert gate.MAX_IPC_FRAME_READ_SECONDS > 0
+    assert gate.MAX_IPC_FRAME_READ_SECONDS <= 10.0
