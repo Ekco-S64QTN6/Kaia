@@ -1,50 +1,46 @@
-# Documentation Map and Source of Truth
+# Documentation map
 
-**Last reconciled:** 2026-10-22 (regression status refreshed after PR #45)  
-**Repository:** `Ekco-S64QTN6/Kaia`
+Which document is authoritative for what.
 
-This page defines which documents are authoritative and how to interpret implementation claims.
+| Document | Authority |
+|:--|:--|
+| [README](../README.md) | The overview: what Kaia is, what is built, how to start |
+| [master_plan.md](master_plan.md) | The architecture: axioms, invariants, component design, and the implementation status in §10.5 |
+| [ROADMAP.md](ROADMAP.md) | What is left to build or verify |
+| [OPERATIONS.md](OPERATIONS.md) | Running, deploying and recovering Kaia on a host |
+| [DEPLOYMENT_CHECKLIST.md](DEPLOYMENT_CHECKLIST.md) | Privileged acceptance tests for a deployed host; its recorded host observations are dated |
+| [security_review_process.md](security_review_process.md) | What a security change needs before it merges |
+| [design/](design/) | Visual references for the operator HUD and the Kaia avatar |
+| [`core/data/`](../core/data/) | Reference knowledge and cheat sheets that Kaia retrieves from — not the architecture. Check security-sensitive commands against the current scripts before use. |
 
-## Current documents
-
-- **[README.md](../README.md)** — user-facing overview, prerequisites, deployment shape, current feature summary and operator cautions.
-- **[master_plan.md](master_plan.md)** — authoritative target architecture, invariants, component design, roadmap and the current repository implementation/verification matrix in §10.5. Target requirements must not be confused with implemented code.
-- **[NEXT_STEPS.md](NEXT_STEPS.md)** — deployment and privileged acceptance tests. Its historical host observations are dated; verify actual unit state, paths, capabilities and trusted baseline before operating.
-- **[03_Gemini35_Execution_Report.md](03_Gemini35_Execution_Report.md)** — historical report from 2026-07-09. Its host-state assertions and test counts are not current evidence.
-- **[Kaia UI handoff](../Kaia_UI_Upgrade/claude_handoff.md)** — dated UI integration handoff, reconciled against the 2026-10-22 code review.
-- **[UI design specification](../Kaia_UI_Upgrade/2026-10-07-kaia-hardened-security-ui-upgrade-design-spec.md)** — original 2026-10-07 design proposal; its schedule and initial-state descriptions are historical, while its status note points to the current implementation record.
-
-## Historical source material
-
-- **[`docs/archived/`](archived/)** contains prior plans, code reviews, issue lists and reference snapshots. These files are retained for provenance; statements inside them describe the repository as it was when written. Do not use them to infer current implementation or host state without checking the current source.
-- **[`core/data/`](../core/data/)** contains reference knowledge and operator cheat sheets, not the architecture source of truth. Validate security-sensitive commands against the current scripts and service units before use.
+Earlier plans, reviews and agent handoffs were retired once their open items were in the roadmap;
+they remain in Git history.
 
 ## Evidence levels
 
 When describing a feature, use these distinct labels:
 
 1. **Implemented in source** — code is present.
-2. **Automated-test covered** — a named unit/regression test exercises the behavior.
-3. **CI-passing** — the exact commit has a successful Actions run; report the run and test count.
-4. **Target-host verified** — the installed Arch Linux unit, kernel hooks, permissions, firewall manager and reboot behavior were directly exercised and recorded.
+2. **Automated-test covered** — a named unit or regression test exercises the behaviour.
+3. **CI-passing** — the exact commit has a successful Actions run.
+4. **Target-host verified** — the installed Arch Linux unit, kernel hooks, permissions, firewall
+   manager and reboot behaviour were exercised directly and recorded.
 
-Evidence at one level does not imply the next. In particular, notification-mode fanotify is not execution-blocking FIM, a syscall-entry event is not proof an operation succeeded, and unit tests do not prove real nftables/systemd behavior.
+Evidence at one level does not imply the next. Notification-mode fanotify is not execution-blocking
+FIM, a syscall-entry event is not proof an operation succeeded, and unit tests do not prove real
+nftables or systemd behaviour.
 
 ## Maintenance rule
 
-When code or a subsystem contract changes, update the README summary if user-visible behavior changes, `master_plan.md` §10.5 and the relevant architecture section, and this checklist if a target-host command or acceptance criterion changes. Mark dated reports as historical instead of silently rewriting what they originally observed. Never claim host installation, baseline trust or privileged behavior without fresh host evidence.
+When code or a subsystem contract changes: update the README if user-visible behaviour changes,
+`master_plan.md` §10.5 and the relevant architecture section, and the roadmap. Update the
+deployment checklist if a target-host command or acceptance criterion changes. Never claim host
+installation, baseline trust or privileged behaviour without fresh host evidence.
 
+## Regression suite
 
-## Automated regression suite
-
-Run `python -m pip install -r requirements-test.txt` then
-`bash scripts/run_ci_tests.sh`. This runner is also called by the GitHub Actions
-workflow, so local and CI suite membership stays synchronized. Workflow actions are
-pinned to verified full commit SHAs to prevent mutable tag movement. It is a focused,
-deterministic suite, not every Python file under `tests/`: legacy scripts such as
-`verify_security.py` are manual/integration tools, and `test_advanced_security.py`
-contains host/database-backed tests that need isolation before it is safe for CI.
-Target-host checks remain separate.
-
-
-The current CI pass count changes as tests are added; current-facing docs link to the main-branch Actions history instead of embedding a number that becomes stale when the suite grows.
+`python -m pip install -r requirements-test.txt`, then `bash scripts/run_ci_tests.sh`. GitHub
+Actions calls the same runner, so local and CI membership stay in step; workflow actions are pinned
+to full commit SHAs. It is a focused, deterministic suite, not every file under `tests/`: legacy
+scripts such as `verify_security.py` are manual integration tools, and `test_advanced_security.py`
+needs host and database isolation before it is safe for CI.
