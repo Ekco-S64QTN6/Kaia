@@ -82,18 +82,26 @@ Re-run the installer after changes.
 
 ## 3. Review the deployed tree, record a trusted baseline, then start
 
-The installed unit runs `/usr/bin/python3`, not the checkout's `.venv`. Its optional
-modules are imported under `try`, so a missing one does not stop the gate — it switches
-that control off: `yara` (YARA rule scanning), `maxminddb` (GeoIP), `bcc` (eBPF). Check
-before starting:
+The installed unit and `kaia-baseline.sh` run `/usr/bin/python3` as root, not the checkout's
+`.venv`, so the gate's dependencies must be installed for the system interpreter. Check as
+root would see it — `-s` and a clean environment keep your own `~/.local` packages out, which
+otherwise make a missing module look present:
 
 ```bash
-for m in yara maxminddb bcc; do /usr/bin/python3 -c "import $m" && echo "ok $m" || echo "MISSING $m"; done
+for m in dotenv pydantic psutil watchdog requests aiohttp sqlalchemy yara maxminddb bcc; do
+  env -i /usr/bin/python3 -s -c "import $m" 2>/dev/null && echo "ok $m" || echo "MISSING $m"; done
 ```
 
-On 2026-10-24 the system Python (3.14) had none of the three; the checkout's `.venv`
-had `yara` and `maxminddb`. Install them for the system interpreter (or point the
-unit at a deployed venv) before relying on those controls.
+On 2026-10-24 seven were missing and `kaia-baseline.sh` failed on `dotenv`. All are packaged
+in Arch's `extra`:
+
+```bash
+sudo pacman -S --needed python-dotenv python-pydantic python-watchdog python-aiohttp \
+    python-sqlalchemy python-yara python-maxminddb python-bcc
+```
+
+`yara`, `maxminddb` and `bcc` are imported under `try`: without them the gate still starts,
+with YARA scanning, GeoIP and eBPF switched off.
 
 ```bash
 sudo /opt/kaia/scripts/kaia-baseline.sh
