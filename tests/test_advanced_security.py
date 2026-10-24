@@ -75,12 +75,15 @@ class TestAdvancedSecurity(unittest.TestCase):
         """Verify that HostExecutor prepends systemd-run wrapper commands."""
         # We can inspect the command returned or run test checks
         from security.host_executor import SYSTEM_BINARIES
+        # The executor checks the script with os.path.exists and runs every
+        # command through _run_cmd (Popen with bounded output); inspect the argv
+        # handed to it.
         with patch('os.geteuid', return_value=1000), \
              patch.dict(os.environ, {"XDG_RUNTIME_DIR": "/run/user/1000"}), \
              patch('os.path.isfile', return_value=True), \
+             patch('os.path.exists', return_value=True), \
              patch('os.access', return_value=True), \
-             patch('subprocess.run') as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout="Mocked output", stderr="")
+             patch.object(HostExecutor, '_run_cmd', return_value=(True, "Mocked output", "")) as mock_run:
 
             HostExecutor.execute_script("music.sh", effective_level="none")
 
@@ -89,8 +92,10 @@ class TestAdvancedSecurity(unittest.TestCase):
             self.assertEqual(called_args[1], "--user")
             self.assertEqual(called_args[2], "--scope")
             self.assertIn(f"CPUQuota={config.CGROUP_CPU_QUOTA}", called_args)
-            child_env = mock_run.call_args.kwargs["env"]
-            self.assertNotIn("KAIA_CAPABILITY_TOKEN_SECRET", child_env)
+        # _run_cmd builds the child's environment; the signing secret never reaches it.
+        with patch.dict(os.environ, {"KAIA_CAPABILITY_TOKEN_SECRET": "x" * 64}):
+            child_env = HostExecutor._build_child_environment()
+        self.assertNotIn("KAIA_CAPABILITY_TOKEN_SECRET", child_env)
 
     def test_dbus_queries_success(self):
         """Verify that D-Bus query helper yields unit information correctly."""
