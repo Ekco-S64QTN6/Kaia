@@ -191,15 +191,6 @@ A reboot also clears any lockdown: nftables rules are runtime-only.
 
 ---
 
-## Known open items — status after the 2026-10-22 code updates
+## Open items
 
-- **Incremental command-response streaming is not implemented.** The web HUD has interactive input, command history and one-shot response rendering. Telemetry itself streams over WebSocket; long-running command output is not yet forwarded chunk by chunk.
-- **Execution-blocking FIM remains unbuilt.** Current fanotify uses notification mode and does not hold the originating process for a verdict. A separate permission-event design and target-kernel tests are required.
-- **eBPF is partial and host-dependent.** The unlinkat callback is wired to the HUD as an observed syscall-entry attempt; broader hook coverage, successful-delete correlation and target-kernel/BCC verification remain open.
-- **Passive discovery has limited NBNS coverage.** A parser now handles first-level encoded names in responses from UDP port 137, with packet-level tests. Query names are not attributed to the querier. NBSTAT, compressed/alternate name forms and target-network validation remain open.
-- **Supply-chain monitoring is a first increment.** Completed pacman transactions are recorded, but AUR build/repository change tracking and dependency/signature attestation remain open.
-- **Filesystem decoys are non-destructive.** The installer no longer creates/chmods named decoy paths. The coordinator skips occupied real files, and only removes unchanged decoys it created itself. Verify target-host decoy listeners separately; the namespace is not provisioned by this installer.
-- **Tier 5 systems not yet implemented:** process/network/file behavioral baselines; alert-confidence scoring; secrets-exposure scanning; backup existence, recency and restorability monitoring; independent service/data-freshness supervision; expanded GeoLite2/CVE/passive-DNS/historical threat-intelligence stores and DuckDB analysis.
-- **Target-host acceptance tests remain required.** Verify the installed unit, trusted baseline, FIM database migration/permissions, descriptor-safe workspace writes under the deployed read-only tree (including root-owned, non-group/world-writable parent validation), fanotify/BCC behavior, real block/unblock, UFW reload survival and two-step block/unblock replay across reboot. The 2026-09-08 setup notes above are historical, not a live system probe. In system mode, a missing baseline is a startup error rather than a weaker automatic bootstrap.
-- **Credential history:** the old KAIA_CAPABILITY_TOKEN_SECRET value remains in public Git history, though it was rotated on 2026-09-08 and the installer rejects it. Rotation is the mitigation; deleting history cannot make the published value secret again.
-- **Backup-drive note:** the last handoff mentioned pending sectors on sdb; re-check the device independently rather than treating that old note as current.
+Everything still to build or verify is in [ROADMAP.md](ROADMAP.md).

@@ -629,7 +629,7 @@ does not un-publish a value that was public.
 **Historical deployment checkpoint (2026-09-08; verify before acting).** The
 then-current host was recorded as running from a developer checkout with excess
 capabilities and without the hardened deployment. That is not a live reading of the
-current host. See `docs/NEXT_STEPS.md` for service, deployment-path, state-directory,
+current host. See `docs/DEPLOYMENT_CHECKLIST.md` for service, deployment-path, state-directory,
 baseline and firewall checks; do not assume the recorded state is unchanged.
 
 **Current priorities (audit snapshot 2026-10-22):**
@@ -687,25 +687,7 @@ This is the current repository status as of the audit date. It describes impleme
 - [x] Passive pacman transaction monitoring for installed/upgraded/downgraded/reinstalled/removed packages after successful ALPM transaction completion. This is not package-signature verification or full AUR/repository dependency attestation.
 - [x] GitHub Actions regression workflow runs shell syntax validation, Python compilation and the shared deterministic suite. See the [main-branch workflow history](https://github.com/Ekco-S64QTN6/Kaia/actions/workflows/security-regressions.yml?query=branch%3Amain) for the current run and exact per-run test count. Kernel/privileged behavior is outside the proof supplied by those tests.
 
-**Partial, host-dependent or still unimplemented:**
-
-- [ ] **Execution-blocking FIM.** Notification-mode fanotify sees events but does not hold processes pending a security verdict. A separate permission-event design is still required.
-- [ ] **Complete kernel telemetry.** Probe availability depends on BCC, kernel version/symbols, capabilities and successful registration. Current unlinkat records attempts, not successful deletions; additional coverage/correlation remains.
-- [ ] **End-to-end FIM/YARA response.** Source generation, isolated validation and same-FD scanning exist, but kernel event availability and the complete event-to-verdict-to-response path require controlled host tests.
-- [ ] **Incremental command-response streaming** for long-running diagnostics/sandbox execution. Interactive command entry and one-shot responses are already implemented.
-- [ ] **Network discovery limitation:** a basic NetBIOS Name Service response parser handles first-level encoded QNAMEs. Queries are ignored to avoid attributing a requested name to the querier. NBSTAT records, alternate/compressed name forms and broader edge-case coverage remain unfinished.
-- [ ] **Broader supply-chain integrity:** AUR build tracking, repository/metadata changes, dependency graph shifts and package signature/installed-content attestation are not implemented.
-- [ ] **Other Tier 5 capabilities:** process/network/file behavioral baselines, alert-confidence framework, secrets exposure scanning, backup existence/recency/restorability, independent health and data-freshness supervision, historical threat-intel snapshots, local GeoLite2/CVE/passive-DNS datasets and DuckDB-backed expansion.
-- [ ] **Target-host validation:** verify the actual systemd deployment, trusted baseline and FIM history migration/permissions; confirm deployment is below `/opt`, state data is below `/var/lib`, `/srv` or `/mnt`, and neither path overlaps the source checkout; test live block/unblock, UFW reload survival, boot replay/tombstones, fanotify marks and BCC probe compilation on the deployed Arch Linux host. The baseline and FIM database paths derive from `STATE_DIR`; confirm both match the installed state directory after install or migration.
-
-**Recommended next steps:**
-
-1. Verify deployment and trusted baseline on the actual host.
-2. Live-test block → UFW reload → reboot restore → unblock → second reboot (the rule must stay absent).
-3. Design execution permission FIM separately from notification-mode observation.
-4. Fill telemetry/discovery gaps with feature-specific tests and target-kernel evidence.
-5. Implement the remaining Tier 5 features in separate, independently testable PRs.
-
+**Partial, host-dependent or still unimplemented:** tracked in [ROADMAP.md](ROADMAP.md), with the target-host verification first.
 
 
 ## 11. Advanced Monitoring Capabilities (Optional Future Enhancements)
@@ -844,7 +826,7 @@ These boundaries ensure that engineering effort remains concentrated on host‑l
 - This document is the **single source of truth**. Ignore all superseded documents.
 - Kaia has **no emotional/belief state** – remove any legacy references.
 - The collector/snapshot pipeline is the shared telemetry source; curses and the loopback web HUD are operator surfaces. Every web mutation must pass through the Policy Gate.
-- Use §10.5 for the latest code-review status snapshot and `docs/NEXT_STEPS.md` for target-host verification. Do not treat older status lists or displayed dashboard values as proof that a capability is live.
+- Use §10.5 for the latest code-review status snapshot and `docs/DEPLOYMENT_CHECKLIST.md` for target-host verification. Do not treat older status lists or displayed dashboard values as proof that a capability is live.
 - Keep Tier 5 and platform-specific work explicitly unfinished until both regression coverage and deployment evidence exist.
 - All implementation must adhere to the fail‑closed principles, security invariants (§1), and the hardening rules in Appendix E.
 
