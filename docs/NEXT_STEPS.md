@@ -4,6 +4,10 @@ This checklist records deployment findings last documented on **2026-09-08**. Mo
 
 **Last recorded state (2026-09-08):** the Policy Gate was running from the developer checkout at `~/github/Kaia` with `CAP_SYS_ADMIN` and `CAP_DAC_OVERRIDE`; the hardened deployment was committed but not installed. Re-check `systemctl status kaia-policy-gate`, the unit's `WorkingDirectory` / `ExecStart`, and `KAIA_STATE_DIR` before following this checklist.
 
+**Re-checked 2026-10-24:** unchanged. `/etc/systemd/system/kaia-policy-gate.service` still runs
+`~/github/Kaia/.venv/bin/python security/policy_gate.py` as root from the checkout, with
+`CAP_SYS_ADMIN` and `CAP_DAC_OVERRIDE`; nothing is deployed under `/opt/kaia`.
+
 ---
 
 ## 1. Decide whether `CAP_SYS_ADMIN` is needed
@@ -34,8 +38,16 @@ probe reports which tiers the kernel actually accepts.
 
 ## 2. Deploy
 
+**Stop the gate before updating the checkout.** While it runs from `~/github/Kaia`, its
+tamper detector hashes every `security/*.py`, `core/config.py`, `main.py`,
+`kaia_dashboard.py`, `scripts/kaia-lockdown.sh` and its own unit file every 30 s. A
+`git pull` that changes them under it is a tamper event on files that gate authority:
+an emergency lockdown (the nftables ruleset flushed, up to three times an hour).
+
 ```bash
+sudo systemctl stop kaia-policy-gate.service
 cd ~/github/Kaia
+git pull --ff-only
 sudo scripts/install_services.sh
 ```
 
@@ -69,6 +81,19 @@ Re-run the installer after changes.
 ---
 
 ## 3. Review the deployed tree, record a trusted baseline, then start
+
+The installed unit runs `/usr/bin/python3`, not the checkout's `.venv`. Its optional
+modules are imported under `try`, so a missing one does not stop the gate — it switches
+that control off: `yara` (YARA rule scanning), `maxminddb` (GeoIP), `bcc` (eBPF). Check
+before starting:
+
+```bash
+for m in yara maxminddb bcc; do /usr/bin/python3 -c "import $m" && echo "ok $m" || echo "MISSING $m"; done
+```
+
+On 2026-10-24 the system Python (3.14) had none of the three; the checkout's `.venv`
+had `yara` and `maxminddb`. Install them for the system interpreter (or point the
+unit at a deployed venv) before relying on those controls.
 
 ```bash
 sudo /opt/kaia/scripts/kaia-baseline.sh
