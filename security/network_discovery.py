@@ -488,11 +488,11 @@ class PassiveDiscoveryEngine:
             raw_name = rdata[entry_offset:entry_offset + 16]
             name_flags = struct.unpack_from("!H", rdata, entry_offset + 16)[0]
 
-            # Reserved bits must be zero; only active, unique, non-deregistering
-            # names are eligible as host labels. Group names are not hostnames.
+            # Reserved bits must be zero; only active, unique, non-conflicted,
+            # non-deregistering names are eligible as host labels.
             if name_flags & 0xFF80 or not (name_flags & 0x0020):
                 continue
-            if name_flags & 0x0009:  # group name or in-progress deregistration
+            if name_flags & 0x0019:  # conflict, group name or deregistration
                 continue
 
             label = raw_name[:15]
