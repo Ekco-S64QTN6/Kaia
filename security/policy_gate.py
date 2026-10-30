@@ -94,7 +94,7 @@ def verify_capability_token(
     """Verify signature, scope and bounded UTC validity of a capability token."""
     try:
         token_data = json.loads(token_str)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, RecursionError) as exc:
         return False, f"Token JSON parsing failed: {exc}"
 
     if not isinstance(token_data, dict):
