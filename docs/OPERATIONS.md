@@ -82,6 +82,106 @@ If any mask tier reports `OK`, add `CAP_SYS_ADMIN` back to **both** the
 `CapabilityBoundingSet` and `AmbientCapabilities` lines in
 `scripts/kaia-policy-gate.service` and reinstall.
 
+
+## Capability-token trust and rotation
+
+Capability tokens are bearer credentials used by the Policy Gate to prove that a request
+was signed by a process holding Kaia's shared signing secret. A token is not a substitute
+for the Policy Gate's other checks: the request still has to pass the action's Pydantic
+schema, the global/workspace permission intersection where applicable, and the executor's
+own scope and allowlists.
+
+### Who issues and verifies tokens
+
+The current Web Bridge command path in `core/web_bridge.py` imports
+`generate_capability_token` from `security/policy_gate.py`. Its operator-command
+dispatcher creates short-lived tokens for firewall block/unblock, service restart and
+emergency lockdown commands, then sends the token in the length-prefixed Unix-socket
+request to the Policy Gate. Those first-party commands currently request a 15-second
+lifetime. The helper's default lifetime is 3,600 seconds; callers that use the default
+must not assume the 15-second HUD lifetime applies.
+
+The token is a JSON string containing:
+
+| Field | Meaning in the current implementation |
+|:--|:--|
+| `capability` | The capability being requested (for example, `block_ip`) |
+| `target` | The exact target, or `*` where a wildcard scope is deliberately used |
+| `issued_at` | UTC timestamp written by the generator |
+| `expires` | UTC expiration timestamp |
+| `issued_by` | The literal label `operator`; it is not independently authenticated |
+| `signature` | Hex HMAC-SHA256 over the other token fields serialized as sorted-key JSON |
+
+The Policy Gate recomputes the HMAC with the same secret and compares it in constant time.
+It then checks the required capability, the exact target or wildcard target, and the
+expiration. Successful token verification does not bypass the request schema, policy
+lattice or executor validation.
+
+### Trust boundary and known limitations
+
+`KAIA_CAPABILITY_TOKEN_SECRET` is the authorization signing root. Any process or person
+that can read it can create signatures for token-gated capabilities and targets; the
+code does not provide a separate signing service or per-issuer key. The Gate's remaining
+policy and executor checks still apply, but exposure of this key is an authorization
+root compromise.
+
+The Web Bridge binds to loopback and checks the Host authority and, when supplied, the
+Origin. These are locality and browser-origin protections, not user authentication:
+the command route does not establish a user identity, and Origin is optional. Treat local
+processes that can reach the bridge as inside this command boundary. Do not expose the
+HUD port through a LAN bind, reverse proxy or tunnel without first adding and reviewing
+an explicit authentication boundary.
+
+Tokens are bearer values. The current verifier has no nonce/consumed-token registry, so
+a valid token can be replayed until it expires, subject to the other Gate checks. The
+generator writes and signs `issued_at`, but `verify_capability_token` currently does not
+parse or validate it, does not reject a future issue time, and does not enforce a maximum
+token lifetime. The `issued_by` field is also not verified. Do not treat these fields as
+enforced safeguards; temporal validation and replay controls remain follow-up work in
+[the roadmap](ROADMAP.md).
+
+### Secret custody
+
+For a system install, the Policy Gate systemd unit reads
+`EnvironmentFile=/etc/kaia/secret.env`. `scripts/install_services.sh` reads only the
+`KAIA_CAPABILITY_TOKEN_SECRET` assignment from the private checkout `.env`, requires
+exactly 64 hexadecimal characters (32 random bytes), rejects the historically leaked
+value, then writes `/etc/kaia/secret.env` as a root-owned mode-`0600` file under the
+mode-`0700` `/etc/kaia` directory. The deployed code tree does not contain the checkout
+`.env`. In development, `core/config.py` loads the checkout `.env`; the launcher
+`scripts/activate_kaia_env.sh` sources it before starting the dashboard.
+
+Keep `.env` out of Git (it is ignored), restrict it to the operator account (for example,
+`chmod 600 .env`), and never place the secret or complete token strings in prompts,
+tickets, screenshots, logs or source control. Do not copy the signing secret into the LLM
+planner: the planner proposes structured intents and is not an authorization issuer.
+
+### Rotating the signing secret
+
+There is no dedicated key-rotation command. For a system install, use the installer so
+the Gate's EnvironmentFile and the checkout configuration are updated from the same key:
+
+1. Stop the running dashboard/Web Bridge process and the Policy Gate:
+   `sudo systemctl stop kaia-policy-gate.service`.
+2. Generate a new key with `openssl rand -hex 32`. Replace the
+   `KAIA_CAPABILITY_TOKEN_SECRET` assignment in the private checkout `.env` with that
+   value, and set `.env` to mode `0600`.
+3. From the checkout, run `sudo scripts/install_services.sh`. It validates the new key,
+   redeploys the reviewed source and rewrites `/etc/kaia/secret.env`. The installer
+   deliberately leaves the Policy Gate stopped.
+4. Review the installed tree, then record the trusted baseline and start the Gate:
+   `sudo /opt/kaia/scripts/kaia-baseline.sh`, followed by
+   `sudo systemctl start kaia-policy-gate.service`.
+5. Restart the Web Bridge/dashboard process so it reloads the same new secret. The
+   checkout launcher sources `.env` at startup; an already-running Python process does
+   not hot-reload its imported configuration.
+
+A secret change makes tokens signed with the old key fail verification immediately;
+in-flight requests using an old token may be denied. If compromise is suspected, stop
+the Gate, preserve and review relevant audit/journal evidence, rotate the key, and
+investigate the issuer and host before trusting the restarted deployment. Rotation alone
+does not remove a persistent compromise from a process that can still read the key.
+
 ## State and the audit ledger
 
 INV-008 requires the ledger to live outside the agent's working tree. It now sits in

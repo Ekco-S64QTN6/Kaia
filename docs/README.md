@@ -7,7 +7,7 @@ Which document is authoritative for what.
 | [README](../README.md) | The overview: what Kaia is, what is built, how to start |
 | [master_plan.md](master_plan.md) | The architecture: axioms, invariants, component design, and the implementation status in §10.5 |
 | [ROADMAP.md](ROADMAP.md) | What is left to build or verify |
-| [OPERATIONS.md](OPERATIONS.md) | Running, deploying and recovering Kaia on a host |
+| [OPERATIONS.md](OPERATIONS.md) | Running, deploying and recovering Kaia on a host, including capability-token custody and rotation |
 | [DEPLOYMENT_CHECKLIST.md](DEPLOYMENT_CHECKLIST.md) | Privileged acceptance tests for a deployed host; its recorded host observations are dated |
 | [security_review_process.md](security_review_process.md) | What a security change needs before it merges |
 | [design/](design/) | Visual references for the operator HUD and the Kaia avatar |

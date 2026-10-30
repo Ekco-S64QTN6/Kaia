@@ -1,6 +1,6 @@
 # Kaia: Unified Architectural Specification & Implementation Blueprint (v7.6 — Living Specification)
 
-**Document Version:** 7.6 (Current Architecture, Implementation Status and Verification Boundaries; audit snapshot 2026-10-22)  
+**Document Version:** 7.6 (Current Architecture, Implementation Status and Verification Boundaries; audit snapshot 2026-10-30)  
 **Status:** Authoritative, living specification and roadmap — **declarative architecture plus dated implementation/verification status**  
 **Target Environment:** Arch Linux, Systemd, eBPF, Kitty Terminal  
 **Intended Reader:** Automated Coding Agents, Systems Engineers, Security Architects
@@ -150,14 +150,21 @@ To prevent memory injection exploits and maintain a resilient execution environm
 
 **Framing Paradigm:** Every packet starts with a 4‑byte big‑endian unsigned integer indicating the exact byte length of the following UTF‑8 encoded JSON string payload. No newlines or sentinel bytes are used. The receiver must first read exactly 4 bytes, interpret as the length, then read that many bytes and parse as JSON.
 
-### 3.2 IPC Data Contracts
+### 3.2 IPC Data Contracts and Capability Tokens
 
-The following Pydantic schemas must be enforced for all communications:
+The active IPC sender frames a UTF-8 JSON object with a 4-byte big-endian length prefix. The request envelope contains a `request_id` correlation value, an `action`, a `payload` object, and a `capability_token` field (a JSON string for token-gated actions; `null` is used where the action permits no token). The Policy Gate validates the envelope shape and prevents the nested payload from overriding the envelope's `action` or `capability_token` before it evaluates the flattened request. Action-specific Pydantic schemas and policy checks run inside the Gate.
 
-- **Request:** Must contain a UUID `request_id`, an `action` field restricted to one of `["diagnostics", "block_ip", "restart_service", "write_file", "run_script"]`, a `payload` dictionary with action‑specific parameters, and a `capability_token` string matching the pattern `^ck_[A-Za-z0-9_-]+$`.
-- **Response:** Must contain the same `request_id`, a boolean `approved`, an `executor_response` dictionary, an `audit_id` string, and an optional `error_message`.
+The response envelope contains the request ID, a boolean `approved`, an `executor_response` object, and an `audit_id`. The boolean is true only when the Policy Gate reports operation status `success`; an approved policy decision that did not complete successfully is not reported to the bridge as a successful operation.
 
-All validation must be performed by the Policy Gate before any action is taken.
+#### 3.2.1 Capability-token contract and trust boundary
+
+The current token generator in `security/policy_gate.py` creates a JSON string with `capability`, `target`, `issued_at`, `expires`, `issued_by`, and `signature`. The signature is HMAC-SHA256 using the shared `KAIA_CAPABILITY_TOKEN_SECRET`, over the sorted-key JSON serialization of all token fields except `signature`. The in-tree Web Bridge dispatcher in `core/web_bridge.py` currently requests 15-second tokens for block, unblock, restart and lockdown commands; the generator's default is 3,600 seconds.
+
+The Policy Gate verifies the signature, required capability, target (exact match or `*`), and expiration. Token verification is necessary but not sufficient: action schemas, permission intersection and executor-specific restrictions still apply. `issued_by` is currently a literal `operator` label, not authenticated issuer identity.
+
+**Known temporal and replay limitations (2026-10-30):** `issued_at` is included in the signature but is not validated by the verifier; future issue times are not rejected, and no maximum token lifetime is enforced. The current verifier also has no nonce/consumed-token registry, so a token can be replayed until expiration. These are open hardening items, not guarantees supplied by the current implementation; see [the roadmap](ROADMAP.md) and [the operational trust model](OPERATIONS.md#capability-token-trust-and-rotation).
+
+The signing key is shared by code that issues tokens and the Policy Gate that verifies them. Any process able to read it can mint token signatures; the Web Bridge's loopback binding and Host/Origin checks are not user authentication. Custody and rotation requirements are in [Operations](OPERATIONS.md#capability-token-trust-and-rotation).
 
 ### 3.3 Risk Tier Classification Matrix
 
@@ -688,6 +695,8 @@ This is the current repository status as of the audit date. It describes impleme
 - [x] GitHub Actions regression workflow runs shell syntax validation, Python compilation and the shared deterministic suite. See the [main-branch workflow history](https://github.com/Ekco-S64QTN6/Kaia/actions/workflows/security-regressions.yml?query=branch%3Amain) for the current run and exact per-run test count. Kernel/privileged behavior is outside the proof supplied by those tests.
 
 **Partial, host-dependent or still unimplemented:** tracked in [ROADMAP.md](ROADMAP.md), with the target-host verification first.
+
+The capability-token temporal-validation and replay gaps described in §3.2.1 remain open; their implementation is not implied by the presence of the signed `issued_at` field.
 
 
 ## 11. Advanced Monitoring Capabilities (Optional Future Enhancements)
