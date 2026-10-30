@@ -57,6 +57,16 @@ def _nbstat_rdata(entries: list[tuple[str, int, int]]) -> bytes:
     return bytes(body)
 
 
+def _nbstat_rr(rdata: bytes, *, owner: bytes | None = None) -> bytes:
+    if owner is None:
+        owner = _dns_encoded_name("*")
+    return (
+        owner
+        + struct.pack("!HHIH", 0x0021, 0x0001, 0, len(rdata))
+        + rdata
+    )
+
+
 def _nbstat_response(
     rdata: bytes,
     *,
@@ -316,6 +326,23 @@ def test_nbns_additional_section_does_not_create_asset_labels(monkeypatch):
     payload = (
         struct.pack("!HHHHHH", 0x6789, 0x8500, 0, 0, 0, 1)
         + _nb_rr("UNRELATED")
+    )
+
+    engine._parse_ipv4(
+        _ipv4_udp_frame(payload, source_port=137, dest_port=53000),
+        "02:00:00:00:00:44",
+    )
+    assert captured == []
+
+
+def test_malformed_nbstat_record_prevents_partial_asset_persistence(monkeypatch):
+    engine, captured = _capture_assets(monkeypatch)
+    valid_nb = _nb_rr("VALIDFIRST")
+    malformed_nbstat = _nbstat_rr(_nbstat_rdata([("TRUNCATED", 0x00, 0x0060)])[:-1])
+    payload = (
+        struct.pack("!HHHHHH", 0x789A, 0x8500, 0, 2, 0, 0)
+        + valid_nb
+        + malformed_nbstat
     )
 
     engine._parse_ipv4(
