@@ -651,8 +651,9 @@ baseline and firewall checks; do not assume the recorded state is unchanged.
    is observational. A permission-event design needs explicit timeout, deadlock,
    process-response and fail-open/fail-closed semantics plus kernel tests.
 4. **Complete telemetry coverage.** Validate available BCC probes on the target kernel;
-   extend and test NBNS/NBSTAT response parsing, broader file/process/network hooks and
-   required event-to-detection correlation.
+   the bounded NB/NBSTAT response-record parser and its packet regressions are now in place;
+   remaining work is alternate name encodings, target-network validation, broader
+   file/process/network hooks and required event-to-detection correlation.
 5. **Finish remaining Tier 5 work incrementally:** command-response streaming, broader
    supply-chain attestation, behavioral baselines, alert-confidence scoring, secrets
    exposure detection, backup restorability and independent service/data-freshness
