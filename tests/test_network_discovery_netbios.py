@@ -259,11 +259,12 @@ def test_nbstat_response_ignores_truncated_name_array_or_statistics(monkeypatch)
     assert captured == []
 
 
-def test_nbstat_response_rejects_group_only_and_deregistering_names(monkeypatch):
+def test_nbstat_response_rejects_group_deregistering_and_conflicted_names(monkeypatch):
     engine, captured = _capture_assets(monkeypatch)
     rdata = _nbstat_rdata([
         ("GROUPNAME", 0x00, 0x0021),
         ("DEREGISTER", 0x00, 0x0028),
+        ("CONFLICTED", 0x00, 0x0030),
     ])
     payload = _nbstat_response(rdata)
 
