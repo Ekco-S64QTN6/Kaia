@@ -43,7 +43,7 @@ shell.
 | **Firewall** | Block and unblock through the gate; unblock removes only Kaia's exact nftables handles; boot replay folds the ledger so a removal stays removed |
 | **Integrity** | A trusted, operator-recorded baseline; tamper detection with alert latching and a lockdown circuit breaker; system mode refuses to start without the baseline |
 | **Telemetry** | eBPF (execve, openat2, connect/retransmit, privilege transitions, unlinkat attempts) and fanotify file monitoring with same-descriptor YARA scanning |
-| **Discovery and intel** | Passive ARP, mDNS, LLMNR, SSDP and NBNS from the wire; InternetDB enrichment; pacman transaction monitoring |
+| **Discovery and intel** | Passive ARP, mDNS, LLMNR, SSDP and NBNS/NBSTAT response records from the wire; InternetDB enrichment; pacman transaction monitoring |
 | **Decoys** | Non-destructive filesystem honeypots that only ever remove what they created |
 | **Operator HUD** | A loopback web HUD — telemetry waterfall, discovery radar, token widget, the Kaia codec avatar and a command console — behind a strict self-hosted CSP and Host/Origin checks; and a curses dashboard |
 

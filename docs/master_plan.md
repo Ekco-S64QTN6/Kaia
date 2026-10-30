@@ -241,7 +241,7 @@ The discovery layer must open an unprivileged network frame interceptor bound to
 
 ### 5.2 Broadcast Protocol Extraction
 
-NetBIOS Name Service handling now includes a limited response parser for first-level encoded QNAMEs (source UDP port 137, response flag set). Queries are deliberately not treated as the querier's hostname. This does not yet cover every NBNS/NBSTAT answer form or establish full network visibility; see §10.5.
+NetBIOS Name Service handling parses response resource records from source UDP port 137 rather than attributing a query's requested name to its sender. NB (`0x0020`) answers decode first-level encoded owner names and scoped labels; NBSTAT (`0x0021`) answers select active, unique, non-deregistering node names from the bounded name array. DNS compression pointers are followed only within the packet, with backward-pointer, loop, expanded-name and iteration bounds. Malformed or truncated responses are ignored without persisting earlier partial records. Alternate NetBIOS encodings and visibility on a target network remain unverified; see §10.5.
 
 The following protocols must be parsed from captured packets:
 
@@ -250,7 +250,7 @@ The following protocols must be parsed from captured packets:
   - **Port 5353 (mDNS):** Parse the DNS payload to extract the queried hostname. Log asset with detection vector `mDNS`.
   - **Port 5355 (LLMNR):** Log asset with detection vector `LLMNR`.
   - **Port 1900 (SSDP):** Log asset with detection vector `SSDP`.
-- **NetBIOS Name Service (UDP/137):** Parse NetBIOS name queries and responses; log asset with detection vector `NetBIOS`.
+- **NetBIOS Name Service (UDP/137):** Parse bounded NB and NBSTAT response resource records, compressed/scoped owner names, and active unique node-status names; log the responding asset with detection vector `NetBIOS`. Queries are not treated as hostnames.
 
 For each discovered asset, record MAC address, assigned IP, resolved hostname (if any), hardware vendor (from OUI lookup), detection vector, and timestamp. Maintain a local cache to avoid duplicate logging. This data feeds into the threat intelligence pipeline for correlation.
 
@@ -581,7 +581,7 @@ rather than the work being outstanding:
 - [x] **eBPF unlinkat visibility:** the sys_enter_unlinkat perf buffer and waterfall lane were wired in October 2026. It records attempts at syscall entry, not confirmed successful deletions.
 - [x] **FIM/YARA hardening:** scanning now uses the original event descriptor's bounded byte snapshot; rule validation fails closed when isolated prerequisites are unavailable, and generated string literals are escaped.
 - [x] **Basic package monitoring:** a passive pacman.log monitor records completed transactions; AUR/repository/dependency attestation remains future work.
-- [ ] **Still outstanding:** expanded eBPF/FIM breadth, broader NBNS/NBSTAT coverage, broader offline threat-intelligence stores, true execution-blocking FIM, response streaming and the other Tier 5 extensions in §11.
+- [ ] **Still outstanding:** expanded eBPF/FIM breadth, alternate NBNS/NBSTAT encodings and target-network validation, broader offline threat-intelligence stores, true execution-blocking FIM, response streaming and the other Tier 5 extensions in §11.
 
 
 
@@ -651,8 +651,9 @@ baseline and firewall checks; do not assume the recorded state is unchanged.
    is observational. A permission-event design needs explicit timeout, deadlock,
    process-response and fail-open/fail-closed semantics plus kernel tests.
 4. **Complete telemetry coverage.** Validate available BCC probes on the target kernel;
-   extend and test NBNS/NBSTAT response parsing, broader file/process/network hooks and
-   required event-to-detection correlation.
+   the bounded NB/NBSTAT response-record parser and its packet regressions are now in place;
+   remaining work is alternate name encodings, target-network validation, broader
+   file/process/network hooks and required event-to-detection correlation.
 5. **Finish remaining Tier 5 work incrementally:** command-response streaming, broader
    supply-chain attestation, behavioral baselines, alert-confidence scoring, secrets
    exposure detection, backup restorability and independent service/data-freshness
@@ -711,7 +712,7 @@ This section is the backlog of capabilities not yet complete after the 2026-10-2
 - **Backup awareness:** validate configured backup existence, recency and restorability; do not infer restore readiness from file presence alone.
 - **Threat-intelligence expansion:** InternetDB validation, throttling and negative cache are implemented. Local GeoLite2, richer local CVE tables, passive DNS maps, historical snapshots and optional DuckDB analysis remain future work.
 - **Self-health monitoring:** provide independent service supervision and explicit freshness/availability signals for the Policy Gate, collectors, databases, FIM, eBPF and threat-intel cache.
-- **Telemetry expansion:** extend NBNS/NBSTAT parsing and broader kernel hook/correlation coverage. unlinkat telemetry currently records syscall-entry attempts, not completed deletions.
+- **Telemetry expansion:** extend NBNS/NBSTAT alternate-encoding support and target-network validation, alongside broader kernel hook/correlation coverage. unlinkat telemetry currently records syscall-entry attempts, not completed deletions.
 - **Execution-blocking FIM:** separately design and test permission-event enforcement; notification-mode fanotify remains observational.
 
 These are the remaining Tier 5 or beyond items. See §10.5 for priority order and current implementation evidence.
