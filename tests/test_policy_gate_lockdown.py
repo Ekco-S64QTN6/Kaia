@@ -340,3 +340,52 @@ def test_capability_token_verifier_rejects_non_object_json():
 
     assert valid is False
     assert "JSON object" in reason
+
+
+def test_capability_token_generator_default_remains_valid():
+    token = generate_capability_token("diagnostics", "lockdown_confirm")
+    token_data = json.loads(token)
+
+    assert set(token_data) == {
+        "capability", "target", "issued_at", "expires", "issued_by", "signature"
+    }
+    valid, reason = policy_gate_module.verify_capability_token(
+        token, "diagnostics", "lockdown_confirm"
+    )
+    assert valid is True
+    assert reason is None
+
+
+def test_capability_token_rejects_missing_issued_at():
+    now = datetime.now(UTC)
+    token_data = {
+        "capability": "diagnostics",
+        "target": "lockdown_confirm",
+        "expires": _token_timestamp(now + timedelta(seconds=15)),
+        "issued_by": "operator",
+    }
+    token_data["signature"] = policy_gate_module.sign_token(
+        token_data, policy_gate_module.config.CAPABILITY_TOKEN_SECRET
+    )
+
+    valid, reason = policy_gate_module.verify_capability_token(
+        json.dumps(token_data), "diagnostics", "lockdown_confirm"
+    )
+
+    assert valid is False
+    assert "issued_at" in reason.lower()
+
+
+def test_capability_token_rejects_expired_positive_lifetime():
+    issued_at = datetime.now(UTC) - timedelta(seconds=policy_gate_module.MAX_CAPABILITY_TOKEN_LIFETIME_SECONDS + 10)
+    expires_at = issued_at + timedelta(seconds=policy_gate_module.MAX_CAPABILITY_TOKEN_LIFETIME_SECONDS)
+    token = _signed_temporal_token(
+        _token_timestamp(issued_at), _token_timestamp(expires_at)
+    )
+
+    valid, reason = policy_gate_module.verify_capability_token(
+        token, "diagnostics", "lockdown_confirm"
+    )
+
+    assert valid is False
+    assert "expired" in reason.lower()
