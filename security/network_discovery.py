@@ -509,7 +509,7 @@ class PassiveDiscoveryEngine:
         if not candidates:
             return ""
         candidates.sort(key=lambda item: item[:2], reverse=True)
-        return candidates[0][3]
+        return candidates[0][2]
 
     def _parse_dns_name(self, payload: bytes, offset: int = 12) -> str:
         parts = []
