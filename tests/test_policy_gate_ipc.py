@@ -58,7 +58,7 @@ def test_ipc_reads_fragmented_header_and_payload_exactly():
 @pytest.mark.parametrize(
     "truncated_frame",
     [
-        pytest.param(b"\\x00\\x00", id="partial-header"),
+        pytest.param(bytes([0, 0]), id="partial-header"),
         pytest.param((8).to_bytes(4, "big") + b'{"a"', id="partial-payload"),
     ],
 )
