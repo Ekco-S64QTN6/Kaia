@@ -15,7 +15,7 @@ from pydantic import ValidationError
 import config
 from security.schemas import DiagnosticsRequest, MitigationRequest, UnblockRequest, ServiceControlRequest, StateModificationRequest, ScriptExecutionRequest, AuditRecord
 from security.host_executor import HostExecutor
-from security.db import log_security_event
+from security.db import consume_capability_token, log_security_event
 from security.telemetry_daemon import start_script_sentinel, stop_script_sentinel
 
 logger = logging.getLogger(__name__)
@@ -90,6 +90,8 @@ def verify_capability_token(
     token_str: str,
     required_capability: str,
     required_target: str,
+    *,
+    consume_token: bool = False,
 ) -> tuple:
     """Verify signature, scope and bounded UTC validity of a capability token."""
     try:
@@ -148,6 +150,15 @@ def verify_capability_token(
         )
     if now >= expires_at:
         return False, "Token has expired."
+
+    if consume_token:
+        try:
+            consumed, consume_error = consume_capability_token(signature, expires_at)
+        except Exception:
+            logger.exception("Capability-token replay protection raised unexpectedly")
+            return False, "Unable to enforce capability-token replay protection; request denied."
+        if not consumed:
+            return False, consume_error or "Token has already been used."
 
     return True, None
 
@@ -588,7 +599,7 @@ class PolicyGate:
                 self._log_audit(payload, "denied", reason="Missing capability token for lockdown.")
                 return {"status": "denied", "message": "Missing capability token for lockdown."}
             ok_tok, err_tok = verify_capability_token(
-                cap_token, "diagnostics", "lockdown_confirm"
+                cap_token, "diagnostics", "lockdown_confirm", consume_token=True
             )
             if not ok_tok:
                 self._log_audit(
@@ -638,7 +649,7 @@ class PolicyGate:
                 
                 # Exec diagnostics (Green Tier: token is optional)
                 if req.capability_token:
-                    ok_tok, err_tok = verify_capability_token(req.capability_token, "diagnostics", req.query_type)
+                    ok_tok, err_tok = verify_capability_token(req.capability_token, "diagnostics", req.query_type, consume_token=True)
                     if not ok_tok:
                         self._log_audit(req, "denied", reason=f"Invalid capability token: {err_tok}")
                         log_security_event("invalid_capability_token", "policy_gate", "kaiacord", hashlib.sha256(str(payload).encode()).hexdigest(), "blocked", session_id)
@@ -658,7 +669,7 @@ class PolicyGate:
                     rule_fields = {k: v for k, v in payload.items() if k not in ("action", "capability_token", "session_id")}
                     rule_req = IocRuleRequest(**rule_fields)
                     
-                    ok_tok, err_tok = verify_capability_token(cap_token, "write_file", f"rules/{rule_req.rule_name}.yar")
+                    ok_tok, err_tok = verify_capability_token(cap_token, "write_file", f"rules/{rule_req.rule_name}.yar", consume_token=True)
                     if not ok_tok:
                         self._log_audit(payload, "denied", reason=f"Invalid capability token: {err_tok}")
                         log_security_event("invalid_capability_token", "policy_gate", "kaiacord", hashlib.sha256(str(payload).encode()).hexdigest(), "blocked", session_id)
@@ -685,7 +696,7 @@ class PolicyGate:
             elif action == "block_ip":
                 req = MitigationRequest(**payload)
                 # Verify required Capability Token
-                ok_tok, err_tok = verify_capability_token(req.capability_token, "block_ip", req.target_ip)
+                ok_tok, err_tok = verify_capability_token(req.capability_token, "block_ip", req.target_ip, consume_token=True)
                 if not ok_tok:
                     self._log_audit(req, "denied", reason=f"Token verification failed: {err_tok}")
                     log_security_event("unauthorized_mitigation_attempt", "policy_gate", "kaiacord", hashlib.sha256(str(payload).encode()).hexdigest(), "blocked", session_id)
@@ -700,7 +711,7 @@ class PolicyGate:
             elif action == "unblock_ip":
                 req = UnblockRequest(**payload)
                 ok_tok, err_tok = verify_capability_token(
-                    req.capability_token, "unblock_ip", req.target_ip
+                    req.capability_token, "unblock_ip", req.target_ip, consume_token=True
                 )
                 if not ok_tok:
                     self._log_audit(
@@ -740,7 +751,7 @@ class PolicyGate:
             elif action == "restart_service":
                 req = ServiceControlRequest(**payload)
                 # Verify required Capability Token
-                ok_tok, err_tok = verify_capability_token(req.capability_token, "restart_service", req.service_name)
+                ok_tok, err_tok = verify_capability_token(req.capability_token, "restart_service", req.service_name, consume_token=True)
                 if not ok_tok:
                     self._log_audit(req, "denied", reason=f"Token verification failed: {err_tok}")
                     log_security_event("unauthorized_restart_attempt", "policy_gate", "kaiacord", hashlib.sha256(str(payload).encode()).hexdigest(), "blocked", session_id)
@@ -820,7 +831,7 @@ class PolicyGate:
             elif action == "write_file":
                 req = StateModificationRequest(**payload)
                 # Verify required Capability Token
-                ok_tok, err_tok = verify_capability_token(req.capability_token, "write_file", req.filepath)
+                ok_tok, err_tok = verify_capability_token(req.capability_token, "write_file", req.filepath, consume_token=True)
                 if not ok_tok:
                     self._log_audit(req, "denied", reason=f"Token verification failed: {err_tok}")
                     log_security_event("unauthorized_file_write_attempt", "policy_gate", "kaiacord", hashlib.sha256(str(payload).encode()).hexdigest(), "blocked", session_id)
@@ -836,7 +847,7 @@ class PolicyGate:
             elif action == "run_script":
                 req = ScriptExecutionRequest(**payload)
                 # Verify required Capability Token
-                ok_tok, err_tok = verify_capability_token(req.capability_token, "run_script", req.script_name)
+                ok_tok, err_tok = verify_capability_token(req.capability_token, "run_script", req.script_name, consume_token=True)
                 if not ok_tok:
                     self._log_audit(req, "denied", reason=f"Token verification failed: {err_tok}")
                     log_security_event("unauthorized_script_run_attempt", "policy_gate", "kaiacord", hashlib.sha256(str(payload).encode()).hexdigest(), "blocked", session_id)
