@@ -13,6 +13,25 @@ def _frame(payload: bytes) -> bytes:
     return len(payload).to_bytes(4, "big") + payload
 
 
+def _recv_frame(sock: socket.socket) -> dict:
+    """Read one complete length-prefixed response from a test socket."""
+    header = bytearray()
+    while len(header) < 4:
+        packet = sock.recv(4 - len(header))
+        if not packet:
+            raise AssertionError("IPC peer closed before response header")
+        header.extend(packet)
+
+    length = int.from_bytes(header, "big")
+    payload = bytearray()
+    while len(payload) < length:
+        packet = sock.recv(length - len(payload))
+        if not packet:
+            raise AssertionError("IPC peer closed before complete response")
+        payload.extend(packet)
+    return json.loads(payload.decode("utf-8"))
+
+
 def test_ipc_rejects_oversized_frame_before_reading_payload():
     gate = PolicyGate()
     left, right = socket.socketpair()
@@ -20,6 +39,25 @@ def test_ipc_rejects_oversized_frame_before_reading_payload():
         left.sendall((gate.MAX_IPC_FRAME_BYTES + 1).to_bytes(4, "big"))
         with pytest.raises(ValueError, match="Invalid IPC frame length"):
             gate._read_frame(right)
+    finally:
+        left.close()
+        right.close()
+
+
+
+
+def test_ipc_client_closes_connection_after_invalid_frame():
+    gate = PolicyGate()
+    left, right = socket.socketpair()
+    try:
+        left.sendall((gate.MAX_IPC_FRAME_BYTES + 1).to_bytes(4, "big"))
+        gate._handle_client(right)
+
+        response = _recv_frame(left)
+        assert response["approved"] is False
+        assert response["executor_response"]["status"] == "error"
+        assert "Invalid IPC frame length" in response["executor_response"]["message"]
+        assert right.fileno() == -1, "client socket must close after a protocol error"
     finally:
         left.close()
         right.close()
@@ -60,14 +98,7 @@ def test_ipc_approval_flag_is_false_when_executor_errors():
             "payload": {},
         }).encode()))
         gate._handle_client(right)
-        header = bytearray()
-        while len(header) < 4:
-            header.extend(left.recv(4 - len(header)))
-        length = int.from_bytes(header, "big")
-        body = bytearray()
-        while len(body) < length:
-            body.extend(left.recv(length - len(body)))
-        response = json.loads(body.decode())
+        response = _recv_frame(left)
         assert response["approved"] is False
         assert response["executor_response"]["status"] == "error"
     finally:
