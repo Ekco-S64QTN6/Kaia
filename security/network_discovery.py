@@ -347,20 +347,162 @@ class PassiveDiscoveryEngine:
         *,
         source_port: int = 137,
     ):
-        # Do not attribute the requested QNAME in a client query to the client.
-        # NetBIOS Name Service responses originate from UDP/137 and set QR=1.
-        # This deliberately handles encoded QNAME responses, not every NBNS/NBSTAT
-        # record encoding; unsupported/compressed names are ignored rather than guessed.
-        if source_port != 137 or len(payload) < 13 or not (payload[2] & 0x80):
+        """Parse bounded NBNS answer records without trusting packet names blindly."""
+        if source_port != 137 or len(payload) < 12:
             return
-        if payload[12] != 0x20:  # RFC 1002 first-level encoded 16-byte NetBIOS name
+
+        try:
+            _transaction_id, flags, question_count, answer_count, authority_count, additional_count = (
+                struct.unpack_from("!HHHHHH", payload, 0)
+            )
+        except struct.error:
             return
-        if len(payload) < 13 + 32:
+
+        # Only successful query responses are useful for passive name discovery.
+        if not (flags & 0x8000) or (flags & 0x7800) or (flags & 0x000F):
             return
-        encoded_name = payload[13:13 + 32]
-        name = self._decode_netbios_name(encoded_name)
-        if name:
+        record_count = answer_count + authority_count + additional_count
+        if question_count > 64 or record_count > 128:
+            return
+
+        offset = 12
+        for _ in range(question_count):
+            _labels, next_offset = self._read_dns_name(payload, offset)
+            if next_offset is None or next_offset + 4 > len(payload):
+                return
+            offset = next_offset + 4  # QTYPE and QCLASS
+
+        discovered_names = []
+        for _ in range(record_count):
+            labels, record_offset = self._read_dns_name(payload, offset)
+            if labels is None or record_offset is None or record_offset + 10 > len(payload):
+                return
+
+            try:
+                record_type, record_class, _ttl, data_length = struct.unpack_from(
+                    "!HHIH", payload, record_offset
+                )
+            except struct.error:
+                return
+
+            data_offset = record_offset + 10
+            data_end = data_offset + data_length
+            if data_end > len(payload):
+                return
+
+            if record_class == 0x0001:  # IN
+                if record_type == 0x0020 and labels:
+                    # NB answer: RR_NAME is the first-level encoded owner name.
+                    name = self._decode_netbios_name(labels[0])
+                    if name:
+                        discovered_names.append(name)
+                elif record_type == 0x0021:  # NBSTAT node-status answer
+                    name = self._decode_nbstat_hostname(payload[data_offset:data_end])
+                    if name:
+                        discovered_names.append(name)
+
+            offset = data_end
+
+        # Do not persist partial results from a truncated or malformed packet.
+        for name in dict.fromkeys(discovered_names):
             self._log_asset(ip, mac, name, "NetBIOS")
+
+    @staticmethod
+    def _read_dns_name(payload: bytes, offset: int):
+        """Read an NBNS compressed name, returning labels and the next wire offset."""
+        if offset < 0 or offset >= len(payload):
+            return None, None
+
+        labels = []
+        position = offset
+        next_offset = None
+        visited_pointers = set()
+        expanded_length = 0
+
+        # A valid expanded DNS name is at most 255 octets. The loop bound also
+        # protects malformed pointer chains from consuming unbounded CPU.
+        for _ in range(128):
+            if position >= len(payload):
+                return None, None
+
+            length = payload[position]
+            if length == 0:
+                if next_offset is None:
+                    next_offset = position + 1
+                return labels, next_offset
+
+            label_type = length & 0xC0
+            if label_type == 0xC0:
+                if position + 1 >= len(payload):
+                    return None, None
+                pointer = ((length & 0x3F) << 8) | payload[position + 1]
+                # RFC 1035 compression pointers refer to an earlier name. This
+                # also rules out header/forward-pointer tricks and self loops.
+                if pointer >= position or pointer >= len(payload):
+                    return None, None
+                if pointer in visited_pointers:
+                    return None, None
+                visited_pointers.add(pointer)
+                if next_offset is None:
+                    next_offset = position + 2
+                position = pointer
+                continue
+
+            if label_type != 0 or length > 63:
+                return None, None
+            label_end = position + 1 + length
+            if label_end > len(payload):
+                return None, None
+
+            expanded_length += length + 1
+            if expanded_length > 255:
+                return None, None
+            labels.append(payload[position + 1:label_end])
+            position = label_end
+
+        return None, None
+
+    @staticmethod
+    def _decode_nbstat_hostname(rdata: bytes) -> str:
+        """Extract a stable active unique hostname from an RFC 1002 NBSTAT RDATA."""
+        if not rdata:
+            return ""
+
+        name_count = rdata[0]
+        entries_end = 1 + name_count * 18
+        required_length = entries_end + 46  # fixed NODE STATUS statistics structure
+        if required_length > len(rdata):
+            return ""
+
+        candidates = []
+        for index in range(name_count):
+            entry_offset = 1 + index * 18
+            raw_name = rdata[entry_offset:entry_offset + 16]
+            name_flags = struct.unpack_from("!H", rdata, entry_offset + 16)[0]
+
+            # Reserved bits must be zero; only active, unique, non-deregistering
+            # names are eligible as host labels. Group names are not hostnames.
+            if name_flags & 0xFF80 or not (name_flags & 0x0020):
+                continue
+            if name_flags & 0x0009:  # group name or in-progress deregistration
+                continue
+
+            label = raw_name[:15]
+            if any(byte < 0x20 or byte > 0x7E for byte in label):
+                continue
+            name = label.decode("ascii").rstrip(" ").strip()
+            if not name:
+                continue
+
+            permanent = bool(name_flags & 0x0040)
+            non_conflicting = not bool(name_flags & 0x0010)
+            workstation_suffix = raw_name[15] == 0x00
+            candidates.append((permanent, non_conflicting, workstation_suffix, name))
+
+        if not candidates:
+            return ""
+        candidates.sort(key=lambda item: item[:3], reverse=True)
+        return candidates[0][3]
 
     def _parse_dns_name(self, payload: bytes, offset: int = 12) -> str:
         parts = []
