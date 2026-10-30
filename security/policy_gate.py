@@ -54,8 +54,8 @@ def generate_capability_token(
 ) -> str:
     """Generate a signed token whose lifetime cannot exceed the verifier's limit.
 
-    A zero-second duration remains available for negative/expired-token tests; the
-    verifier always rejects a token whose expiry is not later than its issue time.
+    A zero-second duration remains accepted for compatibility, but the verifier always
+    rejects a token whose expiry is not later than its issue time.
     """
     if isinstance(duration_seconds, bool) or not isinstance(duration_seconds, int):
         raise ValueError("Capability token duration must be an integer number of seconds.")
