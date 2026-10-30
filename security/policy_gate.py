@@ -41,7 +41,13 @@ def _parse_token_timestamp(value: object, field_name: str) -> datetime:
     if normalized.endswith("Z"):
         normalized = normalized[:-1] + "+00:00"
 
-    parsed = datetime.fromisoformat(normalized)
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"Token {field_name} is not a valid ISO-8601 timestamp."
+        ) from exc
+
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise ValueError(f"Token {field_name} must include a timezone.")
     return parsed.astimezone(UTC)
