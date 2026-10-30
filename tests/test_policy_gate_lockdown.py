@@ -389,3 +389,80 @@ def test_capability_token_rejects_expired_positive_lifetime():
 
     assert valid is False
     assert "expired" in reason.lower()
+
+def _signed_token_with_overrides(**overrides):
+    now = datetime.now(UTC)
+    token_data = {
+        "capability": "diagnostics",
+        "target": "lockdown_confirm",
+        "issued_at": _token_timestamp(now),
+        "expires": _token_timestamp(now + timedelta(seconds=15)),
+        "issued_by": "operator",
+    }
+    token_data.update(overrides)
+    token_data["signature"] = policy_gate_module.sign_token(
+        token_data, policy_gate_module.config.CAPABILITY_TOKEN_SECRET
+    )
+    return json.dumps(token_data)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("capability", None),
+        ("capability", 7),
+        ("capability", []),
+        ("capability", {}),
+        ("target", None),
+        ("target", 7),
+        ("target", []),
+        ("target", {}),
+    ],
+)
+def test_capability_token_rejects_non_string_scope_fields(field, value):
+    token = _signed_token_with_overrides(**{field: value})
+
+    valid, reason = policy_gate_module.verify_capability_token(
+        token, "diagnostics", "lockdown_confirm"
+    )
+
+    assert valid is False
+    assert "must be strings" in reason
+
+
+@pytest.mark.parametrize(
+    "signature",
+    [None, 7, [], {}, "A" * 64, "0" * 64, "not-a-signature"],
+)
+def test_capability_token_rejects_malformed_or_invalid_signatures(signature):
+    token = _signed_token_with_overrides(signature=signature)
+
+    valid, reason = policy_gate_module.verify_capability_token(
+        token, "diagnostics", "lockdown_confirm"
+    )
+
+    assert valid is False
+    assert "signature mismatch" in reason.lower()
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("issued_at", None),
+        ("issued_at", 1_798_000_000),
+        ("issued_at", []),
+        ("expires", None),
+        ("expires", 1_798_000_015),
+        ("expires", []),
+    ],
+)
+def test_capability_token_rejects_non_string_timestamp_fields(field, value):
+    token = _signed_token_with_overrides(**{field: value})
+
+    valid, reason = policy_gate_module.verify_capability_token(
+        token, "diagnostics", "lockdown_confirm"
+    )
+
+    assert valid is False
+    assert field in reason
+
