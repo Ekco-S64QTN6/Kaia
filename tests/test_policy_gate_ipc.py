@@ -32,6 +32,29 @@ def _recv_frame(sock: socket.socket) -> dict:
     return json.loads(payload.decode("utf-8"))
 
 
+class _FragmentedSocket:
+    """Socket-shaped test double that returns a frame in deliberate fragments."""
+
+    def __init__(self, fragments):
+        self.fragments = list(fragments)
+        self.timeouts = []
+
+    def settimeout(self, timeout):
+        self.timeouts.append(timeout)
+
+    def recv(self, size):
+        if not self.fragments:
+            return b""
+        fragment = self.fragments[0]
+        packet = fragment[:size]
+        remainder = fragment[size:]
+        if remainder:
+            self.fragments[0] = remainder
+        else:
+            self.fragments.pop(0)
+        return packet
+
+
 def test_ipc_reads_fragmented_header_and_payload_exactly():
     gate = PolicyGate()
     expected = {
@@ -79,29 +102,6 @@ def test_ipc_closes_truncated_frame_without_dispatching(truncated_frame):
     finally:
         left.close()
         right.close()
-
-
-class _FragmentedSocket:
-    """Socket-shaped test double that returns a frame in deliberate fragments."""
-
-    def __init__(self, fragments):
-        self.fragments = list(fragments)
-        self.timeouts = []
-
-    def settimeout(self, timeout):
-        self.timeouts.append(timeout)
-
-    def recv(self, size):
-        if not self.fragments:
-            return b""
-        fragment = self.fragments[0]
-        packet = fragment[:size]
-        remainder = fragment[size:]
-        if remainder:
-            self.fragments[0] = remainder
-        else:
-            self.fragments.pop(0)
-        return packet
 
 
 def test_ipc_rejects_oversized_frame_before_reading_payload():
