@@ -470,3 +470,13 @@ def test_capability_token_rejects_non_string_timestamp_fields(field, value):
     assert valid is False
     assert field in reason
 
+def test_capability_token_verifier_rejects_excessive_json_nesting():
+    token = "[" * 10_000 + "0" + "]" * 10_000
+
+    valid, reason = policy_gate_module.verify_capability_token(
+        token, "diagnostics", "lockdown_confirm"
+    )
+
+    assert valid is False
+    assert "JSON parsing failed" in reason
+
