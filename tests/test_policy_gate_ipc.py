@@ -32,6 +32,78 @@ def _recv_frame(sock: socket.socket) -> dict:
     return json.loads(payload.decode("utf-8"))
 
 
+def test_ipc_reads_fragmented_header_and_payload_exactly():
+    gate = PolicyGate()
+    expected = {
+        "request_id": "fragmented",
+        "action": "diagnostics",
+        "payload": {"query_type": "ss"},
+    }
+    wire = _frame(json.dumps(expected).encode("utf-8"))
+    # Split every part of the 4-byte header and several parts of the JSON body.
+    sock = _FragmentedSocket([
+        wire[:1],
+        wire[1:3],
+        wire[3:4],
+        wire[4:5],
+        wire[5:11],
+        wire[11:],
+    ])
+
+    assert gate._read_frame(sock) == expected
+    assert len(sock.timeouts) >= 6
+    assert sock.fragments == []
+
+
+@pytest.mark.parametrize(
+    "truncated_frame",
+    [
+        pytest.param(b"\\x00\\x00", id="partial-header"),
+        pytest.param((8).to_bytes(4, "big") + b'{"a"', id="partial-payload"),
+    ],
+)
+def test_ipc_closes_truncated_frame_without_dispatching(truncated_frame):
+    gate = PolicyGate()
+    left, right = socket.socketpair()
+    gate.evaluate_and_execute = lambda payload: pytest.fail(
+        "truncated IPC frames must never reach policy evaluation"
+    )
+    try:
+        left.sendall(truncated_frame)
+        left.shutdown(socket.SHUT_WR)
+
+        gate._handle_client(right)
+
+        assert right.fileno() == -1, "client socket must close after a truncated frame"
+        assert left.recv(1) == b"", "truncated frames must not receive a success or error response"
+    finally:
+        left.close()
+        right.close()
+
+
+class _FragmentedSocket:
+    """Socket-shaped test double that returns a frame in deliberate fragments."""
+
+    def __init__(self, fragments):
+        self.fragments = list(fragments)
+        self.timeouts = []
+
+    def settimeout(self, timeout):
+        self.timeouts.append(timeout)
+
+    def recv(self, size):
+        if not self.fragments:
+            return b""
+        fragment = self.fragments[0]
+        packet = fragment[:size]
+        remainder = fragment[size:]
+        if remainder:
+            self.fragments[0] = remainder
+        else:
+            self.fragments.pop(0)
+        return packet
+
+
 def test_ipc_rejects_oversized_frame_before_reading_payload():
     gate = PolicyGate()
     left, right = socket.socketpair()
