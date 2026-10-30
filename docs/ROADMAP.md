@@ -27,7 +27,7 @@ installed host can prove what is running.
 | **Network discovery** | NBNS responses with first-level encoded names | NBSTAT records, compressed and alternate name forms, target-network validation |
 | **Supply chain** | Completed pacman transactions are recorded | AUR build tracking, repository and metadata changes, dependency-graph drift, package signature and installed-content attestation |
 | **Network decoys** | Filesystem decoys are non-destructive and self-cleaning | Decoy listeners and their namespace, verified on the host (the installer does not provision them) |
-| **Capability-token replay protection** | HMAC signature, capability, target, timezone-aware `issued_at`, expiry and a 3,600-second maximum lifetime are enforced | Decide and implement durable one-time-use/replay protection with concurrency and restart semantics; current bearer tokens remain replayable until expiry |
+| **Capability-token replay protection** | HMAC signature, scope, bounded UTC validity and durable single-use consumption are enforced; SQLite fingerprints survive concurrency and service restarts, and the database fails closed | Include the persistent registry in deployed-host backup, permissions and capacity verification |
 
 ## Operator HUD
 
