@@ -24,7 +24,7 @@ installed host can prove what is running.
 | **Execution-blocking FIM** | Notification-mode fanotify observes, does not block | A separate permission-event (`FAN_CLASS_CONTENT`) design, with target-kernel tests |
 | **End-to-end FIM / YARA response** | Rule generation, isolated validation and same-FD scanning exist | The full event → verdict → response path, exercised on a controlled host |
 | **Kernel telemetry** | `sys_enter_unlinkat` records deletion *attempts*; probes depend on BCC and the kernel | More hook coverage, correlation with successful operations, target-kernel verification |
-| **Network discovery** | NBNS responses with first-level encoded names | NBSTAT records, compressed and alternate name forms, target-network validation |
+| **Network discovery** | NB and NBSTAT answer records, first-level encoded names, scoped names and bounded DNS compression parsing | Alternate NBNS name encodings and target-network validation |
 | **Supply chain** | Completed pacman transactions are recorded | AUR build tracking, repository and metadata changes, dependency-graph drift, package signature and installed-content attestation |
 | **Network decoys** | Filesystem decoys are non-destructive and self-cleaning | Decoy listeners and their namespace, verified on the host (the installer does not provision them) |
 | **Capability-token replay protection** | HMAC signature, scope, bounded UTC validity and durable single-use consumption are enforced; SQLite fingerprints survive concurrency and service restarts, and the database fails closed | Include the persistent registry in deployed-host backup, permissions and capacity verification |
