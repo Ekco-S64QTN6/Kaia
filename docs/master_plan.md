@@ -1,6 +1,6 @@
 # Kaia: Unified Architectural Specification & Implementation Blueprint (v7.6 — Living Specification)
 
-**Document Version:** 7.6 (Current Architecture, Implementation Status and Verification Boundaries; audit snapshot 2026-10-22)  
+**Document Version:** 7.6 (Current Architecture, Implementation Status and Verification Boundaries; audit snapshot 2026-10-30)  
 **Status:** Authoritative, living specification and roadmap — **declarative architecture plus dated implementation/verification status**  
 **Target Environment:** Arch Linux, Systemd, eBPF, Kitty Terminal  
 **Intended Reader:** Automated Coding Agents, Systems Engineers, Security Architects
