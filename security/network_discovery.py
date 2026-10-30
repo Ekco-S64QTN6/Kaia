@@ -373,7 +373,7 @@ class PassiveDiscoveryEngine:
             offset = next_offset + 4  # QTYPE and QCLASS
 
         discovered_names = []
-        for _ in range(record_count):
+        for record_index in range(record_count):
             labels, record_offset = self._read_dns_name(payload, offset)
             if labels is None or record_offset is None or record_offset + 10 > len(payload):
                 return
@@ -393,7 +393,7 @@ class PassiveDiscoveryEngine:
             # Only answer-section names describe the responder's answer to
             # this query. Authority/additional records are parsed for framing,
             # but are not used to create passive asset labels.
-            if _ < answer_count and record_class == 0x0001:  # IN answer
+            if record_index < answer_count and record_class == 0x0001:  # IN answer
                 if record_type == 0x0020 and labels:
                     # NB RDATA is NB_FLAGS (2 bytes) plus one or more IPv4 addresses.
                     if data_length < 6 or (data_length - 2) % 4:
