@@ -162,7 +162,7 @@ The current token generator in `security/policy_gate.py` creates a JSON string w
 
 The Policy Gate verifies the signature, required capability, target (exact match or `*`), and expiration. Token verification is necessary but not sufficient: action schemas, permission intersection and executor-specific restrictions still apply. `issued_by` is currently a literal `operator` label, not authenticated issuer identity.
 
-**Known temporal and replay limitations (2026-10-30):** `issued_at` is included in the signature but is not validated by the verifier; future issue times are not rejected, and no maximum token lifetime is enforced. The current verifier also has no nonce/consumed-token registry, so a token can be replayed until expiration. These are open hardening items, not guarantees supplied by the current implementation; see [the roadmap](ROADMAP.md) and [the operational trust model](OPERATIONS.md#capability-token-trust-and-rotation).
+**Current temporal checks (2026-10-30):** the verifier requires timezone-aware ISO-8601 `issued_at` and `expires` values, rejects future issue times, non-positive lifetimes and expired tokens, and enforces a maximum signed lifetime of 3,600 seconds. The generator rejects negative, non-integer and over-maximum durations; zero remains available only to create a token that the verifier rejects. **Remaining replay limitation:** there is no nonce/consumed-token registry, so a bearer token can be replayed until expiration. Durable one-time-use/replay protection remains open; see [the roadmap](ROADMAP.md) and [the operational trust model](OPERATIONS.md#capability-token-trust-and-rotation).
 
 The signing key is shared by code that issues tokens and the Policy Gate that verifies them. Any process able to read it can mint token signatures; the Web Bridge's loopback binding and Host/Origin checks are not user authentication. Custody and rotation requirements are in [Operations](OPERATIONS.md#capability-token-trust-and-rotation).
 
@@ -681,6 +681,7 @@ This is the current repository status as of the audit date. It describes impleme
 
 **Implemented in the repository:**
 
+- [x] Capability-token temporal validation requires signed timezone-aware issue/expiry timestamps, rejects future-issued and non-positive tokens, and enforces a 3,600-second maximum lifetime. Tokens remain replayable until expiry; durable one-time-use enforcement is still open.
 - [x] Policy Gate, typed request schemas, expiring target-scoped capability tokens signed with HMAC-SHA256, permission-lattice checks, Unix-socket IPC (synthetic regressions cover request-frame size caps, partial-read deadlines, invalid envelopes, bounded responses, and connection closure after a frame error), audit writes and constrained host execution. The installer requires a 32-byte random key encoded as 64 hexadecimal characters before writing systemd's EnvironmentFile, and rejects unexpected deployment symlinks before root ownership normalization (only the verified in-tree dashboard link is allowed). Healthy-service restart guards are enforced independently of caller-controlled session IDs. Workspace state modification now walks directory descriptors without following symlinks, writes a same-directory temporary file and atomically replaces the target; hardlinks cannot redirect the write outside the workspace. When running as root, the workspace and traversed parent directories must also be root-owned and not group/world-writable.
 - [x] Firewall block and unblock intents. Unblock inspects Kaia's own nftables chain and deletes exact matching handles; it never flushes the chain or deletes rules solely because an IP matches.
 - [x] Filesystem honeypot lifecycle uses exclusive no-follow creation, registers only verified decoy files, never alters pre-existing unrelated files, and removes only same-inode unchanged files created by the current coordinator. Network namespace/listeners remain host-dependent.
@@ -696,7 +697,7 @@ This is the current repository status as of the audit date. It describes impleme
 
 **Partial, host-dependent or still unimplemented:** tracked in [ROADMAP.md](ROADMAP.md), with the target-host verification first.
 
-The capability-token temporal-validation and replay gaps described in §3.2.1 remain open; their implementation is not implied by the presence of the signed `issued_at` field.
+Durable capability-token replay protection remains open as described in §3.2.1; the current tokens are still bearer credentials until expiry.
 
 
 ## 11. Advanced Monitoring Capabilities (Optional Future Enhancements)

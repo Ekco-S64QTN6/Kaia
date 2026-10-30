@@ -20,15 +20,59 @@ from security.telemetry_daemon import start_script_sentinel, stop_script_sentine
 
 logger = logging.getLogger(__name__)
 
-# HMAC helper functions
+# Capability tokens are intentionally short-lived. One hour preserves the
+# generator's previous default while placing an enforceable ceiling on every issuer.
+MAX_CAPABILITY_TOKEN_LIFETIME_SECONDS = 60 * 60
+
+
 def sign_token(token_dict: dict, secret: str) -> str:
     """Computes HMAC-SHA256 signature for a token dictionary."""
-    clean_dict = {k: v for k, v in token_dict.items() if k != 'signature'}
+    clean_dict = {k: v for k, v in token_dict.items() if k != "signature"}
     serialized = json.dumps(clean_dict, sort_keys=True)
     return hmac.new(secret.encode(), serialized.encode(), hashlib.sha256).hexdigest()
 
-def generate_capability_token(capability: str, target: str, duration_seconds: int = 3600) -> str:
-    """Generates and signs a capability token."""
+
+def _parse_token_timestamp(value: object, field_name: str) -> datetime:
+    """Parse a timezone-aware ISO-8601 token timestamp and normalize it to UTC."""
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"Token {field_name} must be a non-empty ISO-8601 timestamp.")
+
+    normalized = value.strip()
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1] + "+00:00"
+
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"Token {field_name} is not a valid ISO-8601 timestamp."
+        ) from exc
+
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError(f"Token {field_name} must include a timezone.")
+    return parsed.astimezone(UTC)
+
+
+def generate_capability_token(
+    capability: str,
+    target: str,
+    duration_seconds: int = MAX_CAPABILITY_TOKEN_LIFETIME_SECONDS,
+) -> str:
+    """Generate a signed token whose lifetime cannot exceed the verifier's limit.
+
+    A zero-second duration remains accepted for compatibility, but the verifier always
+    rejects a token whose expiry is not later than its issue time.
+    """
+    if isinstance(duration_seconds, bool) or not isinstance(duration_seconds, int):
+        raise ValueError("Capability token duration must be an integer number of seconds.")
+    if duration_seconds < 0:
+        raise ValueError("Capability token duration must not be negative.")
+    if duration_seconds > MAX_CAPABILITY_TOKEN_LIFETIME_SECONDS:
+        raise ValueError(
+            "Capability token duration exceeds the maximum "
+            f"{MAX_CAPABILITY_TOKEN_LIFETIME_SECONDS}-second lifetime."
+        )
+
     issued_at = datetime.now(UTC)
     expires = issued_at + timedelta(seconds=duration_seconds)
     token_data = {
@@ -41,39 +85,69 @@ def generate_capability_token(capability: str, target: str, duration_seconds: in
     token_data["signature"] = sign_token(token_data, config.CAPABILITY_TOKEN_SECRET)
     return json.dumps(token_data)
 
-def verify_capability_token(token_str: str, required_capability: str, required_target: str) -> tuple:
-    """
-    Verifies that a token string is valid, signed, matches capability & target, and is not expired.
-    Returns (is_valid, error_reason)
-    """
+
+def verify_capability_token(
+    token_str: str,
+    required_capability: str,
+    required_target: str,
+) -> tuple:
+    """Verify signature, scope and bounded UTC validity of a capability token."""
     try:
         token_data = json.loads(token_str)
-    except Exception as e:
-        return False, f"Token JSON parsing failed: {e}"
+    except (TypeError, ValueError, RecursionError) as exc:
+        return False, f"Token JSON parsing failed: {exc}"
 
-    # Verify signature
-    expected_sig = sign_token(token_data, config.CAPABILITY_TOKEN_SECRET)
-    if not token_data.get("signature") or not hmac.compare_digest(token_data["signature"], expected_sig):
+    if not isinstance(token_data, dict):
+        return False, "Token must be a JSON object."
+
+    signature = token_data.get("signature")
+    if (
+        not isinstance(signature, str)
+        or re.fullmatch(r"[0-9a-f]{64}", signature) is None
+    ):
         return False, "Token signature mismatch (untrusted token)."
 
-    # Verify capability and target scope
-    if token_data.get("capability") != required_capability:
-        return False, f"Token capability mismatch. Expected '{required_capability}', got '{token_data.get('capability')}'"
-    
-    # Target can be wildcard or exact match
-    if token_data.get("target") != "*" and token_data.get("target") != required_target:
-        return False, f"Token target mismatch. Expected '{required_target}', got '{token_data.get('target')}'"
+    # Verify signature before trusting any token field.
+    expected_sig = sign_token(token_data, config.CAPABILITY_TOKEN_SECRET)
+    if not hmac.compare_digest(signature, expected_sig):
+        return False, "Token signature mismatch (untrusted token)."
 
-    # Verify expiration
+    capability = token_data.get("capability")
+    target = token_data.get("target")
+    if not isinstance(capability, str) or not isinstance(target, str):
+        return False, "Token capability and target must be strings."
+
+    if capability != required_capability:
+        return False, (
+            f"Token capability mismatch. Expected '{required_capability}', got '{capability}'"
+        )
+
+    # Target can be wildcard or exact match.
+    if target != "*" and target != required_target:
+        return False, (
+            f"Token target mismatch. Expected '{required_target}', got '{target}'"
+        )
+
     try:
-        expires_str = token_data["expires"]
-        if expires_str.endswith("Z"):
-            expires_str = expires_str[:-1] + "+00:00"
-        expires_dt = datetime.fromisoformat(expires_str)
-        if datetime.now(UTC) > expires_dt:
-            return False, "Token has expired."
-    except Exception as e:
-        return False, f"Failed to parse token expiration: {e}"
+        issued_at = _parse_token_timestamp(token_data.get("issued_at"), "issued_at")
+        expires_at = _parse_token_timestamp(token_data.get("expires"), "expires")
+    except (TypeError, ValueError, OverflowError) as exc:
+        return False, f"Failed to parse token timestamps: {exc}"
+
+    now = datetime.now(UTC)
+    if issued_at > now:
+        return False, "Token issue time is in the future."
+
+    lifetime_seconds = (expires_at - issued_at).total_seconds()
+    if lifetime_seconds <= 0:
+        return False, "Token lifetime must be greater than zero."
+    if lifetime_seconds > MAX_CAPABILITY_TOKEN_LIFETIME_SECONDS:
+        return False, (
+            "Token lifetime exceeds the maximum "
+            f"{MAX_CAPABILITY_TOKEN_LIFETIME_SECONDS}-second limit."
+        )
+    if now >= expires_at:
+        return False, "Token has expired."
 
     return True, None
 
