@@ -404,6 +404,8 @@ class PassiveDiscoveryEngine:
                         discovered_names.append(name)
                 elif record_type == 0x0021:  # NBSTAT node-status answer
                     name = self._decode_nbstat_hostname(payload[data_offset:data_end])
+                    if name is None:
+                        return
                     if name:
                         discovered_names.append(name)
 
@@ -469,16 +471,16 @@ class PassiveDiscoveryEngine:
         return None, None
 
     @staticmethod
-    def _decode_nbstat_hostname(rdata: bytes) -> str:
-        """Extract a stable active unique hostname from an RFC 1002 NBSTAT RDATA."""
+    def _decode_nbstat_hostname(rdata: bytes) -> str | None:
+        """Extract a hostname, empty for no eligible names, or None for malformed RDATA."""
         if not rdata:
-            return ""
+            return None
 
         name_count = rdata[0]
         entries_end = 1 + name_count * 18
         required_length = entries_end + 46  # fixed NODE STATUS statistics structure
         if required_length > len(rdata):
-            return ""
+            return None
 
         candidates = []
         for index in range(name_count):
