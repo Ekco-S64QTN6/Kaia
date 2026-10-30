@@ -503,13 +503,12 @@ class PassiveDiscoveryEngine:
                 continue
 
             permanent = bool(name_flags & 0x0040)
-            non_conflicting = not bool(name_flags & 0x0010)
             workstation_suffix = raw_name[15] == 0x00
-            candidates.append((permanent, non_conflicting, workstation_suffix, name))
+            candidates.append((permanent, workstation_suffix, name))
 
         if not candidates:
             return ""
-        candidates.sort(key=lambda item: item[:3], reverse=True)
+        candidates.sort(key=lambda item: item[:2], reverse=True)
         return candidates[0][3]
 
     def _parse_dns_name(self, payload: bytes, offset: int = 12) -> str:
