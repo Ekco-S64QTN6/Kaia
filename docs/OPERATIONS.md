@@ -143,7 +143,10 @@ an informational literal and is not authenticated.
 The Policy Gate now consumes every token-bearing command exactly once. It records a
 SHA-256 fingerprint of the verified HMAC signature, the signed expiry and the consumption
 time in the `consumed_capability_tokens` table in the configured security SQLite database.
-The raw token and raw signature are never stored in this registry. A SQLite
+The raw token and raw signature are never stored in this registry. Because restoring an
+older database backup can roll back the registry, rotate the capability-token signing key
+before restarting token-authorized services after such a restore; otherwise credentials
+consumed after the backup could become reusable. A SQLite
 `BEGIN IMMEDIATE` transaction plus the fingerprint primary key serializes concurrent
 consumers across worker threads and processes; the record survives Policy Gate restarts.
 Database errors fail closed and deny the action.
