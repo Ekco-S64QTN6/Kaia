@@ -196,3 +196,35 @@ def test_policy_gate_executes_a_token_authorized_mitigation_only_once(
     assert second["status"] == "denied"
     assert "already been used" in second["message"].lower()
     assert len(executions) == 1
+
+
+def test_replay_stays_denied_after_wall_clock_rolls_back(tmp_path, monkeypatch):
+    _use_temp_database(tmp_path, monkeypatch)
+    monkeypatch.setattr(config, "CAPABILITY_TOKEN_SECRET", "replay-test-secret")
+    token = generate_capability_token(
+        "diagnostics", "ss", duration_seconds=30
+    )
+    token_data = json.loads(token)
+    issued_at = policy_gate_module._parse_token_timestamp(
+        token_data["issued_at"], "issued_at"
+    )
+
+    first = policy_gate_module.verify_capability_token(
+        token, "diagnostics", "ss", consume_token=True
+    )
+    assert first == (True, None)
+
+    class RolledBackDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return issued_at + timedelta(seconds=1)
+
+    # Simulate a clock rollback while the token is still within its signed
+    # validity window. Its durable fingerprint must still deny the replay.
+    monkeypatch.setattr(policy_gate_module, "datetime", RolledBackDateTime)
+    replay = policy_gate_module.verify_capability_token(
+        token, "diagnostics", "ss", consume_token=True
+    )
+
+    assert replay[0] is False
+    assert replay[1] == "Token has already been used."
