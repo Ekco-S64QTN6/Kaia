@@ -82,8 +82,8 @@ def consume_capability_token(signature: str, expires_at: datetime) -> tuple[bool
                 consumed_at_epoch REAL NOT NULL
             )
         """)
-        # Keep fingerprints permanently for the lifetime of the signing key.
-        # Wall-clock rollback must not make an already-used token usable again.
+        # Never prune fingerprints based on token expiry or wall-clock time.
+        # Clock rollback must not make an already-used token usable again.
         cursor.execute(
             """
             INSERT OR IGNORE INTO consumed_capability_tokens
