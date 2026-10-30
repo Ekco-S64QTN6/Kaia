@@ -82,6 +82,8 @@ Country annotations on blocked IPs need a free MaxMind key: `MAXMIND_LICENSE_KEY
 baseline, the systemd units — is in [Operations](docs/OPERATIONS.md), with the acceptance tests in
 the [deployment checklist](docs/DEPLOYMENT_CHECKLIST.md).
 
+The capability-token signing secret is an authorization root; [Operations](docs/OPERATIONS.md#capability-token-trust-and-rotation) documents its custody, limitations and rotation.
+
 > **Stop the Policy Gate before editing Kaia's own source.** Tamper detection re-hashes its core
 > files every 30 seconds; an edit while it runs is indistinguishable from an intruder and triggers a
 > lockdown that drops all traffic. `sudo systemctl stop kaia-policy-gate`, edit, then start it to
@@ -104,7 +106,7 @@ BCC/eBPF, fanotify, live nftables, systemd or privileged recovery.
 |:--|:--|
 | [Architecture specification](docs/master_plan.md) | Invariants, component design, and the implementation status in §10.5 |
 | [Roadmap](docs/ROADMAP.md) | What is left, host verification first |
-| [Operations](docs/OPERATIONS.md) | Deployment model, privileges, the ledger, block persistence, lockdown recovery, the baseline |
+| [Operations](docs/OPERATIONS.md) | Deployment, privileges, capability-token trust and rotation, the ledger, block persistence, lockdown recovery and the baseline |
 | [Deployment checklist](docs/DEPLOYMENT_CHECKLIST.md) | Step-by-step acceptance tests for a deployed host |
 | [Security review process](docs/security_review_process.md) | What a security change needs before it merges |
 | [Documentation map](docs/README.md) | Which document is authoritative for what |

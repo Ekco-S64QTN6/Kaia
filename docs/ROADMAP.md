@@ -1,6 +1,6 @@
 # Roadmap
 
-What is still to build or verify. Updated 24 October 2026. What is implemented, and at what
+What is still to build or verify. Updated 30 October 2026. What is implemented, and at what
 evidence level, is in [master_plan.md](master_plan.md) §10.5; how to verify a deployed host is in
 [DEPLOYMENT_CHECKLIST.md](DEPLOYMENT_CHECKLIST.md).
 
@@ -27,6 +27,7 @@ installed host can prove what is running.
 | **Network discovery** | NBNS responses with first-level encoded names | NBSTAT records, compressed and alternate name forms, target-network validation |
 | **Supply chain** | Completed pacman transactions are recorded | AUR build tracking, repository and metadata changes, dependency-graph drift, package signature and installed-content attestation |
 | **Network decoys** | Filesystem decoys are non-destructive and self-cleaning | Decoy listeners and their namespace, verified on the host (the installer does not provision them) |
+| **Capability-token temporal validation** | HMAC signature, capability, target and expiry are checked | Validate the signed `issued_at`, reject future-issued tokens, define/enforce a maximum lifetime, and decide whether replay protection is required without silently changing the token JSON contract |
 
 ## Operator HUD
 
