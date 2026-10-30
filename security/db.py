@@ -1,6 +1,6 @@
 import hashlib
 import sqlite3
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 import uuid
 import logging
 import config
@@ -31,10 +31,6 @@ def initialize_db():
             consumed_at_epoch REAL NOT NULL
         )
     """)
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_consumed_capability_tokens_expiry
-        ON consumed_capability_tokens (expires_at_epoch)
-    """)
     conn.commit()
     conn.close()
     logger.info("Security events database initialized.")
@@ -45,8 +41,9 @@ def consume_capability_token(signature: str, expires_at: datetime) -> tuple[bool
 
     Only a one-way fingerprint of the HMAC signature is persisted. BEGIN IMMEDIATE
     serializes competing Policy Gate workers and the unique primary key makes a
-    duplicate consume fail, including after a service restart. Expired rows are
-    pruned during consumption; a database error denies the protected operation.
+    duplicate consume fail, including after a service restart. Fingerprints are not
+    expired by wall-clock time: clock rollback must not reopen a used credential.
+    A database error denies the protected operation.
     """
     if (
         not isinstance(signature, str)
@@ -85,14 +82,8 @@ def consume_capability_token(signature: str, expires_at: datetime) -> tuple[bool
                 consumed_at_epoch REAL NOT NULL
             )
         """)
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_consumed_capability_tokens_expiry
-            ON consumed_capability_tokens (expires_at_epoch)
-        """)
-        cursor.execute(
-            "DELETE FROM consumed_capability_tokens WHERE expires_at_epoch <= ?",
-            (now_epoch,),
-        )
+        # Keep fingerprints permanently for the lifetime of the signing key.
+        # Wall-clock rollback must not make an already-used token usable again.
         cursor.execute(
             """
             INSERT OR IGNORE INTO consumed_capability_tokens
