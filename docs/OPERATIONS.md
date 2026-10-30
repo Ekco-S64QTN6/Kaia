@@ -140,10 +140,21 @@ and over-one-hour durations; a zero-second token can still be generated for nega
 tests, but verification rejects its non-positive lifetime. The `issued_by` field remains
 an informational literal and is not authenticated.
 
-There is still no nonce/consumed-token registry. A valid token can therefore be replayed
-until it expires, subject to the other Gate checks. Durable replay protection remains a
-separate follow-up in [the roadmap](ROADMAP.md); it needs an explicit persistence,
-concurrency and restart policy rather than an in-memory-only cache.
+The Policy Gate now consumes every token-bearing command exactly once. It records a
+SHA-256 fingerprint of the verified HMAC signature, the signed expiry and the consumption
+time in the `consumed_capability_tokens` table in the configured security SQLite database.
+The raw token and raw signature are never stored in this registry. A SQLite
+`BEGIN IMMEDIATE` transaction plus the fingerprint primary key serializes concurrent
+consumers across worker threads and processes; the record survives Policy Gate restarts.
+Database errors fail closed and deny the action.
+
+Consumed fingerprints are intentionally retained even after token expiry. Removing them
+based only on wall-clock time could make a used token usable again after a clock rollback.
+The table therefore grows with successful token-bearing commands for the lifetime of the
+signing key; operators should include it in the existing security-database backup and
+capacity monitoring. This is one-time use of a signed bearer credential, not user
+authentication: `issued_by` remains informational and an authorized signer can still mint
+a new token.
 
 ### Secret custody
 
