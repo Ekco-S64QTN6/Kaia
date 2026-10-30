@@ -132,13 +132,18 @@ processes that can reach the bridge as inside this command boundary. Do not expo
 HUD port through a LAN bind, reverse proxy or tunnel without first adding and reviewing
 an explicit authentication boundary.
 
-Tokens are bearer values. The current verifier has no nonce/consumed-token registry, so
-a valid token can be replayed until it expires, subject to the other Gate checks. The
-generator writes and signs `issued_at`, but `verify_capability_token` currently does not
-parse or validate it, does not reject a future issue time, and does not enforce a maximum
-token lifetime. The `issued_by` field is also not verified. Do not treat these fields as
-enforced safeguards; temporal validation and replay controls remain follow-up work in
-[the roadmap](ROADMAP.md).
+Tokens are bearer values. The verifier now requires both timestamps to be
+timezone-aware ISO-8601 values, rejects an `issued_at` later than the verifier clock,
+requires `expires` to be later than `issued_at`, rejects expired tokens, and enforces a
+maximum signed lifetime of 3,600 seconds. The generator rejects negative, non-integer,
+and over-one-hour durations; a zero-second token can still be generated for negative
+tests, but verification rejects its non-positive lifetime. The `issued_by` field remains
+an informational literal and is not authenticated.
+
+There is still no nonce/consumed-token registry. A valid token can therefore be replayed
+until it expires, subject to the other Gate checks. Durable replay protection remains a
+separate follow-up in [the roadmap](ROADMAP.md); it needs an explicit persistence,
+concurrency and restart policy rather than an in-memory-only cache.
 
 ### Secret custody
 
