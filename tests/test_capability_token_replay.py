@@ -75,7 +75,7 @@ def test_capability_token_consumption_is_atomic_across_threads(
     )
 
 
-def test_capability_token_consumption_prunes_expired_rows(tmp_path, monkeypatch):
+def test_expired_consumption_fingerprints_are_retained(tmp_path, monkeypatch):
     db_path = _use_temp_database(tmp_path, monkeypatch)
     security_db.initialize_db()
     old_signature = "d" * 64
@@ -100,7 +100,7 @@ def test_capability_token_consumption_prunes_expired_rows(tmp_path, monkeypatch)
         fingerprints = conn.execute(
             "SELECT token_fingerprint FROM consumed_capability_tokens"
         ).fetchall()
-    assert old_fingerprint not in {row[0] for row in fingerprints}
+    assert old_fingerprint in {row[0] for row in fingerprints}
 
 
 def test_capability_token_database_failure_denies_consumption(monkeypatch):
