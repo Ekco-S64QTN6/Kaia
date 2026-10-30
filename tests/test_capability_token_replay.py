@@ -228,3 +228,66 @@ def test_replay_stays_denied_after_wall_clock_rolls_back(tmp_path, monkeypatch):
 
     assert replay[0] is False
     assert replay[1] == "Token has already been used."
+
+
+def test_initialize_db_creates_consumed_token_registry(tmp_path, monkeypatch):
+    db_path = _use_temp_database(tmp_path, monkeypatch)
+
+    security_db.initialize_db()
+
+    with sqlite3.connect(db_path) as conn:
+        columns = {
+            row[1]
+            for row in conn.execute(
+                "PRAGMA table_info(consumed_capability_tokens)"
+            )
+        }
+    assert columns == {
+        "token_fingerprint",
+        "expires_at_epoch",
+        "consumed_at_epoch",
+    }
+
+
+def test_policy_gate_fails_closed_when_replay_registry_raises(
+    tmp_path, monkeypatch
+):
+    _use_temp_database(tmp_path, monkeypatch)
+    monkeypatch.setattr(config, "CAPABILITY_TOKEN_SECRET", "replay-test-secret")
+    gate = PolicyGate()
+    monkeypatch.setattr(gate, "_log_audit", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        policy_gate_module, "log_security_event", lambda *args, **kwargs: None
+    )
+    executed = []
+
+    def unexpected_registry_failure(*args, **kwargs):
+        raise RuntimeError("synthetic registry failure")
+
+    def execute_mitigation(*args):
+        executed.append(args)
+        return True, "blocked", ""
+
+    monkeypatch.setattr(
+        policy_gate_module, "consume_capability_token",
+        unexpected_registry_failure,
+    )
+    monkeypatch.setattr(
+        policy_gate_module.HostExecutor, "execute_mitigation", execute_mitigation
+    )
+    payload = {
+        "action": "block_ip",
+        "target_ip": "203.0.113.43",
+        "protocol": "all",
+        "justification": "fail-closed replay registry regression",
+        "capability_token": generate_capability_token(
+            "block_ip", "203.0.113.43", duration_seconds=30
+        ),
+        "session_id": "replay-registry-failure",
+    }
+
+    result = gate.evaluate_and_execute(payload)
+
+    assert result["status"] == "denied"
+    assert "replay protection" in result["message"].lower()
+    assert executed == []
