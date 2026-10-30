@@ -77,6 +77,8 @@ def test_restart_healthy_service_denied_even_with_test_named_session(gate, monke
     )
 
     class Cursor:
+        rowcount = 1
+
         def execute(self, *args, **kwargs):
             return None
 
@@ -86,6 +88,12 @@ def test_restart_healthy_service_denied_even_with_test_named_session(gate, monke
     class Connection:
         def cursor(self):
             return Cursor()
+
+        def commit(self):
+            return None
+
+        def rollback(self):
+            return None
 
         def close(self):
             return None
