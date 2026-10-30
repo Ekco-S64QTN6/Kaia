@@ -294,3 +294,32 @@ def test_nbns_parser_does_not_persist_partial_records_from_truncated_response(mo
         "02:00:00:00:00:44",
     )
     assert captured == []
+
+
+def test_nb_answer_rejects_malformed_ipv4_address_list(monkeypatch):
+    engine, captured = _capture_assets(monkeypatch)
+    owner = _dns_encoded_name("BADADDR")
+    rdata = b"\x00\x00\x01\x02"  # 2-byte NB_FLAGS + invalid 2-byte address
+    rr = owner + struct.pack("!HHIH", 0x0020, 0x0001, 0, len(rdata)) + rdata
+    payload = struct.pack("!HHHHHH", 0x5678, 0x8500, 0, 1, 0, 0) + rr
+
+    engine._parse_ipv4(
+        _ipv4_udp_frame(payload, source_port=137, dest_port=53000),
+        "02:00:00:00:00:44",
+    )
+    assert captured == []
+
+
+def test_nbns_additional_section_does_not_create_asset_labels(monkeypatch):
+    engine, captured = _capture_assets(monkeypatch)
+    # A syntactically valid NB RR in ADDITIONAL is not the answer to this query.
+    payload = (
+        struct.pack("!HHHHHH", 0x6789, 0x8500, 0, 0, 0, 1)
+        + _nb_rr("UNRELATED")
+    )
+
+    engine._parse_ipv4(
+        _ipv4_udp_frame(payload, source_port=137, dest_port=53000),
+        "02:00:00:00:00:44",
+    )
+    assert captured == []
