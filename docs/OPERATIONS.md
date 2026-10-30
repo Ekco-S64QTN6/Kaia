@@ -153,11 +153,13 @@ Database errors fail closed and deny the action.
 
 Consumed fingerprints are intentionally retained even after token expiry. Removing them
 based only on wall-clock time could make a used token usable again after a clock rollback.
-The table therefore grows with successful token-bearing commands for the lifetime of the
-signing key; operators should include it in the existing security-database backup and
-capacity monitoring. This is one-time use of a signed bearer credential, not user
-authentication: `issued_by` remains informational and an authorized signer can still mint
-a new token.
+The table grows with successful token-bearing commands and is not automatically
+purged; operators should include it in the existing security-database backup and capacity
+monitoring. After rotating the signing key and confirming that token issuers and the
+Policy Gate both use the new key, an operator may archive or clear fingerprints created
+under the old key as a separate maintenance action. This is one-time use of a signed bearer
+credential, not user authentication: `issued_by` remains informational and an authorized
+signer can still mint a new token.
 
 ### Secret custody
 
