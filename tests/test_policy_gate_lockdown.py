@@ -399,10 +399,14 @@ def _signed_token_with_overrides(**overrides):
         "expires": _token_timestamp(now + timedelta(seconds=15)),
         "issued_by": "operator",
     }
+    has_signature_override = "signature" in overrides
+    signature_override = overrides.pop("signature", None)
     token_data.update(overrides)
     token_data["signature"] = policy_gate_module.sign_token(
         token_data, policy_gate_module.config.CAPABILITY_TOKEN_SECRET
     )
+    if has_signature_override:
+        token_data["signature"] = signature_override
     return json.dumps(token_data)
 
 
