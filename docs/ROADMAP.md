@@ -1,6 +1,6 @@
 # Roadmap
 
-What is still to build or verify. Updated 30 October 2026. What is implemented, and at what
+What is still to build or verify. Updated 31 October 2026. What is implemented, and at what
 evidence level, is in [master_plan.md](master_plan.md) §10.5; how to verify a deployed host is in
 [DEPLOYMENT_CHECKLIST.md](DEPLOYMENT_CHECKLIST.md).
 
