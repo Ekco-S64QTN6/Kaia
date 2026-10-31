@@ -676,7 +676,7 @@ All negative test cases must assert that the operation is denied, logged in the 
 
 ---
 
-### 10.5 Implementation and Verification Status (audit snapshot: 2026-10-30)
+### 10.5 Implementation and Verification Status (audit snapshot: 2026-10-31)
 
 This is the current repository status as of the audit date. It describes implementation and automated tests on main, not the state of a specific installed host.
 
