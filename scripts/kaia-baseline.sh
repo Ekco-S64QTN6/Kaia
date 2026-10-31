@@ -232,8 +232,12 @@ if [ -f "$BASELINE" ]; then
     changed=$(diff <(grep -v '^#' "$BASELINE" | sort) <(grep -v '^#' "$tmp" | sort) | grep -c '^[<>]' || true)
     if [ "$changed" -gt 0 ]; then
         echo -e "  ${YELLOW}${changed} line(s) differ from the previous baseline:${NC}"
+        # diff exits 1 whenever anything changed, and head may close the pipe
+        # early. Under `set -euo pipefail` either one aborted the script here,
+        # after printing the diff and before writing the baseline -- so a
+        # baseline could never be updated after a change (since e790749).
         diff <(grep -v '^#' "$BASELINE" | sort) <(grep -v '^#' "$tmp" | sort) \
-            | grep '^>' | awk '{print "    changed: "$3}' | head -20
+            | grep '^>' | awk '{print "    changed: "$3}' | head -20 || true
     else
         echo "  No changes since the previous baseline."
     fi

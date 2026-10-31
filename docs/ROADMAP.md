@@ -30,6 +30,7 @@ installed host can prove what is running.
 | **Capability-token replay protection** | HMAC signature, scope, bounded UTC validity and durable single-use consumption are enforced; SQLite fingerprints survive concurrency and service restarts, and the database fails closed | Include the persistent registry in deployed-host backup, permissions and capacity verification |
 | **Policy Gate IPC framing** | Length-prefixed JSON, request/response size caps, a single read deadline and protocol-error connection closure are covered by synthetic regressions | Keep fragmented-read and truncated-frame regressions with protocol changes |
 | **Host Executor executable boundary** | Only exact registered `SYSTEM_BINARIES` paths may launch; malformed, non-string and NUL-containing argv are rejected before `Popen` | Add or change registered host executables only with security review and negative launch tests |
+| **Trusted integrity baseline** | Runtime loading uses a no-follow descriptor, rejects non-regular and multiply-linked files, and checks root ownership/private permissions in system mode | Keep runtime loader checks aligned with the baseline writer and deployed state-directory policy |
 
 ## Operator HUD
 

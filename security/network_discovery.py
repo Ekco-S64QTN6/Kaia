@@ -492,11 +492,18 @@ class PassiveDiscoveryEngine:
             raw_name = rdata[entry_offset:entry_offset + 16]
             name_flags = struct.unpack_from("!H", rdata, entry_offset + 16)[0]
 
+            # RFC 1002 4.2.18 NAME_FLAGS, numbered from the most significant bit:
+            #   G 0x8000 | ONT 0x6000 | DRG 0x1000 | CNF 0x0800 | ACT 0x0400 |
+            #   PRM 0x0200 | reserved 0x01FF
+            # (Samba reads the high byte: GROUP 0x80, ACTIVE 0x04, PERM 0x02.)
+            # A real Windows workstation answers 0x0400. These masks were once
+            # bit-reversed (ACT 0x0020, reserved 0xFF80), which rejected every
+            # real name -- keep the tests on wire values, not on these constants.
             # Reserved bits must be zero; only active, unique, non-conflicted,
             # non-deregistering names are eligible as host labels.
-            if name_flags & 0xFF80 or not (name_flags & 0x0020):
+            if name_flags & 0x01FF or not (name_flags & 0x0400):
                 continue
-            if name_flags & 0x0019:  # conflict, group name or deregistration
+            if name_flags & 0x9800:  # group name, deregistration or conflict
                 continue
 
             label = raw_name[:15]
@@ -506,7 +513,7 @@ class PassiveDiscoveryEngine:
             if not name:
                 continue
 
-            permanent = bool(name_flags & 0x0040)
+            permanent = bool(name_flags & 0x0200)
             workstation_suffix = raw_name[15] == 0x00
             candidates.append((permanent, workstation_suffix, name))
 

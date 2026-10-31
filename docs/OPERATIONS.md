@@ -251,8 +251,11 @@ sudo ~/kaia-panic-unlock.sh
 ```
 
 It stops the Policy Gate first (otherwise the 30s tamper loop just re-locks you out
-on the next tick), deletes **only** Kaia's own `inet filter` lockdown table, reloads
-ufw, restarts NetworkManager, and verifies connectivity.
+on the next tick), and only if Kaia's lockdown ruleset is present (`inet kaia_lockdown`,
+or a legacy `inet filter` with an output-drop policy) flushes it and restores
+`nftables.service`, then ufw, then the pre-lockdown snapshot as a last resort, and
+re-applies recorded blocks. It then restarts NetworkManager and verifies connectivity.
+With no lockdown present it leaves the firewall alone.
 
 A reboot also clears a lockdown — nftables rules are runtime-only and ufw re-applies
 at boot — but that loses your session and tells you nothing about why it fired.
@@ -295,7 +298,11 @@ the previous baseline. The baseline is root-only, while the state directory rema
 
 The baseline writer fails closed when watchlist enumeration fails or a protected
 path is missing, symlinked or non-regular (the intentionally absent deployed `.env`
-is the only exception). System mode refuses to start without a valid trusted baseline.
+is the only exception). The runtime loader independently opens the baseline with
+`O_NOFOLLOW` and `O_CLOEXEC` through one descriptor, rejects non-regular or multiply-linked
+files, and in system mode requires UID 0 with no group/world permission bits. This closes
+the reader-side symlink and metadata gap even if the baseline path is replaced after it
+was written. System mode refuses to start without a valid trusted baseline.
 Only unprivileged development mode may bootstrap from the current disk state, where
 changes made while the daemon was stopped cannot be detected. Record a baseline only after reviewing
 the deployed source and deployment state; never treat bootstrap hashing as equivalent

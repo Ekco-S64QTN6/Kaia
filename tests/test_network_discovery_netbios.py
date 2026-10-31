@@ -257,9 +257,9 @@ def test_netbios_answer_supports_trailing_scope_labels(monkeypatch):
 def test_nbstat_response_extracts_active_unique_workstation_name(monkeypatch):
     engine, captured = _capture_assets(monkeypatch)
     rdata = _nbstat_rdata([
-        ("GROUPNAME", 0x00, 0x0021),  # group flag: never a host label
+        ("GROUPNAME", 0x00, 0x8400),  # group flag: never a host label
         ("OLDSERVER", 0x20, 0x0000),  # inactive
-        ("SERVER01", 0x00, 0x0060),   # permanent, active, unique workstation
+        ("SERVER01", 0x00, 0x0600),   # permanent, active, unique workstation
     ])
     payload = _nbstat_response(rdata)
 
@@ -273,9 +273,28 @@ def test_nbstat_response_extracts_active_unique_workstation_name(monkeypatch):
     ]
 
 
+def test_nbstat_response_accepts_windows_wire_flags(monkeypatch):
+    # What a Windows workstation actually sends (Wireshark: "Name flags: 0x0400,
+    # Name is active, B-node, Unique"; the workgroup entry is 0x8400). The masks
+    # were once bit-reversed and rejected this as "reserved bits set".
+    engine, captured = _capture_assets(monkeypatch)
+    rdata = _nbstat_rdata([
+        ("WORKGROUP", 0x00, 0x8400),
+        ("DESKTOP-7Q2", 0x20, 0x0400),
+        ("DESKTOP-7Q2", 0x00, 0x0400),
+    ])
+
+    engine._parse_ipv4(
+        _ipv4_udp_frame(_nbstat_response(rdata), source_port=137, dest_port=53000),
+        "02:00:00:00:00:45",
+    )
+
+    assert [c[2] for c in captured] == ["DESKTOP-7Q2"]
+
+
 def test_nbstat_response_supports_compressed_owner_name(monkeypatch):
     engine, captured = _capture_assets(monkeypatch)
-    rdata = _nbstat_rdata([("COMPRESSED", 0x00, 0x0060)])
+    rdata = _nbstat_rdata([("COMPRESSED", 0x00, 0x0600)])
     payload = _nbstat_response(rdata, compressed_owner=True)
 
     engine._parse_ipv4(
@@ -290,7 +309,7 @@ def test_nbstat_response_supports_compressed_owner_name(monkeypatch):
 
 def test_nbstat_response_ignores_truncated_name_array_or_statistics(monkeypatch):
     engine, captured = _capture_assets(monkeypatch)
-    valid = _nbstat_rdata([("TRUNCATED", 0x00, 0x0060)])
+    valid = _nbstat_rdata([("TRUNCATED", 0x00, 0x0600)])
     payload = _nbstat_response(valid[:-1])
 
     engine._parse_ipv4(
@@ -303,9 +322,9 @@ def test_nbstat_response_ignores_truncated_name_array_or_statistics(monkeypatch)
 def test_nbstat_response_rejects_group_deregistering_and_conflicted_names(monkeypatch):
     engine, captured = _capture_assets(monkeypatch)
     rdata = _nbstat_rdata([
-        ("GROUPNAME", 0x00, 0x0021),
-        ("DEREGISTER", 0x00, 0x0028),
-        ("CONFLICTED", 0x00, 0x0030),
+        ("GROUPNAME", 0x00, 0x8400),
+        ("DEREGISTER", 0x00, 0x1400),
+        ("CONFLICTED", 0x00, 0x0C00),
     ])
     payload = _nbstat_response(rdata)
 
@@ -380,7 +399,7 @@ def test_nbns_additional_section_does_not_create_asset_labels(monkeypatch):
 def test_malformed_nbstat_record_prevents_partial_asset_persistence(monkeypatch):
     engine, captured = _capture_assets(monkeypatch)
     valid_nb = _nb_rr("VALIDFIRST")
-    malformed_nbstat = _nbstat_rr(_nbstat_rdata([("TRUNCATED", 0x00, 0x0060)])[:-1])
+    malformed_nbstat = _nbstat_rr(_nbstat_rdata([("TRUNCATED", 0x00, 0x0600)])[:-1])
     payload = (
         struct.pack("!HHHHHH", 0x789A, 0x8500, 0, 2, 0, 0)
         + valid_nb

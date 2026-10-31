@@ -57,6 +57,14 @@ def test_installed_units_use_configured_state_directory():
     assert '"s|__STATE_DIR__|${STATE_DIR}|g"' in installer
 
 
+def test_units_importing_config_load_the_signing_secret():
+    # core/config.py exits at import without KAIA_CAPABILITY_TOKEN_SECRET.
+    repo_root = Path(__file__).resolve().parents[1]
+    for name in ("kaia-policy-gate.service", "kaia-restore-blocks.service"):
+        unit = (repo_root / "scripts" / name).read_text()
+        assert "EnvironmentFile=/etc/kaia/secret.env" in unit, name
+
+
 def test_installer_persists_state_path_for_manual_unlock():
     repo_root = Path(__file__).resolve().parents[1]
     installer = (repo_root / "scripts/install_services.sh").read_text()

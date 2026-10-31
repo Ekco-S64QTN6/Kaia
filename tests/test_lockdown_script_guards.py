@@ -28,7 +28,7 @@ def test_unlock_validates_restore_point_and_state_path_before_flushing_firewall(
     assert 'if [ -L "$SNAPSHOT" ]; then' in script
     assert 'snapshot_owner="$(stat -c' in script
     assert 'nft -c -f "$SNAPSHOT"' in script
-    assert 'no active UFW manager or validated snapshot is available; firewall unchanged' in script
+    assert 'no active UFW, nftables.service or validated snapshot is available; firewall unchanged' in script
 
     preflight = script.index("SNAPSHOT_READY=0")
     snapshot_display = script.index('if [ "$SNAPSHOT_READY" -eq 1 ]; then')
@@ -40,7 +40,9 @@ def test_unlock_refuses_requested_missing_snapshot_before_firewall_flush():
     script = Path("scripts/kaia-unlock.sh").read_text()
 
     missing_snapshot_guard = script.index('if [ "$FROM_SNAPSHOT" -eq 1 ] && [ "$SNAPSHOT_READY" -ne 1 ]; then')
-    no_restore_guard = script.index('if [ "$UFW_ACTIVE" -ne 1 ] && [ "$SNAPSHOT_READY" -ne 1 ]; then')
+    no_restore_guard = script.index(
+        'if [ "$UFW_ACTIVE" -ne 1 ] && [ "$NFTABLES_MANAGED" -ne 1 ] && [ "$SNAPSHOT_READY" -ne 1 ]; then'
+    )
     flush = script.index("nft flush ruleset")
 
     assert missing_snapshot_guard < no_restore_guard < flush
@@ -71,3 +73,26 @@ def test_lockdown_snapshot_uses_exclusive_temporary_files_and_never_follows_pree
     assert 'chown root:kaiacord "$STATE_DIR"' not in script
     assert "Proceeding with lockdown anyway -- containment takes priority" in script
     assert script.index("WARNING: ruleset snapshot FAILED") < script.index("LOCKDOWN_RULES=")
+
+
+def test_unlock_restores_nftables_service_before_ufw_and_reapplies_blocks():
+    # nftables.conf begins with `flush ruleset`; loaded after ufw it would wipe
+    # ufw's tables. And the lockdown's flush dropped Kaia's recorded blocks.
+    script = Path("scripts/kaia-unlock.sh").read_text()
+
+    flush = script.index("nft flush ruleset")
+    nftables = script.index("systemctl restart nftables.service", flush)
+    ufw = script.index("ufw reload", nftables)
+    blocks = script.index("systemctl restart kaia-restore-blocks.service", ufw)
+    assert flush < nftables < ufw < blocks
+
+
+def test_lockdown_table_does_not_share_a_distribution_table_name():
+    # Arch's stock /etc/nftables.conf defines "table inet filter".
+    lockdown = Path("scripts/kaia-lockdown.sh").read_text()
+    unlock = Path("scripts/kaia-unlock.sh").read_text()
+
+    assert "add table inet kaia_lockdown" in lockdown
+    assert "nft list chain inet kaia_lockdown" in lockdown
+    assert "inet filter input" not in lockdown
+    assert "nft list table inet kaia_lockdown" in unlock
