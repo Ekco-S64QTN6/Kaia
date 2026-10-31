@@ -14,6 +14,7 @@
 - Preserve the existing capability-token JSON fields and HMAC format. Enforce durable single-use token consumption with an atomic SQLite fingerprint registry; fail closed when the registry cannot be updated. Raw tokens and signatures are not persisted.
 - Extend synthetic Policy Gate IPC coverage to fragmented headers/payloads and truncated-frame EOF, asserting incomplete requests close without reaching policy evaluation.
 - Restrict HostExecutor subprocess launches to exact registered system-binary paths; reject malformed or NUL-containing argv before spawning a child.
+- Load the trusted integrity baseline through a no-follow descriptor; reject symlinks, non-regular files, hardlinks and insecure system-mode ownership/permissions.
 - `kaia-restore-blocks.service` loads `/etc/kaia/secret.env`. `core/config.py` exits at import without the signing secret, so the unit failed on every boot and recorded blocks were never re-applied.
 - The lockdown table is `inet kaia_lockdown`, not `inet filter` — the stock `/etc/nftables.conf` table has that name, so recovery tooling could not tell the lockdown from the host firewall.
 - `kaia-unlock.sh` restores `/etc/nftables.conf` (via `nftables.service`) before `ufw reload` when that service is enabled, and re-applies ledger blocks afterwards; previously a ufw-path unlock left the nftables.conf ruleset and every recorded block missing.
