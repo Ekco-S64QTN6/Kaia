@@ -5,6 +5,7 @@
 ### Network discovery
 
 - Parse NBNS NB and NBSTAT answer records, including scoped/compressed owner names and bounded active/unique node-name extraction; reject truncated or malformed records without partial persistence.
+- Reject fragmented IPv4 datagrams and reserved-flag frames before passive UDP discovery parsing; retain support for valid DF-only packets and cover both paths with regressions.
 
 ### Security
 
