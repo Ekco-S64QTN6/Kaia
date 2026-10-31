@@ -295,7 +295,11 @@ the previous baseline. The baseline is root-only, while the state directory rema
 
 The baseline writer fails closed when watchlist enumeration fails or a protected
 path is missing, symlinked or non-regular (the intentionally absent deployed `.env`
-is the only exception). System mode refuses to start without a valid trusted baseline.
+is the only exception). The runtime loader independently opens the baseline with
+`O_NOFOLLOW` and `O_CLOEXEC` through one descriptor, rejects non-regular or multiply-linked
+files, and in system mode requires UID 0 with no group/world permission bits. This closes
+the reader-side symlink and metadata gap even if the baseline path is replaced after it
+was written. System mode refuses to start without a valid trusted baseline.
 Only unprivileged development mode may bootstrap from the current disk state, where
 changes made while the daemon was stopped cannot be detected. Record a baseline only after reviewing
 the deployed source and deployment state; never treat bootstrap hashing as equivalent
