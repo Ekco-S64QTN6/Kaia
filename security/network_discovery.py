@@ -284,7 +284,11 @@ class PassiveDiscoveryEngine:
         if total_length < ihl + 8:
             return
         fragment_field = struct.unpack("!H", payload[6:8])[0]
-        if fragment_field & 0x1FFF:  # non-initial fragment: no UDP header at this offset
+        # This collector does not reassemble IP fragments. Reject the first
+        # fragment (MF), later fragments (non-zero offset), and the reserved
+        # flag rather than treating an incomplete datagram as complete UDP.
+        # The DF flag (0x4000) is not a fragmentation indicator and is allowed.
+        if fragment_field & 0xBFFF:
             return
 
         protocol = payload[9]
