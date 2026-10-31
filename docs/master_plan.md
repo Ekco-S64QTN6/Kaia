@@ -1,6 +1,6 @@
 # Kaia: Unified Architectural Specification & Implementation Blueprint (v7.6 — Living Specification)
 
-**Document Version:** 7.6 (Current Architecture, Implementation Status and Verification Boundaries; audit snapshot 2026-10-30)  
+**Document Version:** 7.6 (Current Architecture, Implementation Status and Verification Boundaries; audit snapshot 2026-10-31)  
 **Status:** Authoritative, living specification and roadmap — **declarative architecture plus dated implementation/verification status**  
 **Target Environment:** Arch Linux, Systemd, eBPF, Kitty Terminal  
 **Intended Reader:** Automated Coding Agents, Systems Engineers, Security Architects
@@ -693,6 +693,7 @@ This is the current repository status as of the audit date. It describes impleme
 - [x] eBPF source includes a sys_enter_unlinkat perf callback and a waterfall lane for observed deletion attempts. A syscall-entry event is not proof that unlink completed; all probes remain kernel/BCC dependent.
 - [x] Loopback-only Web HUD, telemetry WebSocket, interactive command console, strict self-hosted CSP, Host/Origin loopback checks for authority, scheme and effective port, and Policy Gate command dispatch. Host authority must match the actual local listener, and commands validate origin before body parsing. Command results currently arrive as completed responses, not incremental streaming.
 - [x] InternetDB IP validation, process-local serialized API requests and negative caching for authoritative HTTP 404 results, alongside existing IP reputation/CVE lookup functions.
+- [x] Passive network discovery parses bounded IPv4 UDP frames for mDNS, LLMNR, SSDP and NBNS/NBSTAT observations; IPv4 fragments (including first fragments with MF set) and reserved-flag frames are discarded because this collector does not reassemble IP datagrams. Packet regressions preserve DF-only traffic and reject incomplete frames.
 - [x] Passive pacman transaction monitoring for installed/upgraded/downgraded/reinstalled/removed packages after successful ALPM transaction completion. This is not package-signature verification or full AUR/repository dependency attestation.
 - [x] GitHub Actions regression workflow runs shell syntax validation, Python compilation and the shared deterministic suite. See the [main-branch workflow history](https://github.com/Ekco-S64QTN6/Kaia/actions/workflows/security-regressions.yml?query=branch%3Amain) for the current run and exact per-run test count. Kernel/privileged behavior is outside the proof supplied by those tests.
 

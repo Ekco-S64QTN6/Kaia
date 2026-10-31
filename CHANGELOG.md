@@ -5,6 +5,7 @@
 ### Network discovery
 
 - Parse NBNS NB and NBSTAT answer records, including scoped/compressed owner names and bounded active/unique node-name extraction; reject truncated or malformed records without partial persistence.
+- Reject fragmented IPv4 datagrams and reserved-flag frames before passive UDP discovery parsing; retain support for valid DF-only packets and cover both paths with regressions.
 - Fix NBSTAT `NAME_FLAGS` masks: they were bit-reversed (ACT `0x0020`, reserved `0xFF80`), so every real node-status name (Windows sends `0x0400`) was discarded. Now RFC 1002 order: G `0x8000`, DRG `0x1000`, CNF `0x0800`, ACT `0x0400`, PRM `0x0200`, reserved `0x01FF`. Tests use wire values.
 
 ### Security

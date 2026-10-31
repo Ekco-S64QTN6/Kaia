@@ -4,6 +4,8 @@ import os
 import socket
 import struct
 
+import pytest
+
 os.environ.setdefault("KAIA_CAPABILITY_TOKEN_SECRET", "test_signing_secret_key_2026")
 
 from security.network_discovery import PassiveDiscoveryEngine
@@ -175,6 +177,45 @@ def test_netbios_decoder_requires_exact_valid_encoded_length():
     assert engine._decode_netbios_name(b"A" * 31) == ""
     assert engine._decode_netbios_name(b"!" * 32) == ""
     assert engine._decode_netbios_name(_encode_netbios_label("DESKTOP-01")) == "DESKTOP-01"
+
+
+@pytest.mark.parametrize(
+    "fragment_field",
+    [0x2000, 0x0001, 0x8000],
+    ids=["first-fragment-more-fragments", "non-initial-fragment", "reserved-flag"],
+)
+def test_ipv4_parser_rejects_fragmented_or_reserved_datagrams(monkeypatch, fragment_field):
+    engine, captured = _capture_assets(monkeypatch)
+    frame = bytearray(
+        _ipv4_udp_frame(
+            _nbns_packet("FRAGMENTED"),
+            source_port=137,
+            dest_port=53000,
+        )
+    )
+    frame[6:8] = struct.pack("!H", fragment_field)
+
+    engine._parse_ipv4(bytes(frame), "02:00:00:00:00:44")
+
+    assert captured == []
+
+
+def test_ipv4_parser_allows_dont_fragment_flag(monkeypatch):
+    engine, captured = _capture_assets(monkeypatch)
+    frame = bytearray(
+        _ipv4_udp_frame(
+            _nbns_packet("DONTFRAGMENT"),
+            source_port=137,
+            dest_port=53000,
+        )
+    )
+    frame[6:8] = struct.pack("!H", 0x4000)
+
+    engine._parse_ipv4(bytes(frame), "02:00:00:00:00:44")
+
+    assert captured == [
+        ("192.0.2.44", "02:00:00:00:00:44", "DONTFRAGMENT", "NetBIOS")
+    ]
 
 
 def test_ipv4_parser_rejects_non_ipv4_and_inconsistent_lengths(monkeypatch):
