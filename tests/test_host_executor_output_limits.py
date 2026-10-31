@@ -10,6 +10,11 @@ from security.host_executor import HostExecutor
 
 
 def test_run_cmd_terminates_process_group_when_combined_output_exceeds_limit(monkeypatch):
+    monkeypatch.setattr(
+        host_executor,
+        "ALLOWED_EXECUTABLES",
+        host_executor.ALLOWED_EXECUTABLES | {sys.executable},
+    )
     monkeypatch.setattr(host_executor, "MAX_SUBPROCESS_OUTPUT_BYTES", 8192)
     command = [
         sys.executable,
@@ -26,7 +31,12 @@ def test_run_cmd_terminates_process_group_when_combined_output_exceeds_limit(mon
     assert "process group was terminated" in stderr.lower()
 
 
-def test_run_cmd_keeps_small_successful_output_unchanged():
+def test_run_cmd_keeps_small_successful_output_unchanged(monkeypatch):
+    monkeypatch.setattr(
+        host_executor,
+        "ALLOWED_EXECUTABLES",
+        host_executor.ALLOWED_EXECUTABLES | {sys.executable},
+    )
     command = [
         sys.executable,
         "-c",

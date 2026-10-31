@@ -14,7 +14,7 @@ from security.host_executor import HostExecutor, SYSTEM_BINARIES
     SYSTEM_BINARIES["ss"], SYSTEM_BINARIES["ip"], SYSTEM_BINARIES["nft"],
     SYSTEM_BINARIES["sudo"], SYSTEM_BINARIES["systemctl"],
     SYSTEM_BINARIES["unshare"], SYSTEM_BINARIES["bwrap"],
-    SYSTEM_BINARIES["systemd-run"], SYSTEM_BINARIES["systemd-nspawn"],
+    SYSTEM_BINARIES["systemd-run"], SYSTEM_BINARIES["systemd-nspawn"], SYSTEM_BINARIES["bash"],
 ])
 def test_registered_host_binaries_are_absolute(command):
     assert os.path.isabs(command)
@@ -27,7 +27,57 @@ def test_run_cmd_rejects_path_lookup(monkeypatch):
     assert "absolute executable path" in error
 
 
+def test_run_cmd_rejects_unregistered_absolute_executable_before_popen(monkeypatch):
+    calls = []
+
+    def unexpected_popen(*args, **kwargs):
+        calls.append((args, kwargs))
+        pytest.fail("unregistered executable must never reach subprocess.Popen")
+
+    monkeypatch.setattr("security.host_executor.subprocess.Popen", unexpected_popen)
+
+    ok, stdout, error = HostExecutor._run_cmd([sys.executable, "-c", "pass"])
+
+    assert not ok
+    assert stdout == ""
+    assert "not in the registered allowlist" in error
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        [SYSTEM_BINARIES["ss"], None],
+        [SYSTEM_BINARIES["ss"], b"-n"],
+        [SYSTEM_BINARIES["ss"], "-n" + chr(0) + "unexpected"],
+    ],
+    ids=["non-string-argument", "bytes-argument", "embedded-nul"],
+)
+def test_run_cmd_rejects_malformed_argv_before_popen(monkeypatch, argv):
+    calls = []
+
+    def unexpected_popen(*args, **kwargs):
+        calls.append((args, kwargs))
+        pytest.fail("malformed argv must never reach subprocess.Popen")
+
+    monkeypatch.setattr("security.host_executor.subprocess.Popen", unexpected_popen)
+
+    ok, stdout, error = HostExecutor._run_cmd(argv)
+
+    assert not ok
+    assert stdout == ""
+    assert "NUL-free strings" in error
+    assert calls == []
+
+
 def test_run_cmd_does_not_inherit_capability_signing_secret(monkeypatch):
+    import security.host_executor as host_executor_module
+
+    monkeypatch.setattr(
+        host_executor_module,
+        "ALLOWED_EXECUTABLES",
+        host_executor_module.ALLOWED_EXECUTABLES | {sys.executable},
+    )
     monkeypatch.setenv("KAIA_CAPABILITY_TOKEN_SECRET", "must-not-reach-children")
     calls = []
     real_popen = __import__("subprocess").Popen
