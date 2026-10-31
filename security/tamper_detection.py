@@ -87,13 +87,37 @@ class TamperDetector:
         by corrupting the trust record.
         """
         path = getattr(config, "TRUSTED_BASELINE_PATH", None)
-        if not path or not os.path.exists(path):
+        if not path or not os.path.lexists(path):
             return {}
 
         trusted = {}
+        fd = None
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                for line_number, line in enumerate(f, start=1):
+            # The baseline is itself a trust anchor. Do not follow a replacement
+            # symlink between the existence check and open, and do not accept a
+            # directory, device, FIFO, or multiply-linked baseline file.
+            flags = (
+                os.O_RDONLY
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_NONBLOCK", 0)
+            )
+            fd = os.open(path, flags)
+            metadata = os.fstat(fd)
+            if not stat.S_ISREG(metadata.st_mode):
+                raise ValueError("trusted baseline is not a regular file")
+            if metadata.st_nlink != 1:
+                raise ValueError("trusted baseline must be a single-link file")
+
+            if getattr(config, "STATE_DIR_IS_SYSTEM", False):
+                if metadata.st_uid != 0 or metadata.st_mode & 0o077:
+                    raise PermissionError(
+                        "system-mode trusted baseline must be root-owned and private (mode 0600 or stricter)"
+                    )
+
+            with os.fdopen(fd, "r", encoding="utf-8") as baseline_file:
+                fd = None  # ownership transferred to the file object
+                for line_number, line in enumerate(baseline_file, start=1):
                     line = line.strip()
                     if not line or line.startswith("#"):
                         continue
@@ -114,6 +138,12 @@ class TamperDetector:
             raise RuntimeError(
                 f"Cannot trust integrity baseline {path}; refusing to start: {e}"
             ) from e
+        finally:
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
 
         if not trusted:
             raise RuntimeError(
