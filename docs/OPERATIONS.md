@@ -251,8 +251,11 @@ sudo ~/kaia-panic-unlock.sh
 ```
 
 It stops the Policy Gate first (otherwise the 30s tamper loop just re-locks you out
-on the next tick), deletes **only** Kaia's own `inet filter` lockdown table, reloads
-ufw, restarts NetworkManager, and verifies connectivity.
+on the next tick), and only if Kaia's lockdown ruleset is present (`inet kaia_lockdown`,
+or a legacy `inet filter` with an output-drop policy) flushes it and restores
+`nftables.service`, then ufw, then the pre-lockdown snapshot as a last resort, and
+re-applies recorded blocks. It then restarts NetworkManager and verifies connectivity.
+With no lockdown present it leaves the firewall alone.
 
 A reboot also clears a lockdown — nftables rules are runtime-only and ufw re-applies
 at boot — but that loses your session and tells you nothing about why it fired.
