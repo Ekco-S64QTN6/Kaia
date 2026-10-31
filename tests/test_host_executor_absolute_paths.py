@@ -14,7 +14,7 @@ from security.host_executor import HostExecutor, SYSTEM_BINARIES
     SYSTEM_BINARIES["ss"], SYSTEM_BINARIES["ip"], SYSTEM_BINARIES["nft"],
     SYSTEM_BINARIES["sudo"], SYSTEM_BINARIES["systemctl"],
     SYSTEM_BINARIES["unshare"], SYSTEM_BINARIES["bwrap"],
-    SYSTEM_BINARIES["systemd-run"], SYSTEM_BINARIES["systemd-nspawn"],
+    SYSTEM_BINARIES["systemd-run"], SYSTEM_BINARIES["systemd-nspawn"], SYSTEM_BINARIES["bash"],
 ])
 def test_registered_host_binaries_are_absolute(command):
     assert os.path.isabs(command)
