@@ -641,7 +641,7 @@ class HostExecutor:
         try:
             if not isinstance(cmd, list) or not cmd:
                 return False, "", "HostExecutor requires a non-empty argv list."
-            if any(not isinstance(arg, str) or "\\x00" in arg for arg in cmd):
+            if any(not isinstance(arg, str) or chr(0) in arg for arg in cmd):
                 return False, "", "HostExecutor requires argv entries to be NUL-free strings."
             if not os.path.isabs(cmd[0]):
                 return False, "", (
