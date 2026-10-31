@@ -9,6 +9,7 @@
 
 ### Security
 
+- `kaia-baseline.sh` aborted after printing its diff whenever any protected file had changed (`diff` exits 1 under `set -euo pipefail`, added in e790749), so a changed tree could never be re-baselined. After a redeploy the Policy Gate then failed its startup integrity check and locked the host down on every restart attempt. The display pipeline is guarded; a behavioural test runs the script's own block under its shell options.
 - Enforce timezone-aware, signed capability-token issue and expiry timestamps; reject future-issued, expired, non-positive and over-one-hour tokens, reject malformed signatures, non-string scope/timestamp fields, and excessively nested JSON.
 - Preserve the existing capability-token JSON fields and HMAC format. Enforce durable single-use token consumption with an atomic SQLite fingerprint registry; fail closed when the registry cannot be updated. Raw tokens and signatures are not persisted.
 - Extend synthetic Policy Gate IPC coverage to fragmented headers/payloads and truncated-frame EOF, asserting incomplete requests close without reaching policy evaluation.

@@ -59,6 +59,18 @@ Committed together, after reviewing ChatGPT's PRs #85–#89.
   parses them and the verifier refuses the list ("must be a JSON object").
   Both reject the token; the test checked only one message.
 
+- **`kaia-baseline.sh` must survive a changed tree.** The "changed:" display
+  pipeline ends in `|| true`. Without it, `diff`'s exit 1 killed the script
+  under `pipefail` before the baseline was written — exactly when a baseline is
+  needed. On 2026-10-30 that left a redeployed host with a stale baseline, and
+  the enabled gate locked the network down at boot, nine times, until the
+  owner deleted `inet kaia_lockdown` by hand.
+  `tests/test_baseline_diff_survives_pipefail.py` guards it.
+- **Deploy order is not optional.** `install_services.sh` *enables* the gate.
+  If the baseline is not recorded before the next boot, the gate's startup
+  integrity check fails and it locks the host down. Never leave a deploy with
+  the gate enabled and the baseline stale; disable the gate instead.
+
 ## Reviewed and correct — do not "fix"
 
 - **Single-use capability tokens** (#86). Every production caller
