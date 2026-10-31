@@ -22,6 +22,9 @@ SYSTEM_BINARIES = {
     "systemd-nspawn": "/usr/bin/systemd-nspawn",
     "bash": "/usr/bin/bash",
 }
+
+# Only these exact registered executable paths may cross the subprocess boundary.
+ALLOWED_EXECUTABLES = frozenset(SYSTEM_BINARIES.values())
 import logging
 import config
 
@@ -636,11 +639,17 @@ class HostExecutor:
         selector = None
         pipes = []
         try:
-            if not isinstance(cmd, list) or not cmd or not isinstance(cmd[0], str):
+            if not isinstance(cmd, list) or not cmd:
                 return False, "", "HostExecutor requires a non-empty argv list."
+            if any(not isinstance(arg, str) or "\\x00" in arg for arg in cmd):
+                return False, "", "HostExecutor requires argv entries to be NUL-free strings."
             if not os.path.isabs(cmd[0]):
                 return False, "", (
                     f"HostExecutor requires an absolute executable path; rejected: {cmd[0]!r}"
+                )
+            if cmd[0] not in ALLOWED_EXECUTABLES:
+                return False, "", (
+                    f"HostExecutor executable is not in the registered allowlist; rejected: {cmd[0]!r}"
                 )
             logger.info(f"HostExecutor running: {' '.join(cmd)}")
             process = subprocess.Popen(
