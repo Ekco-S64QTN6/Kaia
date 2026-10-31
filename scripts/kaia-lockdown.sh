@@ -145,6 +145,9 @@ if [ -n "$snapshot_tmp" ]; then rm -f -- "$snapshot_tmp"; fi
 
 # --- Contain ----------------------------------------------------------------
 # Apply the flush + replacement chains as one nftables batch transaction.
+# The table is named kaia_lockdown, not "filter": Arch's stock /etc/nftables.conf
+# names its own table "inet filter", so an unlock tool that looked for or deleted
+# that name could not tell the lockdown from the host's real firewall.
 # Running individual commands after a successful flush can leave the host
 # without a firewall if a later add fails. Syntax-check first, then apply and
 # verify every drop-policy chain before claiming lockdown is active.
@@ -156,10 +159,10 @@ trap 'rm -f "$LOCKDOWN_RULES"' EXIT
 
 cat > "$LOCKDOWN_RULES" <<'NFT'
 flush ruleset
-add table inet filter
-add chain inet filter input { type filter hook input priority 0; policy drop; }
-add chain inet filter forward { type filter hook forward priority 0; policy drop; }
-add chain inet filter output { type filter hook output priority 0; policy drop; }
+add table inet kaia_lockdown
+add chain inet kaia_lockdown input { type filter hook input priority 0; policy drop; }
+add chain inet kaia_lockdown forward { type filter hook forward priority 0; policy drop; }
+add chain inet kaia_lockdown output { type filter hook output priority 0; policy drop; }
 NFT
 
 if ! nft -c -f "$LOCKDOWN_RULES"; then
@@ -175,7 +178,7 @@ if ! nft -f "$LOCKDOWN_RULES"; then
 fi
 
 for chain in input forward output; do
-    if ! nft list chain inet filter "$chain" 2>/dev/null | grep -q 'policy drop'; then
+    if ! nft list chain inet kaia_lockdown "$chain" 2>/dev/null | grep -q 'policy drop'; then
         logger -t kaia-lockdown "ERROR: lockdown verification failed for chain $chain"
         echo -e "${COLOR_RED}ERROR: lockdown verification failed for chain $chain.${COLOR_RESET}" >&2
         exit 1

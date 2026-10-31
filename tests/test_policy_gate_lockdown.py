@@ -486,5 +486,8 @@ def test_capability_token_verifier_rejects_excessive_json_nesting():
     )
 
     assert valid is False
-    assert "JSON parsing failed" in reason
+    # Python 3.12 raises RecursionError at this depth ("JSON parsing failed");
+    # 3.14's parser returns the list, which is then refused as a non-object.
+    # Either way the token is rejected before any field is trusted.
+    assert "JSON parsing failed" in reason or "must be a JSON object" in reason
 

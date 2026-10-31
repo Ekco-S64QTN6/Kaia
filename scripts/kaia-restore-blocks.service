@@ -11,6 +11,9 @@ Wants=network-pre.target
 [Service]
 Type=oneshot
 Environment=KAIA_STATE_DIR=__STATE_DIR__
+# core/config.py exits at import without the signing secret, so without this
+# line the unit failed on every boot and no recorded block was ever re-applied.
+EnvironmentFile=/etc/kaia/secret.env
 RemainAfterExit=yes
 ExecStart=/usr/bin/env python3 __DEPLOY_DIR__/scripts/kaia_restore_blocks.py
 # Restoring blocks must never prevent the host from booting.
