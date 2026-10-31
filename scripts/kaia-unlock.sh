@@ -120,6 +120,12 @@ UFW_ACTIVE=0
 if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi '^Status: active'; then
     UFW_ACTIVE=1
 fi
+# nftables.service loads /etc/nftables.conf at boot. When it is enabled, that file
+# is (part of) the host firewall, and `ufw reload` alone would not bring it back.
+NFTABLES_MANAGED=0
+if systemctl is-enabled --quiet nftables.service 2>/dev/null && [ -f /etc/nftables.conf ]; then
+    NFTABLES_MANAGED=1
+fi
 
 SNAPSHOT_READY=0
 if [ -L "$SNAPSHOT" ]; then
@@ -148,14 +154,14 @@ if [ "$FROM_SNAPSHOT" -eq 1 ] && [ "$SNAPSHOT_READY" -ne 1 ]; then
     echo "ERROR: snapshot restore was requested, but there is no validated snapshot." >&2
     exit 1
 fi
-if [ "$UFW_ACTIVE" -ne 1 ] && [ "$SNAPSHOT_READY" -ne 1 ]; then
-    echo "ERROR: no active UFW manager or validated snapshot is available; firewall unchanged." >&2
+if [ "$UFW_ACTIVE" -ne 1 ] && [ "$NFTABLES_MANAGED" -ne 1 ] && [ "$SNAPSHOT_READY" -ne 1 ]; then
+    echo "ERROR: no active UFW, nftables.service or validated snapshot is available; firewall unchanged." >&2
     exit 1
 fi
 
 # --- Show what we are about to undo -----------------------------------------
-if nft list table inet filter >/dev/null 2>&1; then
-    echo -e "  Lockdown table ${COLOR_YELLOW}inet filter${COLOR_RESET} is present."
+if nft list table inet kaia_lockdown >/dev/null 2>&1; then
+    echo -e "  Lockdown table ${COLOR_YELLOW}inet kaia_lockdown${COLOR_RESET} is present."
 else
     echo -e "  ${COLOR_YELLOW}No lockdown table found — the lockdown may already be lifted.${COLOR_RESET}"
 fi
@@ -195,12 +201,16 @@ if [ "$FROM_SNAPSHOT" -eq 1 ]; then
     else
         echo -e "${COLOR_RED}No snapshot to restore from.${COLOR_RESET}"
     fi
-elif [ "$UFW_ACTIVE" -eq 1 ]; then
-    # Preferred path when ufw manages the firewall: let ufw regenerate its own
-    # ruleset authoritatively rather than replaying a captured snapshot, which
-    # would leave ufw's userspace state and the kernel ruleset out of sync.
-    if ufw reload >/dev/null 2>&1; then
-        restored="ufw reload"
+else
+    # Preferred path: let each manager regenerate its own ruleset authoritatively
+    # rather than replaying a captured snapshot, which would leave ufw's userspace
+    # state and the kernel ruleset out of sync. nftables.conf goes first because
+    # it normally starts with `flush ruleset`, which would wipe ufw's tables.
+    if [ "$NFTABLES_MANAGED" -eq 1 ] && systemctl restart nftables.service >/dev/null 2>&1; then
+        restored="nftables.service"
+    fi
+    if [ "$UFW_ACTIVE" -eq 1 ] && ufw reload >/dev/null 2>&1; then
+        restored="${restored:+$restored + }ufw reload"
     fi
 fi
 
@@ -217,6 +227,16 @@ else
     echo -e "  ${COLOR_RED}The host is now UNFIREWALLED. Run 'ufw reload' or reapply rules now.${COLOR_RESET}"
     logger -t kaia-unlock "WARNING: lockdown flushed but no ruleset restored"
     exit 1
+fi
+
+# The flush also dropped every IP block Kaia had applied; rebuild them from the
+# ledger. Best effort: the firewall itself is already restored at this point.
+if systemctl cat kaia-restore-blocks.service >/dev/null 2>&1; then
+    if systemctl restart kaia-restore-blocks.service >/dev/null 2>&1; then
+        echo "  Recorded IP blocks re-applied (kaia-restore-blocks)."
+    else
+        echo -e "  ${COLOR_YELLOW}kaia-restore-blocks failed; check: journalctl -u kaia-restore-blocks${COLOR_RESET}"
+    fi
 fi
 
 echo
