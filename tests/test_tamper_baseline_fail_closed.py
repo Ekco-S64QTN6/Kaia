@@ -15,7 +15,7 @@ from security import tamper_detection as td
 
 def test_existing_malformed_baseline_does_not_fall_back_to_disk_hashes(tmp_path, monkeypatch):
     path = tmp_path / "baseline.sha256"
-    path.write_text("not-a-digest  /opt/kaia/security/policy_gate.py\\n", encoding="utf-8")
+    path.write_text("not-a-digest  /opt/kaia/security/policy_gate.py\n", encoding="utf-8")
     monkeypatch.setattr(config, "TRUSTED_BASELINE_PATH", str(path))
 
     with pytest.raises(RuntimeError, match="refusing to start"):
@@ -24,7 +24,7 @@ def test_existing_malformed_baseline_does_not_fall_back_to_disk_hashes(tmp_path,
 
 def test_trusted_baseline_loader_rejects_symlink_without_reading_target(tmp_path, monkeypatch):
     target = tmp_path / "approved-baseline"
-    target.write_text(f"{'0' * 64}  /opt/kaia/core/config.py\\n", encoding="utf-8")
+    target.write_text(f"{'0' * 64}  /opt/kaia/core/config.py\n", encoding="utf-8")
     link = tmp_path / "baseline.sha256"
     link.symlink_to(target)
     monkeypatch.setattr(config, "TRUSTED_BASELINE_PATH", str(link))
@@ -35,7 +35,7 @@ def test_trusted_baseline_loader_rejects_symlink_without_reading_target(tmp_path
 
 def test_trusted_baseline_loader_rejects_hardlinked_trust_record(tmp_path, monkeypatch):
     path = tmp_path / "baseline.sha256"
-    path.write_text(f"{'0' * 64}  /opt/kaia/core/config.py\\n", encoding="utf-8")
+    path.write_text(f"{'0' * 64}  /opt/kaia/core/config.py\n", encoding="utf-8")
     os.link(path, tmp_path / "baseline-alias")
     monkeypatch.setattr(config, "TRUSTED_BASELINE_PATH", str(path))
 
@@ -63,7 +63,7 @@ def test_system_mode_rejects_untrusted_baseline_metadata(
     tmp_path, monkeypatch, uid, mode, reason
 ):
     path = tmp_path / "baseline.sha256"
-    path.write_text(f"{'0' * 64}  /opt/kaia/core/config.py\\n", encoding="utf-8")
+    path.write_text(f"{'0' * 64}  /opt/kaia/core/config.py\n", encoding="utf-8")
     monkeypatch.setattr(config, "TRUSTED_BASELINE_PATH", str(path))
     monkeypatch.setattr(config, "STATE_DIR_IS_SYSTEM", True)
 
@@ -80,7 +80,7 @@ def test_trusted_baseline_loader_accepts_private_single_link_dev_file(tmp_path, 
     path = tmp_path / "baseline.sha256"
     expected_path = "/opt/kaia/core/config.py"
     expected_hash = "a" * 64
-    path.write_text(f"{expected_hash}  {expected_path}\\n", encoding="utf-8")
+    path.write_text(f"{expected_hash}  {expected_path}\n", encoding="utf-8")
     os.chmod(path, 0o600)
     monkeypatch.setattr(config, "TRUSTED_BASELINE_PATH", str(path))
     monkeypatch.setattr(config, "STATE_DIR_IS_SYSTEM", False)
