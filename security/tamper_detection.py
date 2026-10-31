@@ -112,7 +112,7 @@ class TamperDetector:
             if getattr(config, "STATE_DIR_IS_SYSTEM", False):
                 if metadata.st_uid != 0 or metadata.st_mode & 0o077:
                     raise PermissionError(
-                        "system-mode trusted baseline must be root-owned and private (mode 0600 or stricter)"
+                        "system-mode trusted baseline must be root-owned and have no group/world permission bits"
                     )
 
             with os.fdopen(fd, "r", encoding="utf-8") as baseline_file:
