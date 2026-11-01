@@ -312,7 +312,7 @@ def _get_honeypot_trigger_summary(conn) -> tuple:
     cursor.execute(
         """
         SELECT COUNT(*) FROM security_events
-        WHERE type IN ('honeypot_port_trigger', 'honeypot_file_access')
+        WHERE type IN ('honeypot_port_trigger', 'honeypot_file_access', 'honeypot_canary_read')
         """
     )
     count_row = cursor.fetchone()
@@ -323,7 +323,7 @@ def _get_honeypot_trigger_summary(conn) -> tuple:
         cursor.execute(
             """
             SELECT actor, timestamp FROM security_events
-            WHERE type IN ('honeypot_port_trigger', 'honeypot_file_access')
+            WHERE type IN ('honeypot_port_trigger', 'honeypot_file_access', 'honeypot_canary_read')
             ORDER BY timestamp DESC LIMIT 1
             """
         )

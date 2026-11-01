@@ -18,42 +18,82 @@ logger = logging.getLogger(__name__)
 
 CLONE_NEWNET = 0x40000000
 
-def get_remote_ip_for_pid(pid: int) -> str:
+def _socket_inodes(pid: int, proc_root: str = "/proc") -> set:
+    """Inodes of the sockets this process holds open (from /proc/<pid>/fd)."""
+    inodes = set()
+    fd_dir = os.path.join(proc_root, str(pid), "fd")
+    try:
+        for fd in os.listdir(fd_dir):
+            try:
+                target = os.readlink(os.path.join(fd_dir, fd))
+            except OSError:
+                continue
+            if target.startswith("socket:[") and target.endswith("]"):
+                inodes.add(int(target[8:-1]))
+    except OSError:
+        pass  # no permission / process gone: attribute nothing
+    return inodes
+
+
+def _decode_proc_ip(hex_addr: str) -> str:
+    """/proc/net/tcp{,6} address field (host-endian 32-bit words) -> IP string."""
+    raw = bytes.fromhex(hex_addr)
+    if len(raw) == 4:
+        return socket.inet_ntop(socket.AF_INET, raw[::-1])
+    words = b"".join(raw[i:i + 4][::-1] for i in range(0, 16, 4))
+    ip = socket.inet_ntop(socket.AF_INET6, words)
+    return ip[7:] if ip.startswith("::ffff:") and "." in ip else ip
+
+
+def _parent_pid(pid: int, proc_root: str = "/proc") -> int:
+    try:
+        with open(os.path.join(proc_root, str(pid), "stat")) as f:
+            content = f.read()
+        return int(content[content.rfind(")") + 2:].split()[1])
+    except (OSError, ValueError, IndexError):
+        return 0
+
+
+def get_remote_ip_for_pid(pid: int, proc_root: str = "/proc") -> str:
+    """Remote peer of a connection held by ``pid`` or one of its ancestors.
+
+    /proc/<pid>/net/tcp lists *every* socket in the network namespace, not the
+    process's own, so reading its first remote address blamed (and auto-blocked)
+    an unrelated connection — an API, Discord, GitHub. Only rows whose socket
+    inode the process actually holds are considered. When ownership cannot be
+    established (no sockets, no permission to read the fd table) the answer is
+    "127.0.0.1", which logs the event without blocking anyone.
+    """
     try:
         curr_pid = pid
-        # Max depth of 5 to avoid infinite loops
-        for _ in range(5):
+        # The process, its parent and grandparent: covers a reverse shell (socket
+        # on the shell itself), ssh (cat -> bash -> sshd-session) and an AI agent
+        # (cat -> tool shell -> agent holding its API connection), without
+        # climbing into desktop processes (terminal, plasmashell) whose unrelated
+        # connections would be blamed.
+        for _ in range(3):
             if curr_pid <= 1:
                 break
-            path = f"/proc/{curr_pid}/net/tcp"
-            if os.path.exists(path):
-                with open(path, "r") as f:
-                    lines = f.readlines()
-                    for line in lines[1:]:
-                        parts = line.split()
-                        if len(parts) >= 3:
-                            remote_addr = parts[2]
-                            if remote_addr != "00000000" and not remote_addr.endswith(":0000"):
-                                hex_ip = remote_addr.split(":")[0]
-                                ip_bytes = bytes.fromhex(hex_ip)
-                                # Little endian parse
-                                ip = socket.inet_ntoa(ip_bytes)
-                                if ip != "127.0.0.1":
-                                    return ip
-            # Walk up to parent
-            stat_path = f"/proc/{curr_pid}/stat"
-            if os.path.exists(stat_path):
-                with open(stat_path, "r") as f:
-                    content = f.read()
-                    # Find last parenthesis (end of command name) to parse fields correctly
-                    parent_idx = content.rfind(")")
-                    if parent_idx != -1:
-                        fields = content[parent_idx+2:].split()
-                        curr_pid = int(fields[1]) # ppid is index 1 of remaining fields
-                    else:
-                        break
-            else:
-                break
+            owned = _socket_inodes(curr_pid, proc_root)
+            if owned:
+                for table in ("tcp", "tcp6"):
+                    path = os.path.join(proc_root, str(curr_pid), "net", table)
+                    try:
+                        with open(path) as f:
+                            rows = f.readlines()[1:]
+                    except OSError:
+                        continue
+                    for row in rows:
+                        parts = row.split()
+                        if len(parts) < 10 or int(parts[9]) not in owned:
+                            continue
+                        hex_ip, _, hex_port = parts[2].partition(":")
+                        if int(hex_port or "0", 16) == 0:
+                            continue  # listening socket, no peer
+                        ip = _decode_proc_ip(hex_ip)
+                        if ip not in ("0.0.0.0", "::") and not ip.startswith("127.") and ip != "::1":
+                            return ip
+            curr_pid = _parent_pid(curr_pid, proc_root)
     except Exception as e:
         logger.error(f"Error resolving remote IP for PID {pid}: {e}")
     return "127.0.0.1"

@@ -163,3 +163,50 @@ def test_installer_places_canaries_before_enabling_the_gate():
     script = (ROOT / "scripts/install_services.sh").read_text()
     assert 's|__OWNER_HOME__|${OWNER_HOME}|g' in script
     assert script.index("install_canaries.py") < script.index("systemctl enable kaia-policy-gate.service")
+
+
+# ── who gets blocked ───────────────────────────────────────────────────────
+def _fake_proc(tmp_path, pid, ppid, sockets, tcp_rows):
+    d = tmp_path / str(pid)
+    (d / "fd").mkdir(parents=True)
+    (d / "net").mkdir()
+    for i, inode in enumerate(sockets):
+        (d / "fd" / str(i + 3)).symlink_to(f"socket:[{inode}]")
+    (d / "stat").write_text(f"{pid} (proc) S {ppid} 0 0\n")
+    header = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
+    (d / "net" / "tcp").write_text(header + "".join(tcp_rows))
+    (d / "net" / "tcp6").write_text(header)
+
+
+def _row(remote_hex, inode):
+    return f"   0: 0100007F:1F90 {remote_hex} 01 00000000:00000000 00:00000000 00000000  1000        0 {inode} 1\n"
+
+
+# 1.2.3.4:443 and 5.6.7.8:22 in /proc/net/tcp little-endian notation
+UNRELATED = _row("04030201:01BB", 999)
+ATTACKER = _row("08070605:0016", 4242)
+
+
+def test_process_without_sockets_blocks_nobody_even_if_host_has_connections(tmp_path):
+    from security.honeypot import get_remote_ip_for_pid
+    # The namespace-wide table lists someone else's connection (the old bug blamed it).
+    _fake_proc(tmp_path, 500, 1, sockets=[], tcp_rows=[UNRELATED])
+    assert get_remote_ip_for_pid(500, proc_root=str(tmp_path)) == "127.0.0.1"
+
+
+def test_attacker_connection_held_by_parent_shell_is_found(tmp_path):
+    from security.honeypot import get_remote_ip_for_pid
+    rows = [UNRELATED, ATTACKER]
+    _fake_proc(tmp_path, 600, 601, sockets=[], tcp_rows=rows)        # cat flag.txt
+    _fake_proc(tmp_path, 601, 1, sockets=[4242], tcp_rows=rows)       # shell on the socket
+    assert get_remote_ip_for_pid(600, proc_root=str(tmp_path)) == "5.6.7.8"
+
+
+def test_attribution_stops_before_desktop_ancestors(tmp_path):
+    from security.honeypot import get_remote_ip_for_pid
+    rows = [ATTACKER]
+    _fake_proc(tmp_path, 700, 701, [], rows)   # cat
+    _fake_proc(tmp_path, 701, 702, [], rows)   # bash
+    _fake_proc(tmp_path, 702, 703, [], rows)   # terminal
+    _fake_proc(tmp_path, 703, 1, [4242], rows) # e.g. plasmashell with its own connection
+    assert get_remote_ip_for_pid(700, proc_root=str(tmp_path)) == "127.0.0.1"

@@ -94,6 +94,15 @@ Committed together, after reviewing ChatGPT's PRs #85–#89.
   widen it to `read-only`. The installer never overwrites a file it cannot prove is
   a canary. If the owner ever *authorizes* an AI agent or pentest on this host,
   remove the canaries first: their text states no such authorization exists.
+- **Honeypot IP attribution uses only sockets the process owns.**
+  `/proc/<pid>/net/tcp` lists every socket in the network namespace, so the old
+  "first remote address" logic blamed — and persistently auto-blocked — whatever
+  unrelated connection came first (an API, Discord, GitHub). Now: socket inodes
+  from `/proc/<pid>/fd`, walking only to the grandparent (reverse shell, ssh,
+  agent → its API). Unknown ownership means no block. Consequence: if an agent
+  *you* run reads a decoy, its model API endpoint gets blocked — by design for a
+  hijacked agent; lift it with the HUD unblock. Never self-test a canary from an
+  AI agent session.
 
 ## Reviewed and correct — do not "fix"
 
