@@ -81,6 +81,13 @@ class HoneypotCoordinator:
         }
         self.decoy_hashes = {}
         self.active_decoy_paths = []
+        # Canary "flag" files (e.g. ~/flag.txt, /root/root.txt) are installed by
+        # scripts/install_canaries.py and only *watched* here: never created,
+        # modified or removed by the daemon. The unit passes them in.
+        self.canary_paths = [
+            p for p in os.environ.get("KAIA_CANARY_PATHS", "").split(":") if p.strip()
+        ]
+        self.active_canary_paths = []
         # Only files exclusively created by this coordinator may be cleaned up.
         self._managed_decoys = {}
         
@@ -243,10 +250,19 @@ class HoneypotCoordinator:
             except Exception as e:
                 logger.error("Failed to create filesystem decoy %s: %s", path, e)
 
+        self._register_canaries()
+
         # Register only exact verified decoys, never every proposed path.
         if ebpf_engine:
-            if self.active_decoy_paths:
-                ebpf_engine.register_honeypot_paths(list(self.active_decoy_paths))
+            watched = list(self.active_decoy_paths) + list(self.active_canary_paths)
+            if watched:
+                ebpf_engine.register_honeypot_paths(watched)
+                # Inode matching catches relative paths, ./x, grep -r, etc.
+                register_inodes = getattr(ebpf_engine, "register_honeypot_inodes", None)
+                if register_inodes:
+                    count = register_inodes(watched)
+                    logger.info("Honeypot inode watches active on %d of %d decoy/canary files.",
+                                count, len(watched))
             t = threading.Thread(
                 target=self._check_ebpf_honeypots,
                 args=(ebpf_engine,),
@@ -356,6 +372,22 @@ class HoneypotCoordinator:
         self._managed_decoys.clear()
         self.active_decoy_paths = []
 
+    def _register_canaries(self) -> None:
+        """Verify installed canary files (regular, not symlinks) and hash them."""
+        self.active_canary_paths = []
+        for path in self.canary_paths:
+            try:
+                content, metadata = self._read_regular_file_no_follow(path, 64 * 1024)
+            except (OSError, ValueError) as e:
+                logger.warning("Canary %s not watched: %s", path, e)
+                continue
+            if content is None:
+                logger.warning("Canary %s not watched: not a small regular file.", path)
+                continue
+            self.decoy_hashes[path] = self._hash_bytes(content)
+            self.active_canary_paths.append(path)
+            logger.info("Watching canary flag file: %s", path)
+
     def get_decoy_status(self) -> dict:
         return dict(self.status)
 
@@ -376,7 +408,11 @@ class HoneypotCoordinator:
                 # Log critical event
                 try:
                     log_security_event(
-                        event_type="honeypot_file_access",
+                        event_type=(
+                            "honeypot_canary_read"
+                            if path in self.active_canary_paths
+                            else "honeypot_file_access"
+                        ),
                         source="honeypot_coordinator",
                         actor=f"{comm} (PID {pid})",
                         payload_hash=self.decoy_hashes.get(path, ""),

@@ -288,6 +288,14 @@ if [ -f "$fim_db_destination" ]; then
     chmod 640 "$fim_db_destination"
 fi
 
+# The home-directory canary belongs to the login that ran sudo.
+CANARY_OWNER="${SUDO_USER:-}"
+OWNER_HOME="/nonexistent"
+if [ -n "$CANARY_OWNER" ] && [ "$CANARY_OWNER" != "root" ]; then
+    OWNER_HOME="$(getent passwd "$CANARY_OWNER" | cut -d: -f6)"
+    [ -n "$OWNER_HOME" ] || OWNER_HOME="/nonexistent"
+fi
+
 for SERVICE in kaia-policy-gate kaia-lockdown kaia-restore-blocks; do
     SRC="$KAIA_PROJECT_DIR/scripts/${SERVICE}.service"
     [ -f "$SRC" ] || continue
@@ -295,10 +303,19 @@ for SERVICE in kaia-policy-gate kaia-lockdown kaia-restore-blocks; do
     sed -e "s|/home/ekco/github/Kaia|${DEPLOY_DIR}|g" \
         -e "s|__DEPLOY_DIR__|${DEPLOY_DIR}|g" \
         -e "s|__STATE_DIR__|${STATE_DIR}|g" \
+        -e "s|__OWNER_HOME__|${OWNER_HOME}|g" \
         "$SRC" > "$DEST"
     chmod 644 "$DEST"
     echo "Installed $DEST"
 done
+# Canary flag files (~/flag.txt, /root/root.txt) must exist before the gate
+# starts: the honeypot registers them by inode at startup. The helper never
+# overwrites a file it cannot prove is a canary.
+echo "==> Installing canary flag files"
+python3 "$DEPLOY_DIR/scripts/install_canaries.py" \
+    ${CANARY_OWNER:+--owner "$CANARY_OWNER"} \
+    --template-dir "$DEPLOY_DIR/security/canaries"
+
 # Filesystem decoys are created by HoneypotCoordinator with exclusive, no-follow
 # creation only when the target path is vacant. Never touch, truncate, or chmod a
 # potentially real API-key file, backup credential file, or SSH backup.

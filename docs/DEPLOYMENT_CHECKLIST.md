@@ -36,6 +36,14 @@ probe reports which tiers the kernel actually accepts.
 
 ---
 
+**eBPF (2026-11-01):** BCC is now installed, and the eBPF probes need only
+`CAP_BPF` + `CAP_PERFMON`, which the unit grants. After deploying, confirm
+`journalctl -u kaia-policy-gate -b | grep -i 'ebpf\|inode watches'` shows the
+probes loaded and the honeypot inode watches active. This does not change the
+`CAP_SYS_ADMIN` decision above.
+
+---
+
 ## 2. Deploy
 
 **Stop the gate before updating the checkout.** While it runs from `~/github/Kaia`, its

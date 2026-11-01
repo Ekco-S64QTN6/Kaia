@@ -41,12 +41,20 @@ Group=kaiacord
 # do not infer live-host support from source code or an old setup report. Probe the
 # deployed tree with `sudo python3 scripts/fanotify_probe.py /opt/kaia`, verify BCC
 # separately, then add CAP_SYS_ADMIN to BOTH lines only if the controls need it.
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+# CAP_BPF + CAP_PERFMON load the eBPF telemetry/honeypot probes (kernel >= 5.8).
+# They are far narrower than CAP_SYS_ADMIN, which stays a separate decision for
+# fanotify FIM (docs/DEPLOYMENT_CHECKLIST.md step 1). Without them every probe,
+# including honeypot file watching, failed to load and nothing was detected.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_BPF CAP_PERFMON
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_BPF CAP_PERFMON
 
 NoNewPrivileges=true
 ProtectSystem=strict
-ProtectHome=true
+# Home directories are an empty tmpfs; only the canary flag files below are
+# bound in, read-only, so the honeypot can watch them by inode.
+ProtectHome=tmpfs
+BindReadOnlyPaths=-__OWNER_HOME__/flag.txt -/root/root.txt
+Environment=KAIA_CANARY_PATHS=__OWNER_HOME__/flag.txt:/root/root.txt
 PrivateDevices=true
 PrivateTmp=true
 ProtectKernelTunables=true
