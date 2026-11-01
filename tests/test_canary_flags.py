@@ -210,3 +210,11 @@ def test_attribution_stops_before_desktop_ancestors(tmp_path):
     _fake_proc(tmp_path, 702, 703, [], rows)   # terminal
     _fake_proc(tmp_path, 703, 1, [4242], rows) # e.g. plasmashell with its own connection
     assert get_remote_ip_for_pid(700, proc_root=str(tmp_path)) == "127.0.0.1"
+
+
+def test_openat_probes_do_not_copy_the_filename_into_a_second_stack_key():
+    # filename[256] + a copied 256-byte key exceeded the 512-byte BPF stack;
+    # the verifier rejected the whole program (seen on the live host 2026-11-01).
+    text = ebpf_telemetry.bpf_text
+    assert "__builtin_memcpy(key.path" not in text
+    assert text.count("honeypot_paths.lookup((struct honeypot_key_t *)data.filename)") == 2

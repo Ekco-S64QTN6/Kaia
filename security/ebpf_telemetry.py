@@ -184,9 +184,10 @@ TRACEPOINT_PROBE(syscalls, sys_enter_openat) {
     bpf_probe_read_user_str(&data.filename, sizeof(data.filename), args->filename);
     data.flags = args->flags;
 
-    struct honeypot_key_t key = {};
-    __builtin_memcpy(key.path, data.filename, sizeof(key.path));
-    u32 *val = honeypot_paths.lookup(&key);
+    // Look up with data.filename itself (same 256-byte layout as the key).
+    // Copying it into a second 256-byte key put ~540 bytes on the 512-byte BPF
+    // stack, and the verifier rejected the whole program.
+    u32 *val = honeypot_paths.lookup((struct honeypot_key_t *)data.filename);
     if (val) {
         honeypot_events.perf_submit(args, &data, sizeof(data));
     }
@@ -204,9 +205,10 @@ TRACEPOINT_PROBE(syscalls, sys_enter_openat2) {
     bpf_probe_read_user_str(&data.filename, sizeof(data.filename), args->filename);
     data.flags = 0;  // openat2 flags are in a struct, not a flat int — set 0 as safe default
 
-    struct honeypot_key_t key = {};
-    __builtin_memcpy(key.path, data.filename, sizeof(key.path));
-    u32 *val = honeypot_paths.lookup(&key);
+    // Look up with data.filename itself (same 256-byte layout as the key).
+    // Copying it into a second 256-byte key put ~540 bytes on the 512-byte BPF
+    // stack, and the verifier rejected the whole program.
+    u32 *val = honeypot_paths.lookup((struct honeypot_key_t *)data.filename);
     if (val) {
         honeypot_events.perf_submit(args, &data, sizeof(data));
     }
