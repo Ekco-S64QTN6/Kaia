@@ -33,6 +33,33 @@ Modifying any of these trips the detector:
 The detector watches **itself**, `security/db.py`, and `kaia-lockdown.sh` deliberately:
 without that, the cheapest bypass in the system is to neutralise the watchdog first.
 
+## Privilege watch (alert only)
+
+`security/privilege_watch.py` runs inside the same 30 s tamper loop and watches the
+files that *grant* privilege on the host:
+
+| Path | Logged as **critical** when |
+|---|---|
+| `/etc/sudoers`, every file in `/etc/sudoers.d/` | an added line contains `NOPASSWD:` |
+| `/etc/passwd` | a non-root account with uid 0 appears |
+| `/etc/group` | `root`, `wheel`, `sudo` or `admin` gains members |
+| `/etc/ld.so.preload` | it appears or gains a non-comment line |
+
+Any other change to those files is logged as an ordinary change. **Nothing here ever
+locks the host down or blocks startup**: pacman adds system users and you edit sudo
+rules, so these files change legitimately. Each change is reported once: a journal line
+listing the lines added and removed, plus a `privilege_config_changed` /
+`privilege_config_critical` security event (disposition `observed`) that the HUD's
+event feed shows with the file path.
+
+The last-seen state lives in `$STATE_DIR/privilege_watch.json` (root, mode 0600), so an
+edit made while the gate was stopped or the host was off is reported at the next start,
+marked "while Kaia was not running". Files in `sudoers.d` whose names contain `.` or
+end in `~` are skipped because sudo itself ignores them (that includes visudo's temporary
+files). Turn the watch off with `KAIA_PRIVILEGE_WATCH=0`.
+
+Read recent alerts: `journalctl -u kaia-policy-gate | grep -i "privilege config"`.
+
 ## Deployment model
 
 **Develop in a checkout; run from `/opt/kaia`.**

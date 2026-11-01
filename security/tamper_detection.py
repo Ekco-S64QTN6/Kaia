@@ -25,6 +25,9 @@ class TamperDetector:
         self._fired = {}
         # Timestamps of recent lockdown triggers, for the circuit breaker.
         self._lockdown_times = []
+        # Alert-only watch on sudoers/passwd/group/ld.so.preload, created in
+        # start(). Never part of the trusted baseline, never a lockdown trigger.
+        self.privilege_watch = None
 
         # Protect code that can make, enforce, or reset a security decision.
         workspace = os.path.abspath(config.WORKSPACE_DIR)
@@ -371,9 +374,32 @@ class TamperDetector:
                 raise RuntimeError(f"Cannot hash SQLite audit ledger; refusing to start: {filepath}")
             self._baselines[filepath] = (digest, ("sqlite", row_count))
 
+        self._start_privilege_watch()
+
         self._thread = threading.Thread(target=self._run, daemon=True, name="tamper-detector")
         self._thread.start()
         logger.info("Tamper detection thread started successfully.")
+
+    def _start_privilege_watch(self):
+        """Start the alert-only privilege watch; failures are logged, never raised.
+
+        It must not be able to stop the integrity monitor: these files change
+        legitimately and the watch only ever records what it sees.
+        """
+        if os.environ.get("KAIA_PRIVILEGE_WATCH", "1").strip().lower() in ("0", "false", "no"):
+            logger.warning("Privilege watch disabled (KAIA_PRIVILEGE_WATCH=0)")
+            return
+        try:
+            from security.privilege_watch import PrivilegeConfigWatcher, STATE_FILENAME
+            watcher = PrivilegeConfigWatcher(
+                os.path.join(str(config.STATE_DIR), STATE_FILENAME),
+                log_event=log_security_event,
+            )
+            watcher.start()
+            self.privilege_watch = watcher
+        except Exception as e:
+            logger.error(f"Privilege watch failed to start (integrity monitoring continues): {e}")
+            self.privilege_watch = None
 
     def stop(self):
         self._stop_event.set()
@@ -409,6 +435,12 @@ class TamperDetector:
                     f"Tamper state cleared, file matches baseline again: {filepath}. "
                     "Detector re-armed for this path."
                 )
+
+        if self.privilege_watch is not None:
+            try:
+                self.privilege_watch.check()
+            except Exception as e:
+                logger.error(f"Privilege watch check failed: {e}")
 
     def _trigger_tamper_alert(self, filepath: str, reason: str, observed_state: str = ""):
         # Latch. The detector re-checks every 30s and the hash does not return to

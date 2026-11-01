@@ -10,6 +10,9 @@
 
 ### Security
 
+- Alert-only privilege watch (`security/privilege_watch.py`): changes to `/etc/sudoers`, `/etc/sudoers.d/*`, `/etc/passwd`, `/etc/group` and `/etc/ld.so.preload` are logged once with the added/removed lines and recorded as `privilege_config_changed`, or `privilege_config_critical` for a new NOPASSWD rule, a second uid-0 account, new members of a privileged group, or a preload library. It never locks down or blocks startup. State persists in `$STATE_DIR/privilege_watch.json`, so edits made while the gate was stopped are reported at the next start. The HUD feed shows the file path.
+- eBPF events use ring buffers with per-stream kernel drop counters instead of per-CPU perf buffers, which dropped events in every exec/unlinkat burst; drops are logged by stream name, and as errors for `honeypot_events`.
+- CI runs every `tests/test_*.py` except the documented legacy scripts; `tests/test_ci_covers_all_tests.py` fails when a new test file is not listed. `tests/test_ebpf_ringbuf_drops.py` had been missing from the list since it was added.
 - eBPF telemetry compiles again: add `<net/sock.h>`; `struct sock` was incomplete on current kernels, so the whole program (honeypot file watching included) failed to load on every boot.
 - Gate unit grants `CAP_BPF` + `CAP_PERFMON` so the probes can load; `CAP_SYS_ADMIN` remains a separate FIM decision.
 - Honeypot decoys are also matched by inode at `security_file_open`, catching relative paths, `./file` and recursive greps that never equalled the absolute decoy path; duplicate hits from both probes are reported once.
