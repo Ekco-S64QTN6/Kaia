@@ -293,13 +293,12 @@ class EBPFTelemetryEngine:
             return
         tbl = self.bpf["honeypot_paths"]
         for p in paths:
-            # Map path to key
-            p_bytes = p.encode("utf-8")[:255] + b"\x00"
-            # In BCC, we can set key directly
+            # BCC map keys must be the table's ctypes Key type, not raw bytes
+            # (raw bytes raised "byref() argument 1 must be _ctypes._CData").
             try:
-                # Pad to 256 bytes
-                padded = p_bytes.ljust(256, b"\x00")
-                tbl[padded] = ctypes.c_uint(1)
+                key = tbl.Key()
+                key.path = p.encode("utf-8")[:255]
+                tbl[key] = ctypes.c_uint(1)
             except Exception as e:
                 logger.error(f"Error registering honeypot path {p} in BPF map: {e}")
 
