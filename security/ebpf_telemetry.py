@@ -14,6 +14,13 @@ logger = logging.getLogger(__name__)
 # Bound pending honeypot detections separately from the bounded dashboard histories.
 HONEYPOT_HITS_MAX_ENTRIES = 1000
 
+# Order matches the count_drop() indexes in bpf_text.
+RINGBUF_STREAMS = (
+    "exec_events", "tcp_connect_events", "tcp_retransmit_events", "privilege_events",
+    "openat2_events", "honeypot_events", "delete_events",
+)
+RINGBUF_DROP_REPORT_INTERVAL = 30.0
+
 HAS_BCC = False
 try:
     from bcc import BPF
@@ -31,13 +38,28 @@ bpf_text = """
 // which silently disabled every probe, honeypots included.
 #include <net/sock.h>
 
+// Events travel through BPF ring buffers: one buffer per stream shared by all
+// CPUs, charged to the memory cgroup rather than RLIMIT_MEMLOCK. The old
+// per-CPU perf buffers (BCC default: 8 pages x 12 CPUs) overflowed in every
+// exec/unlink burst (package builds, pip installs) and BCC only printed an
+// anonymous "Possibly lost N samples". A full ring now increments a per-stream
+// counter that Python reports by name. Index order = RINGBUF_STREAMS in Python.
+BPF_PERCPU_ARRAY(ringbuf_drops, u64, 7);
+
+static __always_inline void count_drop(u32 stream) {
+    u64 *n = ringbuf_drops.lookup(&stream);
+    if (n) {
+        (*n)++;
+    }
+}
+
 struct exec_event_t {
     u32 pid;
     u32 uid;
     char comm[16];
     char filename[256];
 };
-BPF_PERF_OUTPUT(exec_events);
+BPF_RINGBUF_OUTPUT(exec_events, 256);  // 1024 KiB, shared by all CPUs
 
 struct tcp_connect_event_t {
     u32 pid;
@@ -45,7 +67,7 @@ struct tcp_connect_event_t {
     u32 daddr;
     u16 dport;
 };
-BPF_PERF_OUTPUT(tcp_connect_events);
+BPF_RINGBUF_OUTPUT(tcp_connect_events, 64);  // 256 KiB, shared by all CPUs
 
 struct tcp_retransmit_event_t {
     u32 saddr;
@@ -54,14 +76,14 @@ struct tcp_retransmit_event_t {
     u16 dport;
     u8 state;
 };
-BPF_PERF_OUTPUT(tcp_retransmit_events);
+BPF_RINGBUF_OUTPUT(tcp_retransmit_events, 16);  // 64 KiB, shared by all CPUs
 
 struct privilege_event_t {
     u32 pid;
     char comm[16];
     u32 uid;
 };
-BPF_PERF_OUTPUT(privilege_events);
+BPF_RINGBUF_OUTPUT(privilege_events, 16);  // 64 KiB, shared by all CPUs
 
 struct open_event_t {
     u32 pid;
@@ -69,15 +91,15 @@ struct open_event_t {
     char filename[256];
     u32 flags;
 };
-BPF_PERF_OUTPUT(openat2_events);
-BPF_PERF_OUTPUT(honeypot_events);
+BPF_RINGBUF_OUTPUT(openat2_events, 64);  // 256 KiB, shared by all CPUs
+BPF_RINGBUF_OUTPUT(honeypot_events, 64);  // 256 KiB, shared by all CPUs
 
 struct delete_event_t {
     u32 pid;
     char comm[16];
     char filename[256];
 };
-BPF_PERF_OUTPUT(delete_events);
+BPF_RINGBUF_OUTPUT(delete_events, 256);  // 1024 KiB, shared by all CPUs
 
 struct honeypot_key_t {
     char path[256];
@@ -106,7 +128,9 @@ int kprobe__security_file_open(struct pt_regs *ctx, struct file *file) {
     data.pid = bpf_get_current_pid_tgid() >> 32;
     bpf_get_current_comm(&data.comm, sizeof(data.comm));
     data.flags = *idx | 0x80000000;
-    honeypot_events.perf_submit(ctx, &data, sizeof(data));
+    if (honeypot_events.ringbuf_output(&data, sizeof(data), 0) != 0) {
+        count_drop(5);  // honeypot_events
+    }
     return 0;
 }
 
@@ -116,7 +140,9 @@ TRACEPOINT_PROBE(syscalls, sys_enter_execve) {
     data.uid = bpf_get_current_uid_gid();
     bpf_get_current_comm(&data.comm, sizeof(data.comm));
     bpf_probe_read_user_str(&data.filename, sizeof(data.filename), args->filename);
-    exec_events.perf_submit(args, &data, sizeof(data));
+    if (exec_events.ringbuf_output(&data, sizeof(data), 0) != 0) {
+        count_drop(0);  // exec_events
+    }
     return 0;
 }
 
@@ -133,7 +159,9 @@ int kprobe__tcp_v4_connect(struct pt_regs *ctx, struct sock *sk) {
     data.daddr = daddr;
     data.dport = bpf_ntohs(dport);
     
-    tcp_connect_events.perf_submit(ctx, &data, sizeof(data));
+    if (tcp_connect_events.ringbuf_output(&data, sizeof(data), 0) != 0) {
+        count_drop(1);  // tcp_connect_events
+    }
     return 0;
 }
 
@@ -155,7 +183,9 @@ int kprobe__tcp_retransmit_skb(struct pt_regs *ctx, struct sock *sk, struct sk_b
     data.dport = bpf_ntohs(dport);
     data.state = state;
     
-    tcp_retransmit_events.perf_submit(ctx, &data, sizeof(data));
+    if (tcp_retransmit_events.ringbuf_output(&data, sizeof(data), 0) != 0) {
+        count_drop(2);  // tcp_retransmit_events
+    }
     return 0;
 }
 
@@ -164,7 +194,9 @@ TRACEPOINT_PROBE(syscalls, sys_enter_setuid) {
     data.pid = bpf_get_current_pid_tgid() >> 32;
     bpf_get_current_comm(&data.comm, sizeof(data.comm));
     data.uid = args->uid;
-    privilege_events.perf_submit(args, &data, sizeof(data));
+    if (privilege_events.ringbuf_output(&data, sizeof(data), 0) != 0) {
+        count_drop(3);  // privilege_events
+    }
     return 0;
 }
 
@@ -173,7 +205,9 @@ TRACEPOINT_PROBE(syscalls, sys_enter_setreuid) {
     data.pid = bpf_get_current_pid_tgid() >> 32;
     bpf_get_current_comm(&data.comm, sizeof(data.comm));
     data.uid = args->ruid;
-    privilege_events.perf_submit(args, &data, sizeof(data));
+    if (privilege_events.ringbuf_output(&data, sizeof(data), 0) != 0) {
+        count_drop(3);  // privilege_events
+    }
     return 0;
 }
 
@@ -189,7 +223,9 @@ TRACEPOINT_PROBE(syscalls, sys_enter_openat) {
     // stack, and the verifier rejected the whole program.
     u32 *val = honeypot_paths.lookup((struct honeypot_key_t *)data.filename);
     if (val) {
-        honeypot_events.perf_submit(args, &data, sizeof(data));
+        if (honeypot_events.ringbuf_output(&data, sizeof(data), 0) != 0) {
+        count_drop(5);  // honeypot_events
+    }
     }
     
     // Do not stream every openat call through Python: that event is very high
@@ -210,10 +246,14 @@ TRACEPOINT_PROBE(syscalls, sys_enter_openat2) {
     // stack, and the verifier rejected the whole program.
     u32 *val = honeypot_paths.lookup((struct honeypot_key_t *)data.filename);
     if (val) {
-        honeypot_events.perf_submit(args, &data, sizeof(data));
+        if (honeypot_events.ringbuf_output(&data, sizeof(data), 0) != 0) {
+        count_drop(5);  // honeypot_events
+    }
     }
 
-    openat2_events.perf_submit(args, &data, sizeof(data));
+    if (openat2_events.ringbuf_output(&data, sizeof(data), 0) != 0) {
+        count_drop(4);  // openat2_events
+    }
     return 0;
 }
 
@@ -222,7 +262,9 @@ TRACEPOINT_PROBE(syscalls, sys_enter_unlinkat) {
     data.pid = bpf_get_current_pid_tgid() >> 32;
     bpf_get_current_comm(&data.comm, sizeof(data.comm));
     bpf_probe_read_user_str(&data.filename, sizeof(data.filename), args->pathname);
-    delete_events.perf_submit(args, &data, sizeof(data));
+    if (delete_events.ringbuf_output(&data, sizeof(data), 0) != 0) {
+        count_drop(6);  // delete_events
+    }
     return 0;
 }
 """
@@ -258,7 +300,12 @@ class EBPFTelemetryEngine:
         self.honeypot_lock = threading.Lock()
         
         self.lock = threading.Lock()
-        
+
+        # Events the kernel could not queue because a ring buffer was full.
+        self.ringbuf_drops = {name: 0 for name in RINGBUF_STREAMS}
+        self._last_drop_report = 0.0
+        self._drop_read_failed = False
+
     def start(self):
         if not HAS_BCC:
             logger.warning("BCC not installed, cannot start eBPF engine.")
@@ -267,18 +314,18 @@ class EBPFTelemetryEngine:
         try:
             self.bpf = BPF(text=bpf_text)
             
-            # Register perf buffer callbacks
-            self.bpf["exec_events"].open_perf_buffer(self._handle_exec_event)
-            self.bpf["openat2_events"].open_perf_buffer(self._handle_openat2_event)
-            self.bpf["delete_events"].open_perf_buffer(self._handle_delete_event)
-            self.bpf["tcp_connect_events"].open_perf_buffer(self._handle_tcp_connect)
-            self.bpf["tcp_retransmit_events"].open_perf_buffer(self._handle_tcp_retransmit)
-            self.bpf["privilege_events"].open_perf_buffer(self._handle_privilege_event)
-            self.bpf["honeypot_events"].open_perf_buffer(self._handle_honeypot_event)
+            # Register ring buffer callbacks (one shared poller for all of them)
+            self.bpf["exec_events"].open_ring_buffer(self._handle_exec_event)
+            self.bpf["openat2_events"].open_ring_buffer(self._handle_openat2_event)
+            self.bpf["delete_events"].open_ring_buffer(self._handle_delete_event)
+            self.bpf["tcp_connect_events"].open_ring_buffer(self._handle_tcp_connect)
+            self.bpf["tcp_retransmit_events"].open_ring_buffer(self._handle_tcp_retransmit)
+            self.bpf["privilege_events"].open_ring_buffer(self._handle_privilege_event)
+            self.bpf["honeypot_events"].open_ring_buffer(self._handle_honeypot_event)
             
-            self.polling_thread = threading.Thread(target=self._poll_perf_buffers, daemon=True, name="ebpf-perf-poll")
+            self.polling_thread = threading.Thread(target=self._poll_ring_buffers, daemon=True, name="ebpf-ringbuf-poll")
             self.polling_thread.start()
-            logger.info("eBPF Telemetry engine loaded and polling perf buffers.")
+            logger.info("eBPF Telemetry engine loaded and polling ring buffers.")
             return True
         except Exception as e:
             logger.error(f"Failed to load or compile eBPF probes: {e}")
@@ -336,15 +383,52 @@ class EBPFTelemetryEngine:
                 logger.error(f"Error registering honeypot inode for {p}: {e}")
         return registered
 
-    def _poll_perf_buffers(self):
+    def _poll_ring_buffers(self):
         while not self.stop_event.is_set():
             try:
-                self.bpf.perf_buffer_poll(timeout=100)
+                self.bpf.ring_buffer_poll(timeout=100)
+                self._report_ringbuf_drops()
             except Exception as e:
-                logger.error(f"Error polling BPF perf buffers: {e}")
+                logger.error(f"Error polling BPF ring buffers: {e}")
                 time.sleep(0.5)
 
-    # --- Perf Buffer Event Callbacks ---
+    def _read_ringbuf_drop_totals(self) -> dict:
+        """Kernel-side drop counters, summed over CPUs: {stream: total since load}."""
+        tbl = self.bpf["ringbuf_drops"]
+        totals = {}
+        for i, name in enumerate(RINGBUF_STREAMS):
+            totals[name] = int(sum(tbl[tbl.Key(i)]))
+        return totals
+
+    def _report_ringbuf_drops(self, now=None):
+        """Every RINGBUF_DROP_REPORT_INTERVAL s, log new drops once, by stream name."""
+        now = time.time() if now is None else now
+        if now - self._last_drop_report < RINGBUF_DROP_REPORT_INTERVAL:
+            return
+        self._last_drop_report = now
+        try:
+            totals = self._read_ringbuf_drop_totals()
+        except Exception as e:
+            if not self._drop_read_failed:
+                logger.warning(f"Could not read ring buffer drop counters: {e}")
+                self._drop_read_failed = True
+            return
+        new = {n: t - self.ringbuf_drops.get(n, 0) for n, t in totals.items() if t > self.ringbuf_drops.get(n, 0)}
+        self.ringbuf_drops.update(totals)
+        if not new:
+            return
+        summary = ", ".join(f"{n}={c}" for n, c in sorted(new.items()))
+        if "honeypot_events" in new:
+            # A dropped decoy read is a missed intrusion signal, not just telemetry.
+            logger.error(f"eBPF ring buffer full: dropped events: {summary}")
+        else:
+            logger.warning(f"eBPF ring buffer full: dropped events: {summary}")
+
+    def get_ringbuf_drops(self) -> dict:
+        """Cumulative dropped-event counts per stream, as of the last report."""
+        return dict(self.ringbuf_drops)
+
+    # --- Ring Buffer Event Callbacks ---
 
     def _handle_exec_event(self, cpu, data, size):
         event = self.bpf["exec_events"].event(data)
