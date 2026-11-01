@@ -71,6 +71,39 @@ Committed together, after reviewing ChatGPT's PRs #85–#89.
   integrity check fails and it locks the host down. Never leave a deploy with
   the gate enabled and the baseline stale; disable the gate instead.
 
+## Fixes that must not be reverted (2026-11-01)
+
+- **`#include <net/sock.h>` in the eBPF program.** Without it `struct sock` is
+  incomplete on current kernels and the *whole* BPF program fails to compile;
+  every probe was off, honeypot file watching included, from at least
+  2026-10-25 until this fix. `test_bpf_program_includes_sock_header` guards it.
+- **The gate unit carries `CAP_BPF CAP_PERFMON`.** BCC was not installed when the
+  2026-09-08 checklist dropped capabilities; with only `CAP_NET_ADMIN CAP_NET_RAW`
+  the probes cannot load even when they compile. `CAP_SYS_ADMIN` is still a
+  separate decision (fanotify FIM, checklist step 1) — do not add it for eBPF.
+- **Honeypots match by inode as well as by path string.** The openat probes only
+  see the literal string passed to `open()`, so `cd ~; cat flag.txt`, `./flag.txt`
+  and `grep -r` never matched an absolute decoy path. `kprobe__security_file_open`
+  matches the opened file's `(s_dev, i_ino)`; an absolute open that hits both
+  probes is reported once (2 s dedupe per pid+path).
+- **Canary flag files** (`security/canaries/`, installed by
+  `scripts/install_canaries.py` from `install_services.sh`): `~/flag.txt` for the
+  sudo user and `/root/root.txt`, each with a unique `KAIA-CANARY-…` ID recorded in
+  `/etc/kaia/canary_ids`. Reads log `honeypot_canary_read`. The unit uses
+  `ProtectHome=tmpfs` plus `BindReadOnlyPaths=` of exactly those two files — do not
+  widen it to `read-only`. The installer never overwrites a file it cannot prove is
+  a canary. If the owner ever *authorizes* an AI agent or pentest on this host,
+  remove the canaries first: their text states no such authorization exists.
+- **Honeypot IP attribution uses only sockets the process owns.**
+  `/proc/<pid>/net/tcp` lists every socket in the network namespace, so the old
+  "first remote address" logic blamed — and persistently auto-blocked — whatever
+  unrelated connection came first (an API, Discord, GitHub). Now: socket inodes
+  from `/proc/<pid>/fd`, walking only to the grandparent (reverse shell, ssh,
+  agent → its API). Unknown ownership means no block. Consequence: if an agent
+  *you* run reads a decoy, its model API endpoint gets blocked — by design for a
+  hijacked agent; lift it with the HUD unblock. Never self-test a canary from an
+  AI agent session.
+
 ## Reviewed and correct — do not "fix"
 
 - **Single-use capability tokens** (#86). Every production caller

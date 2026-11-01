@@ -1,4 +1,5 @@
 import os
+import stat
 import sys
 import time
 import socket
@@ -25,6 +26,10 @@ bpf_text = """
 #include <uapi/linux/ptrace.h>
 #include <linux/sched.h>
 #include <linux/fs.h>
+// struct sock (tcp_v4_connect / tcp_retransmit_skb probes). Without it newer
+// kernels leave the type incomplete and the WHOLE program fails to compile,
+// which silently disabled every probe, honeypots included.
+#include <net/sock.h>
 
 struct exec_event_t {
     u32 pid;
@@ -78,6 +83,32 @@ struct honeypot_key_t {
     char path[256];
 };
 BPF_HASH(honeypot_paths, struct honeypot_key_t, u32);
+
+// Path matching above sees only the exact string handed to open(): "cat flag.txt"
+// after a cd, "./flag.txt" or "grep -r" never equal an absolute decoy path.
+// Matching the opened file's (device, inode) at the LSM open hook catches every
+// route to it. The map value is the decoy's index; Python maps it back to a path.
+struct honeypot_inode_t {
+    u64 dev;
+    u64 ino;
+};
+BPF_HASH(honeypot_inodes, struct honeypot_inode_t, u32);
+
+int kprobe__security_file_open(struct pt_regs *ctx, struct file *file) {
+    struct honeypot_inode_t key = {};
+    key.ino = file->f_inode->i_ino;
+    key.dev = file->f_inode->i_sb->s_dev;
+    u32 *idx = honeypot_inodes.lookup(&key);
+    if (!idx) {
+        return 0;
+    }
+    struct open_event_t data = {};
+    data.pid = bpf_get_current_pid_tgid() >> 32;
+    bpf_get_current_comm(&data.comm, sizeof(data.comm));
+    data.flags = *idx | 0x80000000;
+    honeypot_events.perf_submit(ctx, &data, sizeof(data));
+    return 0;
+}
 
 TRACEPOINT_PROBE(syscalls, sys_enter_execve) {
     struct exec_event_t data = {};
@@ -153,9 +184,10 @@ TRACEPOINT_PROBE(syscalls, sys_enter_openat) {
     bpf_probe_read_user_str(&data.filename, sizeof(data.filename), args->filename);
     data.flags = args->flags;
 
-    struct honeypot_key_t key = {};
-    __builtin_memcpy(key.path, data.filename, sizeof(key.path));
-    u32 *val = honeypot_paths.lookup(&key);
+    // Look up with data.filename itself (same 256-byte layout as the key).
+    // Copying it into a second 256-byte key put ~540 bytes on the 512-byte BPF
+    // stack, and the verifier rejected the whole program.
+    u32 *val = honeypot_paths.lookup((struct honeypot_key_t *)data.filename);
     if (val) {
         honeypot_events.perf_submit(args, &data, sizeof(data));
     }
@@ -173,9 +205,10 @@ TRACEPOINT_PROBE(syscalls, sys_enter_openat2) {
     bpf_probe_read_user_str(&data.filename, sizeof(data.filename), args->filename);
     data.flags = 0;  // openat2 flags are in a struct, not a flat int — set 0 as safe default
 
-    struct honeypot_key_t key = {};
-    __builtin_memcpy(key.path, data.filename, sizeof(key.path));
-    u32 *val = honeypot_paths.lookup(&key);
+    // Look up with data.filename itself (same 256-byte layout as the key).
+    // Copying it into a second 256-byte key put ~540 bytes on the 512-byte BPF
+    // stack, and the verifier rejected the whole program.
+    u32 *val = honeypot_paths.lookup((struct honeypot_key_t *)data.filename);
     if (val) {
         honeypot_events.perf_submit(args, &data, sizeof(data));
     }
@@ -217,6 +250,10 @@ class EBPFTelemetryEngine:
         self.retrans_deque = deque(maxlen=500)
         self.priv_deque = deque(maxlen=500)
         self.honeypot_hits = deque(maxlen=HONEYPOT_HITS_MAX_ENTRIES)
+        # Index -> decoy path for inode-matched hits (map value in honeypot_inodes).
+        self.honeypot_inode_paths = []
+        # (pid, path) -> last hit time; one open can match both probes.
+        self._recent_honeypot_hits = {}
         self.honeypot_dropped_events = 0
         self.honeypot_lock = threading.Lock()
         
@@ -256,15 +293,48 @@ class EBPFTelemetryEngine:
             return
         tbl = self.bpf["honeypot_paths"]
         for p in paths:
-            # Map path to key
-            p_bytes = p.encode("utf-8")[:255] + b"\x00"
-            # In BCC, we can set key directly
+            # BCC map keys must be the table's ctypes Key type, not raw bytes
+            # (raw bytes raised "byref() argument 1 must be _ctypes._CData").
             try:
-                # Pad to 256 bytes
-                padded = p_bytes.ljust(256, b"\x00")
-                tbl[padded] = ctypes.c_uint(1)
+                key = tbl.Key()
+                key.path = p.encode("utf-8")[:255]
+                tbl[key] = ctypes.c_uint(1)
             except Exception as e:
                 logger.error(f"Error registering honeypot path {p} in BPF map: {e}")
+
+    @staticmethod
+    def _kernel_dev(st_dev: int) -> int:
+        """Userspace st_dev -> the kernel's internal dev_t (MKDEV: major<<20 | minor)."""
+        return (os.major(st_dev) << 20) | os.minor(st_dev)
+
+    def register_honeypot_inodes(self, paths: list) -> int:
+        """Watch decoys by (device, inode) so any path form that opens them is caught.
+
+        Uses lstat: a symlink planted at a decoy path is never followed or watched.
+        Returns how many paths were registered.
+        """
+        if not self.bpf or not HAS_BCC:
+            return 0
+        tbl = self.bpf["honeypot_inodes"]
+        registered = 0
+        for p in paths:
+            try:
+                st = os.lstat(p)
+            except OSError as e:
+                logger.warning(f"Honeypot inode watch skipped for {p}: {e}")
+                continue
+            if not stat.S_ISREG(st.st_mode):
+                logger.warning(f"Honeypot inode watch skipped for non-regular file {p}")
+                continue
+            idx = len(self.honeypot_inode_paths)
+            self.honeypot_inode_paths.append(p)
+            key = tbl.Key(self._kernel_dev(st.st_dev), st.st_ino)
+            try:
+                tbl[key] = ctypes.c_uint(idx)
+                registered += 1
+            except Exception as e:
+                logger.error(f"Error registering honeypot inode for {p}: {e}")
+        return registered
 
     def _poll_perf_buffers(self):
         while not self.stop_event.is_set():
@@ -412,6 +482,12 @@ class EBPFTelemetryEngine:
     def _handle_honeypot_event(self, cpu, data, size):
         event = self.bpf["honeypot_events"].event(data)
         filename = event.filename.decode("utf-8", "ignore")
+        flags = getattr(event, "flags", 0) or 0
+        if flags & 0x80000000:
+            # Inode match from security_file_open: translate index -> decoy path.
+            idx = flags & 0x7FFFFFFF
+            if idx < len(self.honeypot_inode_paths):
+                filename = self.honeypot_inode_paths[idx]
         comm = event.comm.decode("utf-8", "ignore")
         from security.telemetry_sanitizer import sanitize_telemetry
         raw = {"pid": str(event.pid), "comm": comm, "path": filename}
@@ -420,6 +496,19 @@ class EBPFTelemetryEngine:
         clean_comm = clean.get("comm", "")
         clean_filename = clean.get("path", "")
         with self.honeypot_lock:
+            # An absolute-path open matches both the path probe and the inode
+            # probe; report it once.
+            now = time.time()
+            key = (clean_pid, clean_filename)
+            last = self._recent_honeypot_hits.get(key)
+            if last is not None and now - last < 2.0:
+                return
+            self._recent_honeypot_hits[key] = now
+            if len(self._recent_honeypot_hits) > HONEYPOT_HITS_MAX_ENTRIES:
+                cutoff = now - 2.0
+                self._recent_honeypot_hits = {
+                    k: t for k, t in self._recent_honeypot_hits.items() if t >= cutoff
+                }
             # Keep the newest bounded window. Record overflow so an event burst
             # cannot silently convert into unbounded root-process memory use.
             if len(self.honeypot_hits) == HONEYPOT_HITS_MAX_ENTRIES:
