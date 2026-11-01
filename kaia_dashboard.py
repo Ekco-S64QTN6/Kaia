@@ -1354,6 +1354,12 @@ class AuditLogCollector:
                 detail = f"hash:{payload_hash[:8]}" if payload_hash else ""
                 if source:
                     detail += f" ({source})"
+                if str(event_type).startswith("privilege_config"):
+                    # Alert-only privilege watch: the file that changed is the
+                    # whole point; a hash fragment says nothing to an operator.
+                    detail = f"{actor} ({source})"
+                    if event_type == "privilege_config_critical":
+                        level = "ERROR"
                 
                 msg = f"{icon} {event_type.upper():<12} │ {status:<8} │ {detail}"
                 entries.append(LogEntry(timestamp=disp_ts, level=level, message=msg))

@@ -35,6 +35,9 @@ tests=(
   tests/test_web_bridge_guards.py
   tests/test_tier5_security.py
   tests/test_rotate_ledger_security.py
+  tests/test_ebpf_ringbuf_drops.py
+  tests/test_privilege_watch.py
+  tests/test_ci_covers_all_tests.py
 )
 
 # Feature-specific tests are included as soon as their source files are present.

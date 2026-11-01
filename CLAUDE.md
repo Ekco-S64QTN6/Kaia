@@ -104,6 +104,17 @@ Committed together, after reviewing ChatGPT's PRs #85–#89.
   hijacked agent; lift it with the HUD unblock. Never self-test a canary from an
   AI agent session.
 
+- **The privilege watch is alert-only by design.** `security/privilege_watch.py`
+  watches sudoers, `sudoers.d`, passwd, group and `ld.so.preload`. Those files change
+  legitimately (pacman sysusers, the owner's own sudo edits), so the watch must never
+  join the trusted baseline, block startup, or call `trigger_lockdown`: wiring it to the
+  lockdown tier would lock the owner out on a routine package update. Every call from
+  `TamperDetector` is wrapped so a watch failure cannot stop integrity monitoring.
+  `tests/test_privilege_watch.py` guards both properties.
+- **Every test file must be in `scripts/run_ci_tests.sh`.** CI ran green for a whole
+  PR (#95) without ever running its new test file. `tests/test_ci_covers_all_tests.py`
+  now fails on an unlisted file; legacy host-dependent scripts are excluded by name.
+
 ## Reviewed and correct — do not "fix"
 
 - **Single-use capability tokens** (#86). Every production caller
