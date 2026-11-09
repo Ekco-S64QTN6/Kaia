@@ -53,8 +53,7 @@ face rig) and the command console, behind a strict self-hosted CSP and loopback 
 
 ## Next (Tier 5, ordered)
 
-1. **Alert explanations in the HUD.** Every event type now has a level and a reason
-   (`security/alert_levels.py`); surface the reason on hover and let the operator filter the feed by level.
+1. **Done 2026-11-09:** alert levels and reasons in the HUD feed, with a High+ filter.
 2. **Attestation against signed packages** (Supply chain, above): verify the critical files
    against the signed `.pkg.tar.zst` in the pacman cache, closing the unsigned-database gap.
 3. **Wider secrets scanning.** Kaia's own state, logs and tree are scanned (2026-11-09); extend to

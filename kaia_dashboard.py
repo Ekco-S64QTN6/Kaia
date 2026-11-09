@@ -80,6 +80,16 @@ def format_security_event(event_type, source, actor, payload_hash, disposition) 
         detail += f" ({source})"
     return feed_level, f"{icon} {str(event_type).upper():<12} │ {level.upper():<8} │ {status:<8} │ {detail}"
 
+
+def security_event_entry(timestamp, event_type, source, actor, payload_hash, disposition) -> "LogEntry":
+    """A feed entry carrying the event's level and reason as fields, not only as text."""
+    feed_level, msg = format_security_event(event_type, source, actor, payload_hash, disposition)
+    level, reason = alert_levels.level_of(event_type)
+    detail = msg.split("│")[-1].strip()
+    status = "approved" if disposition == "approved" else "denied" if disposition in ("blocked", "denied") else str(disposition)
+    return LogEntry(timestamp=timestamp, level=feed_level, message=msg, event=str(event_type),
+                    status=status, alert_level=level, reason=reason, detail=detail)
+
 # Optional GPU library
 try:
     import pynvml
@@ -196,6 +206,12 @@ class LogEntry:
     timestamp: str
     level: str      # "INFO" | "WARN" | "ERROR" | "SUCCESS"
     message: str
+    # Structured fields, set for security events (security.alert_levels).
+    event: str = ""
+    status: str = ""
+    alert_level: str = ""
+    reason: str = ""
+    detail: str = ""
 
 
 @dataclass(frozen=True)
@@ -1595,8 +1611,7 @@ class AuditLogCollector:
                 self._last_seen_rowid = rowid
                 disp_ts = ts[:19].split("T")[-1] if "T" in str(ts) else str(ts)[:8]
                 
-                level, msg = format_security_event(event_type, source, actor, payload_hash, disposition)
-                entries.append(LogEntry(timestamp=disp_ts, level=level, message=msg))
+                entries.append(security_event_entry(disp_ts, event_type, source, actor, payload_hash, disposition))
             conn.close()
         except Exception:
             pass  # Never crash the collector

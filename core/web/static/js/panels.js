@@ -51,6 +51,12 @@ class FitTable {
  * into columns. Unrecognised lines fall back to the raw message.
  */
 function parseAuditLine(log) {
+  if (log.event) {
+    // Security events carry their fields; no string parsing needed.
+    return { time: log.timestamp || '', event: String(log.event).toUpperCase(), result: String(log.status || 'observed').toLowerCase(),
+             source: log.detail || '', hash: '', level: String(log.level || '').toUpperCase(),
+             alertLevel: String(log.alert_level || ''), reason: String(log.reason || '') };
+  }
   const msg = String(log.message || '');
   const parts = msg.split('│').map((p) => p.trim());
   let event = msg, result = '', source = '', hash = '';
@@ -67,7 +73,7 @@ function parseAuditLine(log) {
     else if (level === 'SUCCESS') result = 'ok';
     else result = level.toLowerCase() || 'info';
   }
-  return { time: log.timestamp || '', event, result, source, hash, level };
+  return { time: log.timestamp || '', event, result, source, hash, level, alertLevel: '', reason: '' };
 }
 
 function resultTag(result) {
