@@ -49,7 +49,7 @@ SCHEMA = 1
 # Controls the Policy Gate daemon runs; each must report its own state.
 GATE_CONTROLS = (
     "policy_gate", "tamper_detection", "privilege_watch", "fim", "yara", "ebpf",
-    "honeypot", "decoy_listeners", "discovery", "pacman_monitor",
+    "honeypot", "decoy_listeners", "discovery", "pacman_monitor", "package_attestation",
 )
 
 

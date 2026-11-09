@@ -30,7 +30,7 @@ installed host can prove what is running.
 | **Execution-blocking FIM** | Notification-mode fanotify observes, does not block | A design for blocking. Two candidates, both available on the host kernel (`CONFIG_FANOTIFY_ACCESS_PERMISSIONS=y`; BPF LSM active, BTF present): fanotify `FAN_OPEN_EXEC_PERM` (needs `CAP_SYS_ADMIN`, userspace verdict per exec, deadlock and timeout semantics) or a BPF LSM `bprm_check_security` program (in-kernel verdict, fails open if unloaded). Either needs explicit fail-open/fail-closed rules and target-kernel tests |
 | **End-to-end FIM / YARA response** | Rule generation, isolated validation and same-FD scanning exist | The full event → verdict → response path, exercised on a controlled host |
 | **Network discovery** | NB and NBSTAT answer records, first-level encoded names, scoped names, bounded DNS compression parsing, and rejection of fragmented/reserved-flag IPv4 frames before UDP parsing | Alternate NBNS name encodings and target-network validation |
-| **Supply chain** | Completed pacman transactions are recorded | Installed-content attestation: verify files against each package's `mtree` (`/var/lib/pacman/local/*/mtree`, present on the host), and, for trust beyond the local database, against signed packages in the cache. Then AUR build tracking, repository and metadata changes, dependency-graph drift |
+| **Supply chain** | Completed pacman transactions are recorded; critical installed files (setuid/setgid, PAM, loader, libc, executor binaries) are attested against pacman's `mtree` every 6 h, and unowned setuid files under `/usr` are found | Attestation against signed packages in the cache (the local database is unsigned); wider scope on demand; AUR build tracking, repository and metadata changes, dependency-graph drift |
 | **Network decoys** | Filesystem decoys are non-destructive and self-cleaning | The `/root/.ssh` decoy cannot be created under `ProtectHome=tmpfs` (#102); decoy listeners and their namespace (the installer does not provision them) |
 | **Audit ledger growth** | Append-only JSONL; readers in the HUD are bounded | Each dashboard poll is audited (~17k rows/day while it is open); summarise repeated read-only diagnostics or rotate on a schedule, without losing any mutating or denied request (#105) |
 | **Capability-token replay protection** | HMAC signature, scope, bounded UTC validity and durable single-use consumption; the database fails closed | Include the persistent registry in deployed-host backup, permissions and capacity verification |
@@ -57,8 +57,8 @@ face rig) and the command console, behind a strict self-hosted CSP and loopback 
 1. **Alert confidence.** Events now have a meaningful severity at the source (privilege gains,
    privilege config, honeypots, tamper). Give every event type an explicit level and an
    explainable reason, and drive the HUD's counts from it instead of per-pane type lists.
-2. **Installed-content attestation** (Supply chain, above): the cheapest high-value detection
-   left, deterministic and testable from fixtures.
+2. **Attestation against signed packages** (Supply chain, above): verify the critical files
+   against the signed `.pkg.tar.zst` in the pacman cache, closing the unsigned-database gap.
 3. **Secrets-exposure scanning** of configured source/config/log scopes, redacting matches.
 4. **Backup checks**: existence, recency and a test restore, never inferred from file presence.
 5. **Behavioural baselines** for processes, connections and file activity, and only after alert

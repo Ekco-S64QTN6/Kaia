@@ -962,6 +962,12 @@ if __name__ == "__main__":
     pacman_monitor.start()
     control_health.report("pacman_monitor", "active", "following pacman.log transactions",
                           heartbeat_interval=pacman_monitor.poll_interval)
+
+    # Installed-content attestation of setuid binaries, PAM, the loader and the
+    # executor's binaries against pacman's records. Alert-only.
+    from security.package_attestation import PackageAttestationMonitor
+    package_attestation = PackageAttestationMonitor()
+    package_attestation.start()
     
     # Configure logging with rotation and stdout
     from logging.handlers import RotatingFileHandler
@@ -1049,4 +1055,5 @@ if __name__ == "__main__":
         discovery.stop()
         honeypots.stop()
         pacman_monitor.stop()
+        package_attestation.stop()
         health_publisher.stop()
