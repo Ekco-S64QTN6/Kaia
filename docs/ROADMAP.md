@@ -58,7 +58,8 @@ face rig) and the command console, behind a strict self-hosted CSP and loopback 
    (`security/alert_levels.py`); surface the reason on hover and let the operator filter the feed by level.
 2. **Attestation against signed packages** (Supply chain, above): verify the critical files
    against the signed `.pkg.tar.zst` in the pacman cache, closing the unsigned-database gap.
-3. **Secrets-exposure scanning** of configured source/config/log scopes, redacting matches.
+3. **Wider secrets scanning.** Kaia's own state, logs and tree are scanned (2026-11-09); extend to
+   operator-configured scopes (home dotfiles, shell history) outside the gate's `ProtectHome` sandbox.
 4. **Backup checks**: existence, recency and a test restore, never inferred from file presence.
 5. **Behavioural baselines** for processes, connections and file activity, and only after alert
    confidence, so their output has somewhere honest to go.

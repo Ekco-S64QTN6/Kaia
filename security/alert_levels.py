@@ -35,6 +35,7 @@ EVENT_LEVELS: Dict[str, Tuple[str, str]] = {
     "privilege_escalation": ("info", "legacy record (before 2026-11-09): a setuid() attempt, not a gain"),
     "privilege_config_critical": ("critical", "NOPASSWD, a second uid 0, a privileged group member or a preload"),
     "privilege_config_changed": ("medium", "a privilege-granting file changed"),
+    "secret_exposure": ("critical", "a credential appears in Kaia's logs, state or deployed tree"),
     # Installed content.
     "package_file_altered": ("critical", "a privileged packaged file differs from its package"),
     "privileged_file_unowned": ("critical", "a set-user/group-ID file no package owns"),

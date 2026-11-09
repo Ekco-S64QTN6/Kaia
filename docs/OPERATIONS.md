@@ -93,6 +93,15 @@ On demand: `sudo /opt/kaia/scripts/kaia_package_attest.py` (exit 1 on any altera
 an attacker with root can rewrite a record together with the file; this catches everything
 short of that.
 
+## Secret-exposure check (alert only)
+
+Every 6 hours the gate scans `$STATE_DIR`, its logs and its deployed tree for the live
+capability-token signing secret and for common credential formats (private key blocks; AWS,
+GitHub, Slack, Anthropic and OpenAI tokens; a 64-hex `KAIA_CAPABILITY_TOKEN_SECRET=` line).
+A hit is recorded once as `secret_exposure` with the file, line and pattern; the value
+itself is never written anywhere. If the live secret is found, treat it as compromised:
+rotate it (below) and remove the copy.
+
 ## Control health
 
 Each control reports what it is actually doing, and the gate publishes that every
