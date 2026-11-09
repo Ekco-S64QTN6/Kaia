@@ -83,6 +83,8 @@ class FIMDaemon:
             os.path.expanduser("~/.cache")
         ]
         
+    start_errno = None
+
     def start(self):
         """Starts the FIM daemon thread."""
         if not self.libc:
@@ -122,6 +124,9 @@ class FIMDaemon:
         fd = self.libc.fanotify_init(FAN_CLASS_NOTIF | FAN_CLOEXEC | FAN_NONBLOCK, O_RDONLY | O_LARGEFILE)
         if fd < 0:
             errno = ctypes.get_errno()
+            # EPERM: the unit deliberately does not grant CAP_SYS_ADMIN. Anything
+            # else is a real fault. The gate reports the two differently.
+            self.start_errno = errno
             logger.warning(f"fanotify_init failed (errno={errno}). Requires CAP_SYS_ADMIN.")
             return False
             
