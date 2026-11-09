@@ -56,6 +56,7 @@ class PrivilegeConfigWatcher:
         self.dirs = tuple(dirs)
         self._log_event = log_event
         self._state = None
+        self.blind_paths = []
 
     # ── reading ──────────────────────────────────────────────────────────
     @staticmethod
@@ -246,6 +247,7 @@ class PrivilegeConfigWatcher:
         logger.info(f"Privilege watch active (alert only) on {len(current)} files: "
                     + ", ".join(sorted(current)))
         blind = sorted(p for p, e in current.items() if e["sha256"].startswith("unreadable:"))
+        self.blind_paths = blind
         if blind:
             logger.warning("Privilege watch cannot read (changes there go unseen): " + ", ".join(blind))
         return changes

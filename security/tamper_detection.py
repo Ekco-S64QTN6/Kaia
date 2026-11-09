@@ -10,6 +10,10 @@ import stat
 from pathlib import Path
 import config
 from security.db import log_security_event
+from security import control_health
+
+# Seconds between integrity checks; also the tamper_detection heartbeat interval.
+TAMPER_CHECK_INTERVAL = 30.0
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +70,8 @@ class TamperDetector:
             "/etc/systemd/system/kaia-policy-gate.service",
             "/etc/systemd/system/kaia-lockdown.service",
             "/etc/systemd/system/kaia-restore-blocks.service",
+            "/etc/systemd/system/kaia-health-check.service",
+            "/etc/systemd/system/kaia-health-check.timer",
         ):
             if os.path.exists(path) and path not in self.immutable_files:
                 self.immutable_files.append(path)
@@ -380,6 +386,27 @@ class TamperDetector:
         self._thread.start()
         logger.info("Tamper detection thread started successfully.")
 
+        watched = len(self._baselines)
+        if not getattr(config, "TAMPER_ENFORCE", True):
+            state, detail = "degraded", f"monitor-only (KAIA_TAMPER_ENFORCE=0): {watched} files, no lockdown"
+        elif not trusted:
+            state, detail = "degraded", f"no trusted baseline (development bootstrap): {watched} files"
+        else:
+            state, detail = "active", f"{watched} files against the trusted baseline"
+        control_health.report("tamper_detection", state, detail,
+                              heartbeat_interval=TAMPER_CHECK_INTERVAL)
+        if self.privilege_watch is not None:
+            blind = list(getattr(self.privilege_watch, "blind_paths", []) or [])
+            if blind:
+                control_health.report("privilege_watch", "degraded",
+                                      "cannot read (changes go unseen): " + ", ".join(blind))
+            else:
+                control_health.report("privilege_watch", "active", "alert-only; checked with each integrity pass")
+        elif os.environ.get("KAIA_PRIVILEGE_WATCH", "1").strip().lower() in ("0", "false", "no"):
+            control_health.report("privilege_watch", "off", "disabled (KAIA_PRIVILEGE_WATCH=0)")
+        else:
+            control_health.report("privilege_watch", "failed", "did not start; see the journal")
+
     def _start_privilege_watch(self):
         """Start the alert-only privilege watch; failures are logged, never raised.
 
@@ -405,8 +432,17 @@ class TamperDetector:
         self._stop_event.set()
 
     def _run(self):
-        while not self._stop_event.wait(30.0):
-            self.check_integrity()
+        while not self._stop_event.wait(TAMPER_CHECK_INTERVAL):
+            try:
+                self.check_integrity()
+            except Exception as e:
+                # An escaping exception used to end this thread silently, leaving
+                # the gate serving with no integrity monitoring at all.
+                logger.exception(f"Integrity check failed; retrying next interval: {e}")
+                control_health.report("tamper_detection", "degraded",
+                                      f"last integrity check raised: {e}")
+                continue
+            control_health.heartbeat("tamper_detection")
 
     def check_integrity(self):
         for filepath, (baseline_hash, file_type) in list(self._baselines.items()):

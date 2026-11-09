@@ -150,7 +150,17 @@ makes the compromise the reference.
 Protected-file hash verification opens a no-follow descriptor, refuses non-regular paths and streams in 1 MiB chunks; it preserves the historical SHA-256 digest format and prefix-hash behavior.
 
 Expected in the log: `Loaded N trusted hashes`, `Tamper detection thread started`,
-and `Policy Gate listening on Unix socket`. On a custom `KAIA_STATE_DIR`, verify
+and `Policy Gate listening on Unix socket`. Ten seconds later the gate has published its
+control health; check it as your own user (a `kaiacord` member):
+
+```bash
+/opt/kaia/scripts/kaia_health_check.py; echo "exit $?"
+systemctl list-timers kaia-health-check.timer --no-pager
+```
+
+On the owner's host expect `DEGRADED` with exit 1: `fim` (no `CAP_SYS_ADMIN`, step 1) and
+`honeypot` (4 of 5 files). Any `failed` or `stale` line is a control that is not running;
+`ebpf: failed` means no probe, honeypot watching included, is loaded. On a custom `KAIA_STATE_DIR`, verify
 that `core/config.py` and `scripts/kaia-baseline.sh` resolve the baseline to
 `<KAIA_STATE_DIR>/baseline.sha256`, and that `security/fim_daemon.py` and the web HUD
 both use `<KAIA_STATE_DIR>/fim_audit.db`. The installer migrates the legacy FIM DB

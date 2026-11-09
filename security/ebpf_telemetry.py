@@ -9,6 +9,7 @@ import ctypes
 import logging
 import threading
 from collections import deque
+from security import control_health
 
 logger = logging.getLogger(__name__)
 
@@ -430,6 +431,7 @@ class EBPFTelemetryEngine:
     def start(self):
         if not HAS_BCC:
             logger.warning("BCC not installed, cannot start eBPF engine.")
+            control_health.report("ebpf", "failed", "BCC python bindings not installed")
             return False
             
         try:
@@ -447,9 +449,12 @@ class EBPFTelemetryEngine:
             self.polling_thread = threading.Thread(target=self._poll_ring_buffers, daemon=True, name="ebpf-ringbuf-poll")
             self.polling_thread.start()
             logger.info("eBPF Telemetry engine loaded and polling ring buffers.")
+            control_health.report("ebpf", "active", "probes loaded; no ring buffer drops",
+                                  heartbeat_interval=5.0)
             return True
         except Exception as e:
             logger.error(f"Failed to load or compile eBPF probes: {e}")
+            control_health.report("ebpf", "failed", f"probes did not load: {e}")
             self.bpf = None
             return False
 
@@ -508,6 +513,7 @@ class EBPFTelemetryEngine:
         while not self.stop_event.is_set():
             try:
                 self.bpf.ring_buffer_poll(timeout=100)
+                control_health.heartbeat("ebpf")
                 self._report_ringbuf_drops()
             except Exception as e:
                 logger.error(f"Error polling BPF ring buffers: {e}")
@@ -539,6 +545,12 @@ class EBPFTelemetryEngine:
         if not new:
             return
         summary = ", ".join(f"{n}={c}" for n, c in sorted(new.items()))
+        totals_text = ", ".join(f"{n}={c}" for n, c in sorted(totals.items()) if c)
+        # A lost decoy read is a missed intrusion signal; other drops thin telemetry.
+        if totals.get("honeypot_events"):
+            control_health.report("ebpf", "degraded", f"honeypot events dropped; drops since load: {totals_text}")
+        else:
+            control_health.report("ebpf", "active", f"probes loaded; drops since load: {totals_text}")
         if "honeypot_events" in new:
             # A dropped decoy read is a missed intrusion signal, not just telemetry.
             logger.error(f"eBPF ring buffer full: dropped events: {summary}")

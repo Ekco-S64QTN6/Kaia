@@ -60,6 +60,57 @@ files). Turn the watch off with `KAIA_PRIVILEGE_WATCH=0`.
 
 Read recent alerts: `journalctl -u kaia-policy-gate | grep -i "privilege config"`.
 
+## Privilege gains (eBPF, alert only)
+
+A kprobe on `commit_creds()` sees every credential change the kernel installs and
+reports only gains of root (old euid non-zero, new uid or euid 0):
+
+| Event | Meaning |
+|---|---|
+| `privilege_setuid_exec` | a set-user-ID root binary in `/usr/{bin,lib,sbin,libexec}` was executed: sudo, su, pkexec, fusermount3. Recorded, not alerted. |
+| `privilege_setuid_exec_unusual` | a set-user-ID root exec from anywhere else, or by a relative or odd path. Warning. |
+| `privilege_escalation_unexpected` | a gain **outside execve** by a task that held root in none of uid/euid/suid. Without `CAP_SETUID` that is impossible through setuid(); it is the shape of a kernel privilege escalation. Logged CRITICAL. |
+
+None of them blocks or locks anything (axiom 5). The HUD's FIM / PRIV count and the
+curses pane show only the last two kinds, from the last 24 hours. Rows of the old type
+`privilege_escalation` (before 2026-11-09) were `setuid()` syscall attempts, privilege
+drops included, and are ignored. Not seen: credentials overwritten in place without
+`commit_creds()`, and capability-only gains.
+
+## Control health
+
+Each control reports what it is actually doing, and the gate publishes that every
+10 s to `$STATE_DIR/control_health.json` (mode 0640, group `kaiacord`):
+
+| State | Meaning |
+|---|---|
+| `active` | working as designed |
+| `degraded` | running with less coverage than designed; the detail says what |
+| `off` | not provisioned on this host, deliberately (decoy listeners, YARA with no rules) |
+| `failed` | meant to run and not running, or never reported its state |
+| `stale` | stopped sending heartbeats: its thread died or hung |
+
+The HUD shows one dot per control under the gate strip (hover for the detail), and the
+curses pane one summary line. A `failed` or `stale` control, or a file that has stopped
+being refreshed, moves the posture to `AnomalyDetected`; `degraded` and `off` do not,
+because they are standing conditions of a host, not events.
+
+`kaia-health-check.timer` runs `scripts/kaia_health_check.py` every 5 minutes as an
+unprivileged dynamic user, outside the gate. It reads the file and the state of
+`kaia-policy-gate` and `kaia-restore-blocks`, and logs a summary plus one line per
+problem. Exit 1 (degraded) is a warning; exit 2 (failed, stale, the gate down or hung,
+or `kaia-restore-blocks` failed) fails the unit, so it appears in `systemctl --failed`.
+It never changes anything.
+
+```bash
+/opt/kaia/scripts/kaia_health_check.py            # now, by hand (any kaiacord member)
+journalctl -u kaia-health-check -n 20             # recent runs
+```
+
+On the owner's host the expected result is `DEGRADED`: `fim` (fanotify needs
+`CAP_SYS_ADMIN`, a separate decision) and `honeypot` (4 of 5 files: the
+`/root/.ssh/authorized_keys.bak` decoy cannot be created under `ProtectHome=tmpfs`).
+
 ## Deployment model
 
 **Develop in a checkout; run from `/opt/kaia`.**

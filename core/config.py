@@ -245,6 +245,9 @@ TAMPER_ENFORCE = os.environ.get("KAIA_TAMPER_ENFORCE", "1").strip().lower() not 
 SECURITY_DB_PATH = str(STATE_DIR / "security_events.db")
 FIM_DB_PATH = str(STATE_DIR / "fim_audit.db")
 AUDIT_LOG_PATH = str(STATE_DIR / "audit_ledger.json")
+# Published by the Policy Gate (security/control_health.py), read by the HUD and
+# scripts/kaia_health_check.py.
+CONTROL_HEALTH_PATH = str(STATE_DIR / "control_health.json")
 POLICY_GATE_SOCKET = "/run/kaiacord/policy_gate.sock"
 POLICY_GATE_SOCKET_FALLBACK = str(
     Path("/tmp") / f"kaia-policy-gate-{os.getuid()}" / "policy_gate.sock"

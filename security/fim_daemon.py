@@ -10,6 +10,7 @@ import select
 import stat
 import config
 from security.db import log_security_event
+from security import control_health
 
 logger = logging.getLogger(__name__)
 
@@ -233,6 +234,7 @@ class FIMDaemon:
                 if self.fan_fd < 0:
                     break
                 r, w, x = select.select([self.fan_fd], [], [], 0.5)
+                control_health.heartbeat("fim")
                 if self.fan_fd in r:
                     try:
                         data = os.read(self.fan_fd, 8192)

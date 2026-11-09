@@ -510,13 +510,19 @@ def serialize_snapshot(
         "alerting": False, "evaluating": False, "rejections_10m": 0, "alerts_10m": 0,
     }
 
+    # A control that is meant to run and does not (or a gate that stopped
+    # publishing) is an anomaly. "degraded" and "off" are standing conditions of
+    # this host and do not move the posture; the HUD's control strip shows them.
+    health = snap.system_security.get("control_health") or {}
+    controls_failed = health.get("overall") == "failed"
+
     if lockdown_active:
         sentinel_state = "LockdownMode"
         threat_level = "CRITICAL"
     elif recent["alerting"]:
         sentinel_state = "ContainmentAlert"
         threat_level = "ELEVATED"
-    elif not gate_running:
+    elif not gate_running or controls_failed:
         sentinel_state = "AnomalyDetected"
         threat_level = "ELEVATED"
     elif lps > 30.0:
