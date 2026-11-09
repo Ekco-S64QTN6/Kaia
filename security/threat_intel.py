@@ -1,3 +1,4 @@
+import re
 import sqlite3
 import ipaddress
 import json
@@ -277,6 +278,43 @@ def _fetch_internetdb_api(ip: str) -> dict:
             logger.warning("InternetDB API request failed for %s: %s", ip, e)
             return {}
 
+# InternetDB is external network metadata (INV-004): every field is reduced to
+# a strict character set and length before it is cached, shown or appended to
+# an asset name. Values that do not fit are dropped, not repaired.
+_INTERNETDB_FIELD_RULES = {
+    "hostnames": re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?"),
+    "tags": re.compile(r"[a-z0-9][a-z0-9_-]{0,31}"),
+    "vulns": re.compile(r"CVE-\d{4}-\d{4,7}"),
+    "cpes": re.compile(r"cpe:/[aho](?::[A-Za-z0-9._~%+-]{0,64}){1,10}|cpe:2\.3:[aho](?::[A-Za-z0-9._~%*+-]{0,64}){1,11}"),
+}
+INTERNETDB_MAX_ITEMS = 64
+
+
+def sanitize_internetdb_fields(data: dict) -> dict:
+    """Allowlisted, de-duplicated, bounded copies of the InternetDB list fields."""
+    out = {}
+    ports = []
+    for p in data.get("ports", []) or []:
+        if isinstance(p, bool):
+            continue
+        try:
+            n = int(p)
+        except (TypeError, ValueError):
+            continue
+        if 0 < n < 65536 and n not in ports:
+            ports.append(n)
+    out["ports"] = ports[:INTERNETDB_MAX_ITEMS]
+    for field, rule in _INTERNETDB_FIELD_RULES.items():
+        kept = []
+        for v in data.get(field, []) or []:
+            if isinstance(v, str) and rule.fullmatch(v) and v not in kept:
+                kept.append(v)
+            if len(kept) >= INTERNETDB_MAX_ITEMS:
+                break
+        out[field] = kept
+    return out
+
+
 def _cache_internetdb_result(ip: str, api_data: dict, found: bool = True):
     """Cache a validated InternetDB result, including authoritative 404/no-data results."""
     conn = None
@@ -308,17 +346,13 @@ def _cache_internetdb_result(ip: str, api_data: dict, found: bool = True):
             conn.close()
 
 def _parse_internetdb_row(ip: str, row: tuple, source: str = "cache", found: bool = True) -> dict:
-    """Parse cached fields while preserving whether the API reported a match."""
-    return {
-        "ip": ip,
-        "ports": [int(p) for p in row[0].split(",") if p.strip().isdigit()] if row[0] else [],
-        "hostnames": [h for h in row[1].split(",") if h] if row[1] else [],
-        "tags": [t for t in row[2].split(",") if t] if row[2] else [],
-        "vulns": [v for v in row[3].split(",") if v] if row[3] else [],
-        "cpes": [c for c in row[4].split(",") if c] if row[4] else [],
-        "found": bool(found),
-        "source": source,
-    }
+    """Parse cached fields while preserving whether the API reported a match.
+
+    Rows cached before sanitising existed are sanitised on the way out too.
+    """
+    fields = ("ports", "hostnames", "tags", "vulns", "cpes")
+    raw = {f: [x for x in (row[i] or "").split(",") if x] for i, f in enumerate(fields)}
+    return {"ip": ip, **sanitize_internetdb_fields(raw), "found": bool(found), "source": source}
 
 def lookup_internetdb(ip: str) -> dict:
     """
@@ -391,6 +425,7 @@ def lookup_internetdb(ip: str) -> dict:
                 logger.warning("Ignoring malformed InternetDB field %s for %s", field, ip)
                 value = []
             normalized[field] = value[:256]
+        normalized = sanitize_internetdb_fields(normalized)
         _cache_internetdb_result(ip, normalized, found=True)
         return {
             "ip": ip,

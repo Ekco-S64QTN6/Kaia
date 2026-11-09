@@ -50,6 +50,7 @@ tests=(
   tests/test_security_db_writes.py
   tests/test_audit_ledger_fail_closed.py
   tests/test_protected_block_targets.py
+  tests/test_internetdb_sanitize.py
   tests/test_ci_covers_all_tests.py
 )
 
