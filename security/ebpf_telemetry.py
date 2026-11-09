@@ -23,6 +23,15 @@ RINGBUF_STREAMS = (
 )
 RINGBUF_DROP_REPORT_INTERVAL = 30.0
 
+
+def kernel_build_tree_present(release: str = None, modules_root: str = "/lib/modules") -> bool:
+    """BCC compiles against /lib/modules/<release>/build. On Arch, upgrading the
+    kernel package deletes the running kernel's tree, so until a reboot the
+    probes cannot be (re)compiled (#104). /sys/kernel/kheaders is the fallback."""
+    release = release or os.uname().release
+    return (os.path.isdir(os.path.join(modules_root, release, "build"))
+            or os.path.exists("/sys/kernel/kheaders.tar.xz"))
+
 # Kprobes are attached one by one, not by BCC's kprobe__ auto-attach: with
 # auto-attach, one symbol missing or inlined on a kernel made BPF() raise and
 # took down every probe, honeypot watching included. Tracepoints (stable
@@ -442,6 +451,7 @@ class EBPFTelemetryEngine:
 
         # Kernel symbols whose kprobe could not be attached -> what that loses.
         self.missing_probes = {}
+        self._last_reported_state = None
 
         # Events the kernel could not queue because a ring buffer was full.
         self.ringbuf_drops = {name: 0 for name in RINGBUF_STREAMS}
@@ -475,7 +485,12 @@ class EBPFTelemetryEngine:
             return True
         except Exception as e:
             logger.error(f"Failed to load or compile eBPF probes: {e}")
-            control_health.report("ebpf", "failed", f"probes did not load: {e}")
+            detail = f"probes did not load: {e}"
+            if not kernel_build_tree_present():
+                detail = (f"no build tree for the running kernel {os.uname().release} "
+                          "(kernel upgraded since boot): reboot to load the probes; " + detail)
+                logger.critical("eBPF probes cannot load until reboot: %s", detail)
+            control_health.report("ebpf", "failed", detail)
             self.bpf = None
             return False
 
@@ -505,6 +520,10 @@ class EBPFTelemetryEngine:
         return missing
 
     def _load_state(self) -> tuple:
+        if not kernel_build_tree_present():
+            # Probes already loaded keep working; a restart cannot reload them.
+            return "degraded", ("the running kernel's build tree is gone (kernel upgraded since boot): "
+                                "probes run, but a gate restart before a reboot loads none; reboot")
         if not self.missing_probes:
             return "active", "all probes attached"
         return "degraded", "not attached: " + "; ".join(
@@ -595,6 +614,12 @@ class EBPFTelemetryEngine:
         new = {n: t - self.ringbuf_drops.get(n, 0) for n, t in totals.items() if t > self.ringbuf_drops.get(n, 0)}
         self.ringbuf_drops.update(totals)
         if not new:
+            # Re-check the load state even without drops: a kernel upgrade
+            # removes the build tree while the probes keep running (#104).
+            state = self._load_state()
+            if state != self._last_reported_state:
+                self._last_reported_state = state
+                control_health.report("ebpf", *state)
             return
         summary = ", ".join(f"{n}={c}" for n, c in sorted(new.items()))
         totals_text = ", ".join(f"{n}={c}" for n, c in sorted(totals.items()) if c)
