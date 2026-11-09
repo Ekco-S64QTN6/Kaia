@@ -968,6 +968,15 @@ if __name__ == "__main__":
     from security.package_attestation import PackageAttestationMonitor
     package_attestation = PackageAttestationMonitor()
     package_attestation.start()
+
+    # Credentials (the live signing secret above all) must never appear in
+    # what Kaia writes or ships. Alert-only; values are never logged.
+    from security.secret_exposure import SecretExposureMonitor
+    secret_exposure = SecretExposureMonitor(
+        scopes=[str(config.STATE_DIR), str(config.LOG_DIR), config.WORKSPACE_DIR],
+        live_secret=config.CAPABILITY_TOKEN_SECRET,
+    )
+    secret_exposure.start()
     
     # Configure logging with rotation and stdout
     from logging.handlers import RotatingFileHandler
@@ -1056,4 +1065,5 @@ if __name__ == "__main__":
         honeypots.stop()
         pacman_monitor.stop()
         package_attestation.stop()
+        secret_exposure.stop()
         health_publisher.stop()
