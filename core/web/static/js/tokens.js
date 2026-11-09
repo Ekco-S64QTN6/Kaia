@@ -30,8 +30,9 @@ class CapabilityTokenLedger {
       const id = window.esc(token.id || '--------');
       const capability = window.esc(token.capability || 'UNKNOWN');
       const target = window.esc(token.target || '*');
-      const fingerprint = window.esc(token.signature || token.id || '');
-      return `<article class="token-card" title="Signature fingerprint: ${fingerprint}">`
+      // SHA-256 fingerprint of the token; the HMAC signature never reaches the HUD.
+      const fingerprint = window.esc(token.fingerprint || token.id || '');
+      return `<article class="token-card" title="Token fingerprint: ${fingerprint}">`
         + `<svg class="token-ring" viewBox="0 0 40 40" role="img" aria-label="Time to expiry ${label}">`
         + `<circle class="token-ring-track" cx="20" cy="20" r="13"></circle>`
         + `<circle class="token-ring-progress ${stateClass}" cx="20" cy="20" r="13" transform="rotate(-90 20 20)" stroke-dasharray="${circumference}" stroke-dashoffset="${offset}"></circle>`
