@@ -28,6 +28,110 @@ ALLOWED_EXECUTABLES = frozenset(SYSTEM_BINARIES.values())
 import logging
 import config
 
+
+# --- addresses a block must never target ---------------------------------
+# A block is `ip saddr X drop` on input. Blocking loopback kills every local
+# service (Ollama, PostgreSQL, the HUD); blocking the host's own address, its
+# gateway or its resolver takes the host off the network. Such a target can
+# come from an injected LLM proposal or from honeypot attribution, and boot
+# replay re-applies whatever the ledger says. The executor refuses them.
+
+ROUTE_V4 = "/proc/net/route"
+ROUTE_V6 = "/proc/net/ipv6_route"
+RESOLV_CONFS = ("/etc/resolv.conf", "/run/systemd/resolve/resolv.conf")
+
+
+def route_gateways(route_v4: str = ROUTE_V4, route_v6: str = ROUTE_V6) -> set:
+    """Next-hop addresses from the kernel routing tables (/proc wire format)."""
+    import socket
+    import struct
+    gateways = set()
+    try:
+        with open(route_v4) as f:
+            next(f, None)  # header
+            for line in f:
+                fields = line.split()
+                if len(fields) > 2 and fields[2] != "00000000":
+                    gateways.add(socket.inet_ntoa(struct.pack("<L", int(fields[2], 16))))
+    except FileNotFoundError:
+        pass
+    try:
+        with open(route_v6) as f:
+            for line in f:
+                fields = line.split()
+                if len(fields) > 4 and int(fields[4], 16):
+                    gateways.add(ipaddress.IPv6Address(int(fields[4], 16)).compressed)
+    except FileNotFoundError:
+        pass
+    return gateways
+
+
+def resolver_addresses(paths=RESOLV_CONFS) -> set:
+    servers = set()
+    for path in paths:
+        try:
+            with open(path) as f:
+                for line in f:
+                    fields = line.split()
+                    if len(fields) >= 2 and fields[0] == "nameserver":
+                        servers.add(fields[1].split("%", 1)[0])
+        except OSError:
+            continue
+    return servers
+
+
+def local_addresses() -> set:
+    import psutil
+    out = set()
+    for addrs in psutil.net_if_addrs().values():
+        for a in addrs:
+            if a.family.name in ("AF_INET", "AF_INET6"):
+                out.add(a.address.split("%", 1)[0])
+    return out
+
+
+def protected_block_reason(address, discover=None) -> str:
+    """Why ``address`` must not be blocked, or "" when it may be.
+
+    ``discover`` returns (local addresses, gateways, resolvers); if discovery
+    fails the block is refused: an unverifiable target is not a safe one.
+    """
+    addr = ipaddress.ip_address(address)
+    mapped = getattr(addr, "ipv4_mapped", None)
+    if mapped is not None:
+        addr = mapped
+    if addr.is_loopback:
+        return "loopback address"
+    if addr.is_unspecified:
+        return "unspecified address"
+    if addr.is_multicast:
+        return "multicast address"
+    if addr.is_link_local:
+        return "link-local address (neighbours and the IPv6 router)"
+    if addr.version == 4 and addr == ipaddress.IPv4Address("255.255.255.255"):
+        return "broadcast address"
+    try:
+        local, gateways, resolvers = (discover or (lambda: (local_addresses(), route_gateways(), resolver_addresses())))()
+    except Exception as e:
+        return f"cannot determine this host's own addresses, gateways and resolvers ({e})"
+    def has(group):
+        return any(ipaddress.ip_address(x) == addr for x in group if _is_ip(x))
+    if has(local):
+        return "an address of this host"
+    if has(gateways):
+        return "a gateway of this host"
+    if has(resolvers):
+        return "a DNS resolver of this host"
+    return ""
+
+
+def _is_ip(value) -> bool:
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except ValueError:
+        return False
+
 logger = logging.getLogger(__name__)
 
 # Bound combined stdout/stderr retained from every privileged child process.
@@ -95,6 +199,11 @@ class HostExecutor:
             return False, "", "A port may only be specified with tcp or udp"
         if protocol in ("tcp", "udp") and port is None:
             return False, "", "A port is required when protocol is tcp or udp"
+
+        protected = protected_block_reason(address)
+        if protected:
+            logger.error("Refusing to block %s: %s", target_ip, protected)
+            return False, "", f"Refusing to block {target_ip}: {protected}"
 
         # Detect address family so the rule uses the right selector.
         is_v6 = address.version == 6
