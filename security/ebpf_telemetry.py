@@ -24,6 +24,11 @@ RINGBUF_STREAMS = (
 RINGBUF_DROP_REPORT_INTERVAL = 30.0
 
 
+def ConnBaselineDescribe(comm, address, port):
+    from security.behaviour_baseline import ConnBaseline
+    return ConnBaseline.describe(comm, address, port)
+
+
 def kernel_build_tree_present(release: str = None, modules_root: str = "/lib/modules") -> bool:
     """BCC compiles against /lib/modules/<release>/build. On Arch, upgrading the
     kernel package deletes the running kernel's tree, so until a reboot the
@@ -454,6 +459,7 @@ class EBPFTelemetryEngine:
         self._last_reported_state = None
         # security.behaviour_baseline.ExecBaseline, set by the gate.
         self.exec_baseline = None
+        self.conn_baseline = None
 
         # Events the kernel could not queue because a ring buffer was full.
         self.ringbuf_drops = {name: 0 for name in RINGBUF_STREAMS}
@@ -719,6 +725,14 @@ class EBPFTelemetryEngine:
         clean_comm = clean.get("comm", "")
         clean_daddr = clean.get("ip", "")
         clean_dport = int(clean.get("port")) if clean.get("port") else event.dport
+        conn_baseline = self.conn_baseline
+        # Loopback (local services, dev servers on random ports) is not outbound.
+        if conn_baseline is not None and clean_daddr and not clean_daddr.startswith("127."):
+            try:
+                conn_baseline.observe(ConnBaselineDescribe(clean_comm, clean_daddr, clean_dport),
+                                      clean_comm, clean_pid)
+            except Exception as e:
+                logger.error("Connection baseline failed: %s", e)
         with self.lock:
             self.conn_deque.append({
                 "pid": clean_pid,

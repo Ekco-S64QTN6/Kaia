@@ -59,7 +59,7 @@ face rig) and the command console, behind a strict self-hosted CSP and loopback 
    operator-configured scopes (home dotfiles, shell history) outside the gate's `ProtectHome` sandbox.
 4. **Backup checks**: existence, recency and a test restore, never inferred from file presence.
 5. **Behavioural baselines:** executables done (2026-11-09: 7-day learning, first-seen alerts).
-   Next: outbound connections per process, then file-activity rates.
+   Outbound (process, port) pairs done too. Next: file-activity rates.
 6. **Threat-intel datasets**: local GeoLite2, CVE and passive-DNS stores, historical snapshots,
    optional DuckDB analysis.
 

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import os
 import threading
 import time
@@ -35,8 +36,6 @@ UNUSUAL_PREFIXES = ("/tmp/", "/var/tmp/", "/dev/shm/", "/run/user/", "/home/", "
 EVENT_FIRST_SEEN = "exec_first_seen"
 EVENT_UNUSUAL = "exec_unusual_location"
 
-
-import re
 
 # Build tools (makepkg, pip, configure scripts) run executables from randomly
 # named temporary directories. Collapse random-looking components so a build
@@ -62,6 +61,16 @@ def classify(path: str) -> str:
 
 
 class ExecBaseline:
+    """First-seen executables. Subclasses change what is remembered and how it is judged."""
+
+    SOURCE = "exec_baseline"
+
+    def key(self, path: str) -> str:
+        return baseline_key(path)
+
+    def judge(self, path: str) -> str:
+        return classify(path)
+
     def __init__(self, state_path: Optional[str], log_event=None, clock=time.time,
                  learning_seconds: float = LEARNING_SECONDS):
         self.state_path = state_path
@@ -120,7 +129,7 @@ class ExecBaseline:
         """Record one exec; returns the event type reported, if any."""
         if not path:
             return None
-        key = baseline_key(path)
+        key = self.key(path)
         with self._lock:
             if key in self.known:
                 return None
@@ -130,7 +139,7 @@ class ExecBaseline:
             self._dirty = True
             if self._clock() - self.started_at < self.learning_seconds:
                 return None
-            event_type = classify(path)
+            event_type = self.judge(path)
             now = self._clock()
             start, count = self._window
             if now - start >= 60:
@@ -141,23 +150,57 @@ class ExecBaseline:
                 return None
             self._window = (start, count + 1)
             self.reported_today += 1
-        if event_type == EVENT_UNUSUAL:
-            logger.warning("First-seen executable from an unusual location: %s (%s, PID %d)", path, comm, pid)
+        if event_type in (EVENT_UNUSUAL, EVENT_NET_SHELL):
+            logger.warning("First-seen %s: %s (%s, PID %d)", event_type, path, comm, pid)
         log = self._log_event
         if log is None:
             from security.db import log_security_event as log
         try:
-            log(event_type=event_type, source="exec_baseline", actor=f"{comm} (PID {pid})"[:200],
+            log(event_type=event_type, source=self.SOURCE, actor=f"{comm} (PID {pid})"[:200],
                 payload_hash=path[:300], disposition="observed", session_id="system_protection")
         except Exception as e:
             logger.error("Could not record %s: %s", event_type, e)
         return event_type
 
+    NOUN = "executables"
+
     def health(self) -> tuple:
         if self.learning:
             left = self.learning_seconds - (self._clock() - self.started_at)
-            return "active", f"learning: {len(self.known)} executables, {int(left // 3600)} h left"
-        detail = f"{len(self.known)} known executables; {self.reported_today} first-seen reported"
+            return "active", f"learning: {len(self.known)} {self.NOUN}, {int(left // 3600)} h left"
+        detail = f"{len(self.known)} known {self.NOUN}; {self.reported_today} first-seen reported"
         if self.suppressed:
             detail += f"; {self.suppressed} suppressed by the rate cap"
         return "active", detail
+
+
+# --- outbound connections ---------------------------------------------------
+CONN_FILE_NAME = "conn_baseline.json"
+EVENT_NET_FIRST_SEEN = "net_first_seen"
+EVENT_NET_SHELL = "net_shell_first_seen"
+# A shell or general-purpose interpreter opening a never-seen outbound port is
+# the shape of a reverse shell or of a dropped script phoning home.
+SHELL_LIKE = re.compile(r"(ba|da|z|fi|k|c|tc)?sh|nc|ncat|netcat|socat|telnet|perl.*|python[0-9.]*|php[0-9.]*|ruby.*|node|lua.*|awk|gawk")
+
+
+class ConnBaseline(ExecBaseline):
+    """First-seen (process name, destination port) pairs for outbound TCP.
+
+    Observed as "comm|port|address": the address is reported but not learned,
+    so an API behind changing addresses does not alert on every rotation.
+    """
+
+    SOURCE = "conn_baseline"
+    NOUN = "process/port pairs"
+
+    @staticmethod
+    def describe(comm: str, address: str, port: int) -> str:
+        return f"{comm}|{int(port)}|{address}"
+
+    def key(self, observed: str) -> str:
+        comm, port, _ = observed.split("|", 2)
+        return f"{comm}:{port}"
+
+    def judge(self, observed: str) -> str:
+        comm = observed.split("|", 1)[0]
+        return EVENT_NET_SHELL if SHELL_LIKE.fullmatch(comm) else EVENT_NET_FIRST_SEEN
