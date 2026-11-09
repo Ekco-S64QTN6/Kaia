@@ -1,42 +1,48 @@
 # Roadmap
 
-What is still to build or verify. Updated 31 October 2026. What is implemented, and at what
+What is still to build or verify. Updated 9 November 2026. What is implemented, and at what
 evidence level, is in [master_plan.md](master_plan.md) §10.5; how to verify a deployed host is in
-[DEPLOYMENT_CHECKLIST.md](DEPLOYMENT_CHECKLIST.md).
+[DEPLOYMENT_CHECKLIST.md](DEPLOYMENT_CHECKLIST.md). Open work is tracked as GitHub issues; the
+numbers below link the detail.
 
 ## First: verify the deployed host
 
 Nothing below is worth more than this. The repository can prove what its code does; only the
 installed host can prove what is running.
 
-1. Verify the installed systemd unit, `ExecStart`, `WorkingDirectory`, state directory and the
+1. **Deploy and verify the 2026-11-09 changes** ([#101](https://github.com/Ekco-S64QTN6/Kaia/issues/101)):
+   the `commit_creds` privilege probe (both checklist tests), control health and
+   `kaia-health-check.timer`, and the HUD token cards. Re-record the baseline before the next boot.
+2. Verify the installed systemd unit, `ExecStart`, `WorkingDirectory`, state directory and the
    trusted integrity baseline (deployment below `/opt`, state below `/var/lib`, `/srv` or `/mnt`,
    neither overlapping the checkout).
-2. Live-test **block → UFW reload → reboot restore → unblock → second reboot** (the rule must stay
+3. Live-test **block → UFW reload → reboot restore → unblock → second reboot** (the rule must stay
    absent).
-3. Confirm fanotify marks and BCC probe compilation on the deployed kernel, and the FIM database
-   migration and permissions.
+4. Confirm fanotify marks on the deployed kernel and the FIM database migration and permissions.
+   eBPF loading was confirmed on 2026-11-03 (journal: probes loaded, honeypot inode watches 4 of 4).
 
 ## Security
 
 | Item | State | What is left |
 |:--|:--|:--|
-| **Execution-blocking FIM** | Notification-mode fanotify observes, does not block | A separate permission-event (`FAN_CLASS_CONTENT`) design, with target-kernel tests |
+| **Control health** | Every control reports its state with heartbeats; an unprivileged timer outside the gate checks freshness and `kaia-restore-blocks` | Host verification (#101); report partial eBPF loads as degraded (#103); the pacman monitor still reports active when `pacman.log` is unreadable |
+| **Kernel telemetry** | execve, connect/retransmit, `commit_creds` root gains, openat2, unlinkat attempts, honeypot inodes; ring buffers with drop counters; a local compile check | One failed attach disables every probe (#103); runtime BCC compile breaks after a kernel upgrade until reboot: move to libbpf CO-RE (#104); openat2 drops (#106); not seen: in-place cred overwrites and capability-only gains; correlation of syscall attempts with outcomes |
+| **Execution-blocking FIM** | Notification-mode fanotify observes, does not block | A design for blocking. Two candidates, both available on the host kernel (`CONFIG_FANOTIFY_ACCESS_PERMISSIONS=y`; BPF LSM active, BTF present): fanotify `FAN_OPEN_EXEC_PERM` (needs `CAP_SYS_ADMIN`, userspace verdict per exec, deadlock and timeout semantics) or a BPF LSM `bprm_check_security` program (in-kernel verdict, fails open if unloaded). Either needs explicit fail-open/fail-closed rules and target-kernel tests |
 | **End-to-end FIM / YARA response** | Rule generation, isolated validation and same-FD scanning exist | The full event → verdict → response path, exercised on a controlled host |
-| **Kernel telemetry** | `sys_enter_unlinkat` records deletion *attempts*; probes depend on BCC and the kernel | More hook coverage, correlation with successful operations, target-kernel verification |
 | **Network discovery** | NB and NBSTAT answer records, first-level encoded names, scoped names, bounded DNS compression parsing, and rejection of fragmented/reserved-flag IPv4 frames before UDP parsing | Alternate NBNS name encodings and target-network validation |
-| **Supply chain** | Completed pacman transactions are recorded | AUR build tracking, repository and metadata changes, dependency-graph drift, package signature and installed-content attestation |
-| **Network decoys** | Filesystem decoys are non-destructive and self-cleaning | Decoy listeners and their namespace, verified on the host (the installer does not provision them) |
-| **Capability-token replay protection** | HMAC signature, scope, bounded UTC validity and durable single-use consumption are enforced; SQLite fingerprints survive concurrency and service restarts, and the database fails closed | Include the persistent registry in deployed-host backup, permissions and capacity verification |
-| **Policy Gate IPC framing** | Length-prefixed JSON, request/response size caps, a single read deadline and protocol-error connection closure are covered by synthetic regressions | Keep fragmented-read and truncated-frame regressions with protocol changes |
-| **Host Executor executable boundary** | Only exact registered `SYSTEM_BINARIES` paths may launch; malformed, non-string and NUL-containing argv are rejected before `Popen` | Add or change registered host executables only with security review and negative launch tests |
-| **Trusted integrity baseline** | Runtime loading uses a no-follow descriptor, rejects non-regular and multiply-linked files, and checks root ownership/private permissions in system mode | Keep runtime loader checks aligned with the baseline writer and deployed state-directory policy |
+| **Supply chain** | Completed pacman transactions are recorded | Installed-content attestation: verify files against each package's `mtree` (`/var/lib/pacman/local/*/mtree`, present on the host), and, for trust beyond the local database, against signed packages in the cache. Then AUR build tracking, repository and metadata changes, dependency-graph drift |
+| **Network decoys** | Filesystem decoys are non-destructive and self-cleaning | The `/root/.ssh` decoy cannot be created under `ProtectHome=tmpfs` (#102); decoy listeners and their namespace (the installer does not provision them) |
+| **Audit ledger growth** | Append-only JSONL; readers in the HUD are bounded | Each dashboard poll is audited (~17k rows/day while it is open); summarise repeated read-only diagnostics or rotate on a schedule, without losing any mutating or denied request (#105) |
+| **Capability-token replay protection** | HMAC signature, scope, bounded UTC validity and durable single-use consumption; the database fails closed | Include the persistent registry in deployed-host backup, permissions and capacity verification |
+| **Policy Gate IPC framing** | Length-prefixed JSON, size caps, a single read deadline and protocol-error closure, with synthetic regressions | Keep fragmented-read and truncated-frame regressions with protocol changes |
+| **Host Executor executable boundary** | Only exact registered `SYSTEM_BINARIES` paths may launch; malformed argv is rejected before `Popen` | Add or change registered host executables only with security review and negative launch tests. Landlock (active on the host) could further confine sandboxed scripts underneath Bubblewrap |
+| **Trusted integrity baseline** | No-follow loading, regular single-link files, root ownership and private permissions in system mode | Keep loader checks aligned with the baseline writer and deployed state-directory policy |
 
 ## Operator HUD
 
 The loopback web HUD is built: telemetry waterfall and sparklines, passive-discovery radar,
-capability-token widget, sentinel states, the Kaia codec avatar (WebGL2, face rig) and the
-command console, behind a strict self-hosted CSP and loopback Host/Origin checks.
+capability-token widget, sentinel states, control-health strip, the Kaia codec avatar (WebGL2,
+face rig) and the command console, behind a strict self-hosted CSP and loopback Host/Origin checks.
 
 | Item | What is left |
 |:--|:--|
@@ -44,17 +50,26 @@ command console, behind a strict self-hosted CSP and loopback Host/Origin checks
 | **Full-body avatar** | The avatar is a face-rig codec. The full-body figure in the design references ([`design/`](design/)) is not built. |
 | **Bundled fonts** | The HUD uses system fonts; bundling the display and mono faces keeps the look identical across hosts without loosening the CSP. |
 | **Audio cues** | Optional Web Audio cues for alerts and state changes. |
-| **Browser checks** | Stress and fallback tests in a real browser: no WebGL2, slow sockets, a long-running HUD. |
+| **Browser checks** | Stress and fallback tests in a real browser: no WebGL2, slow sockets, a long-running HUD; the control strip and token cards against live data. |
 
-## Later (Tier 5)
+## Next (Tier 5, ordered)
 
-Process, network and file behavioural baselines · alert-confidence scoring · secrets-exposure
-scanning · backup existence, recency and restorability checks · independent service and
-data-freshness supervision · historical threat-intelligence snapshots and local GeoLite2, CVE and
-passive-DNS datasets with DuckDB analysis.
+1. **Alert confidence.** Events now have a meaningful severity at the source (privilege gains,
+   privilege config, honeypots, tamper). Give every event type an explicit level and an
+   explainable reason, and drive the HUD's counts from it instead of per-pane type lists.
+2. **Installed-content attestation** (Supply chain, above): the cheapest high-value detection
+   left, deterministic and testable from fixtures.
+3. **Secrets-exposure scanning** of configured source/config/log scopes, redacting matches.
+4. **Backup checks**: existence, recency and a test restore, never inferred from file presence.
+5. **Behavioural baselines** for processes, connections and file activity, and only after alert
+   confidence, so their output has somewhere honest to go.
+6. **Threat-intel datasets**: local GeoLite2, CVE and passive-DNS stores, historical snapshots,
+   optional DuckDB analysis.
 
 ## Housekeeping
 
 - **Credential history.** The old `KAIA_CAPABILITY_TOKEN_SECRET` value remains in public Git
   history. It was rotated on 2026-09-08 and the installer rejects it; rotation is the mitigation.
 - **Backup drive.** An old note mentioned pending sectors on `sdb`; re-check the device directly.
+- **Root-owned `logs/kaia.log` in the checkout** makes an unprivileged development run of the gate
+  fail at logging setup; `sudo chown` it back or delete it.

@@ -42,9 +42,10 @@ shell.
 | **Policy Gate** | Typed schemas, short-lived HMAC-signed capability tokens scoped to a target, with timezone-aware issue/expiry timestamps, a 3,600-second maximum lifetime and durable single-use replay protection, a permission lattice, Unix-socket IPC, an append-only audit ledger, exact registered executable-path allowlisting for NUL-free argv execution and symlink-resistant atomic workspace writes |
 | **Firewall** | Block and unblock through the gate; unblock removes only Kaia's exact nftables handles; boot replay folds the ledger so a removal stays removed |
 | **Integrity** | A trusted, operator-recorded baseline loaded without following symlinks; regular single-link file checks and root-owned private permissions in system mode; tamper detection with alert latching and a lockdown circuit breaker |
-| **Telemetry** | eBPF (execve, openat2, connect/retransmit, privilege transitions, unlinkat attempts) and fanotify file monitoring with same-descriptor YARA scanning |
+| **Telemetry** | eBPF (execve, openat2, connect/retransmit, gains of root at `commit_creds`, unlinkat attempts) and fanotify file monitoring with same-descriptor YARA scanning |
 | **Discovery and intel** | Passive ARP, mDNS, LLMNR, SSDP and NBNS/NBSTAT response records from the wire; InternetDB enrichment; pacman transaction monitoring |
 | **Decoys** | Non-destructive filesystem honeypots that only ever remove what they created |
+| **Control health** | Every control reports active / degraded / off / failed with heartbeats; the gate publishes it, the HUD shows it, and an unprivileged timer outside the gate flags a hung gate, a dead control or a failed boot unit |
 | **Operator HUD** | A loopback web HUD — telemetry waterfall, discovery radar, token widget, the Kaia codec avatar and a command console — behind a strict self-hosted CSP and Host/Origin checks; and a curses dashboard |
 
 Each claim is at the level the code and its tests support. Kernel-dependent controls (eBPF,

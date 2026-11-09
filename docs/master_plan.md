@@ -1,6 +1,6 @@
-# Kaia: Unified Architectural Specification & Implementation Blueprint (v7.6 — Living Specification)
+# Kaia: Unified Architectural Specification & Implementation Blueprint (v7.7 — Living Specification)
 
-**Document Version:** 7.6 (Current Architecture, Implementation Status and Verification Boundaries; audit snapshot 2026-10-31)  
+**Document Version:** 7.7 (Current Architecture, Implementation Status and Verification Boundaries; audit snapshot 2026-11-09)  
 **Status:** Authoritative, living specification and roadmap — **declarative architecture plus dated implementation/verification status**  
 **Target Environment:** Arch Linux, Systemd, eBPF, Kitty Terminal  
 **Intended Reader:** Automated Coding Agents, Systems Engineers, Security Architects
@@ -676,7 +676,7 @@ All negative test cases must assert that the operation is denied, logged in the 
 
 ---
 
-### 10.5 Implementation and Verification Status (audit snapshot: 2026-10-31)
+### 10.5 Implementation and Verification Status (audit snapshot: 2026-11-09)
 
 This is the current repository status as of the audit date. It describes implementation and automated tests on main, not the state of a specific installed host.
 
@@ -690,7 +690,9 @@ This is the current repository status as of the audit date. It describes impleme
 - [x] Trusted integrity baseline parsing, coverage/mismatch checks, security-file watchlist and lockdown alert latching/circuit breaking. Runtime baseline loading now opens a no-follow descriptor, requires a regular single-link file, and in system mode requires root ownership with no group/world permissions. System mode now refuses startup when the trusted baseline is missing; only unprivileged development mode can bootstrap against current disk. Protected-file hashing opens a no-follow descriptor, refuses non-regular paths and streams in 1 MiB chunks while preserving optional prefix-hash semantics. The baseline writer also fails closed when enumeration fails, or any protected path (except the intentionally absent deployed `.env`) is missing or non-regular. Baseline creation uses a temporary file and atomic replacement after all hashes succeed, preserves `root:kaiacord` 0750 state-directory access, and refuses state paths outside the permitted roots.
 - [x] FIM event handling keeps the original fanotify event FD open and uses the same bounded (64 MiB max) byte snapshot for executable-header detection, YARA and hashing. Its audit DB is stored in configured `STATE_DIR` as `fim_audit.db`, with one-time migration of legacy `/var/lib/secdaemon/fim_audit.db` during installer runs. This eliminates pathname-reopen substitution, but does not block the originating process.
 - [x] YARA rule generation escapes arbitrary text as literals; rule-name/path and duplicate checks are enforced in RuleEngine; missing isolated validator prerequisites fail closed instead of validating in-process.
-- [x] eBPF source includes a sys_enter_unlinkat perf callback and a waterfall lane for observed deletion attempts. A syscall-entry event is not proof that unlink completed; all probes remain kernel/BCC dependent.
+- [x] eBPF source includes a sys_enter_unlinkat callback and a waterfall lane for observed deletion attempts. A syscall-entry event is not proof that unlink completed; all probes remain kernel/BCC dependent. Events use per-stream ring buffers with kernel drop counters. Probe loading on the deployed kernel was confirmed from the journal on 2026-11-03.
+- [x] Privilege telemetry takes gains of root from `commit_creds()` (2026-11-09), replacing the setuid/setreuid syscall-entry probes: set-user-ID execs (exact-cred match against `security_bprm_committing_creds`), flagged when the binary is outside the system directories, and gains outside execve with no prior root identity (CRITICAL). Alert-only; routine records are rate-capped. Automated-test covered and compile-checked locally against the host's kernel headers (`tests/test_ebpf_program_compiles.py`, skipped in CI); **not yet loaded on the host**.
+- [x] Control health (2026-11-09): every gate control reports active/degraded/off/failed with heartbeats to `$STATE_DIR/control_health.json`; `scripts/kaia_health_check.py` (unprivileged `kaia-health-check.timer`) flags a stale file, stale heartbeats and a failed `kaia-restore-blocks`; the HUD shows a control strip, and the lockdown state is read from the live ruleset. Automated-test covered and exercised in unprivileged development mode; **not yet deployed**.
 - [x] Loopback-only Web HUD, telemetry WebSocket, interactive command console, strict self-hosted CSP, Host/Origin loopback checks for authority, scheme and effective port, and Policy Gate command dispatch. Host authority must match the actual local listener, and commands validate origin before body parsing. Command results currently arrive as completed responses, not incremental streaming.
 - [x] InternetDB IP validation, process-local serialized API requests and negative caching for authoritative HTTP 404 results, alongside existing IP reputation/CVE lookup functions.
 - [x] Passive network discovery parses bounded IPv4 UDP frames for mDNS, LLMNR, SSDP and NBNS/NBSTAT observations; IPv4 fragments (including first fragments with MF set) and reserved-flag frames are discarded because this collector does not reassemble IP datagrams. Packet regressions preserve DF-only traffic and reject incomplete frames.
@@ -712,7 +714,7 @@ This section is the backlog of capabilities not yet complete after the 2026-10-2
 - **Secrets exposure detection:** scan configured source/config/log scopes for keys and credentials while redacting matched values from telemetry.
 - **Backup awareness:** validate configured backup existence, recency and restorability; do not infer restore readiness from file presence alone.
 - **Threat-intelligence expansion:** InternetDB validation, throttling and negative cache are implemented. Local GeoLite2, richer local CVE tables, passive DNS maps, historical snapshots and optional DuckDB analysis remain future work.
-- **Self-health monitoring:** provide independent service supervision and explicit freshness/availability signals for the Policy Gate, collectors, databases, FIM, eBPF and threat-intel cache.
+- **Self-health monitoring:** control health and the independent `kaia-health-check.timer` exist (2026-11-09, pending host verification). Still missing: partial-probe reporting, database and threat-intel freshness, and notification beyond the journal and `systemctl --failed`.
 - **Telemetry expansion:** extend NBNS/NBSTAT alternate-encoding support and target-network validation, alongside broader kernel hook/correlation coverage. unlinkat telemetry currently records syscall-entry attempts, not completed deletions.
 - **Execution-blocking FIM:** separately design and test permission-event enforcement; notification-mode fanotify remains observational.
 
