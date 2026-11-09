@@ -169,10 +169,12 @@ document.addEventListener('DOMContentLoaded', () => {
     setClass('st-alerts-sub', 'stat-sub', al ? 'bad' : '');
     setClass('st-alerts', 'stat-value', al ? 'bad' : '');
 
-    const fim = (con.fim_alerts || []).length, priv = (con.privilege_alerts || []).length;
-    setText('st-fim', `${fim} / ${priv}`);
-    setClass('st-fim', 'stat-value', fim + priv ? 'bad' : '');
-    setText('st-fim-sub', 'FIM / privilege');
+    // Levels from security/alert_levels.py, counted over the last 24 hours.
+    const ac = con.alert_counts_24h || {};
+    const crit = ac.critical || 0, high = ac.high || 0, med = ac.medium || 0;
+    setText('st-fim', `${crit} / ${high}`);
+    setClass('st-fim', 'stat-value', crit ? 'bad' : high ? 'warn' : '');
+    setText('st-fim-sub', `${med} medium`);
 
     const rc = sec.rules_counts || ti.rules_counts || {};
     setText('st-blocks', ti.active_blocks ?? '--');

@@ -54,9 +54,8 @@ face rig) and the command console, behind a strict self-hosted CSP and loopback 
 
 ## Next (Tier 5, ordered)
 
-1. **Alert confidence.** Events now have a meaningful severity at the source (privilege gains,
-   privilege config, honeypots, tamper). Give every event type an explicit level and an
-   explainable reason, and drive the HUD's counts from it instead of per-pane type lists.
+1. **Alert explanations in the HUD.** Every event type now has a level and a reason
+   (`security/alert_levels.py`); surface the reason on hover and let the operator filter the feed by level.
 2. **Attestation against signed packages** (Supply chain, above): verify the critical files
    against the signed `.pkg.tar.zst` in the pacman cache, closing the unsigned-database gap.
 3. **Secrets-exposure scanning** of configured source/config/log scopes, redacting matches.
