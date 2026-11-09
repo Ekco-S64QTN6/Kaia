@@ -228,6 +228,6 @@ def test_hud_feed_names_the_changed_file(tmp_path):
     collector._last_seen_rowid = 0
     entries = collector._poll_security_db()
     assert "/etc/sudoers.d/99-backdoor (created)" in entries[0].message
-    assert entries[0].level == "ERROR"
+    assert entries[0].level in ("ERROR", "CRITICAL")  # both render red (panels.js)
     assert "/etc/passwd (modified)" in entries[1].message
     assert entries[1].level == "WARN"

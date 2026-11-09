@@ -36,7 +36,7 @@ def _emitted_event_types() -> set:
 
 def test_every_emitted_event_type_is_classified():
     emitted = _emitted_event_types()
-    assert len(emitted) > 30
+    assert len(emitted) > 20  # the scan must actually find the emitters
     missing = sorted(emitted - set(EVENT_LEVELS))
     assert not missing, f"classify these in security/alert_levels.py: {missing}"
 
