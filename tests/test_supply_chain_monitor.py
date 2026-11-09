@@ -140,3 +140,32 @@ def test_cursor_file_is_created_with_private_permissions(tmp_path, monkeypatch):
     monitor = PacmanLogMonitor(str(log), str(cursor))
     monitor.poll_once()
     assert cursor.stat().st_mode & 0o777 == 0o600
+
+
+def test_unreadable_log_is_degraded_in_control_health_not_active(tmp_path, monkeypatch):
+    """Polls that cannot read pacman.log used to leave the monitor reported active."""
+    from security import control_health
+    from security.supply_chain_monitor import PacmanLogMonitor
+    seen = []
+    monkeypatch.setattr(control_health, "report",
+                        lambda name, state, detail="", heartbeat_interval=None: seen.append((name, state, detail)))
+    log, cursor = tmp_path / "pacman.log", tmp_path / "cursor.json"
+    monitor = PacmanLogMonitor(str(log), str(cursor), poll_interval=1)
+    rounds = iter([False, False, True])
+
+    class Stop:
+        def is_set(self):
+            return False
+
+        def wait(self, _):
+            done = next(rounds)
+            if not done:
+                log.write_text("[2026-11-09T10:00:00+0000] [ALPM] transaction started\n")
+            Stop.is_set = lambda self: done
+            return done
+
+    monitor._stop = Stop()
+    monitor._run()
+    states = [(s, d) for n, s, d in seen if n == "pacman_monitor"]
+    assert states[0][0] == "degraded" and "not found" in states[0][1]
+    assert states[-1][0] == "active"

@@ -25,7 +25,7 @@ installed host can prove what is running.
 
 | Item | State | What is left |
 |:--|:--|:--|
-| **Control health** | Every control reports its state with heartbeats; an unprivileged timer outside the gate checks freshness and `kaia-restore-blocks` | Host verification (#101); the pacman monitor still reports active when `pacman.log` is unreadable |
+| **Control health** | Every control reports its state with heartbeats; an unprivileged timer outside the gate checks freshness and `kaia-restore-blocks` | Host verification (#101); database and threat-intel freshness |
 | **Kernel telemetry** | execve, connect/retransmit, `commit_creds` root gains, openat2, unlinkat attempts, honeypot inodes; ring buffers with drop counters; kprobes attached individually (a partial load is `degraded`); a local compile check | Runtime BCC compile breaks after a kernel upgrade until reboot: move to libbpf CO-RE (#104); not seen: in-place cred overwrites and capability-only gains; correlation of syscall attempts with outcomes |
 | **Execution-blocking FIM** | Notification-mode fanotify observes, does not block | A design for blocking. Two candidates, both available on the host kernel (`CONFIG_FANOTIFY_ACCESS_PERMISSIONS=y`; BPF LSM active, BTF present): fanotify `FAN_OPEN_EXEC_PERM` (needs `CAP_SYS_ADMIN`, userspace verdict per exec, deadlock and timeout semantics) or a BPF LSM `bprm_check_security` program (in-kernel verdict, fails open if unloaded). Either needs explicit fail-open/fail-closed rules and target-kernel tests |
 | **End-to-end FIM / YARA response** | Rule generation, isolated validation and same-FD scanning exist | The full event → verdict → response path, exercised on a controlled host |
