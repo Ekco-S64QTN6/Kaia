@@ -38,6 +38,8 @@ EVENT_LEVELS: Dict[str, Tuple[str, str]] = {
     "secret_exposure": ("critical", "a credential appears in Kaia's logs, state or deployed tree"),
     "exec_unusual_location": ("high", "a never-seen executable ran from /tmp, /dev/shm, a home directory or a relative path"),
     "exec_first_seen": ("low", "an executable this host had not run before"),
+    "net_shell_first_seen": ("high", "a shell or interpreter connected out on a port it had never used"),
+    "net_first_seen": ("low", "a process connected out on a port it had never used"),
     # Installed content.
     "package_file_altered": ("critical", "a privileged packaged file differs from its package"),
     "privileged_file_unowned": ("critical", "a set-user/group-ID file no package owns"),
