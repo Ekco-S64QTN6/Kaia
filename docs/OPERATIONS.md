@@ -88,7 +88,7 @@ package owns. Findings are recorded once each, as `package_file_altered` or
 response. Runs wait while pacman holds `db.lck`. A mode or owner set by a package's own
 `/usr/lib/tmpfiles.d` rule is accepted; one from `/etc/tmpfiles.d` is reported.
 
-On demand: `sudo /opt/kaia/scripts/kaia_package_attest.py` (exit 1 on any alteration).
+On demand: `sudo /opt/kaia/scripts/kaia_package_attest.py` (exit 1 on any alteration). The gate runs without `CAP_DAC_OVERRIDE`, so it cannot read execute-only files such as `/usr/lib/dbus-daemon-launch-helper` (mode 4110) and reports them `unverifiable`; the on-demand run as full root verifies them.
 `pacman -Qkk <pkg>` is the independent cross-check. The local database is not signed, so
 an attacker with root can rewrite a record together with the file; this catches everything
 short of that.
@@ -137,6 +137,12 @@ On the owner's host the expected result is `DEGRADED`: `fim` (fanotify needs
 `/root/.ssh/authorized_keys.bak` decoy cannot be created under `ProtectHome=tmpfs`).
 
 ## Deployment model
+
+One command deploys this checkout and runs the host acceptance checks (install, trusted
+baseline, gate start, privilege-gain probe both ways, control health, decoy coverage,
+attestation): `sudo scripts/kaia-deploy-verify.sh`. If the baseline cannot be recorded it
+disables the gate rather than leave it enabled against a stale baseline. The log goes to
+`/var/log/kaia/deploy-<time>.log` (group `kaiacord`).
 
 **Develop in a checkout; run from `/opt/kaia`.**
 
