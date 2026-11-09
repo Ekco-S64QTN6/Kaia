@@ -326,6 +326,12 @@ sudo ./scripts/kaia-baseline.sh          # ledger hash changed
 sudo systemctl start kaia-policy-gate
 ```
 
+If the ledger cannot be appended to (disk full, wrong ownership, a symlink or directory
+at its path), the gate refuses every host change and records `audit_ledger_unavailable`;
+emergency lockdown and read-only diagnostics keep working. Control health shows
+`audit_ledger: failed` with the reason. Fix the file, and changes are accepted again on the
+next request.
+
 ## Block persistence
 
 nftables rules are runtime-only. `kaia-restore-blocks.service` reconstructs the

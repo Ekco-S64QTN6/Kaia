@@ -237,6 +237,9 @@ class PolicyGate:
         self.is_running = False
         self._thread = None
         self._audit_lock = threading.Lock()
+        # Per-request count of audit writes that failed (client threads run concurrently).
+        self._audit_state = threading.local()
+        self._audit_ok = None
         self._client_slots = threading.BoundedSemaphore(self.MAX_IPC_CLIENTS)
 
     def _reserve_service_restart(self, service_name: str, session_id: str, payload: dict) -> tuple:
@@ -587,7 +590,50 @@ class PolicyGate:
         finally:
             conn.close()
 
+    # Actions that change the host. They are refused when the audit ledger cannot
+    # be appended to: a block applied without its ledger record is live but gone
+    # at the next reboot (the ledger is what kaia-restore-blocks replays), and an
+    # unaudited change breaks INV-008. Emergency lockdown (containment) and
+    # read-only diagnostics stay available.
+    MUTATING_ACTIONS = frozenset({
+        "add_rule", "block_ip", "unblock_ip", "restart_service", "write_file", "run_script",
+    })
+
+    @staticmethod
+    def audit_ledger_available() -> tuple:
+        """(True, None) if the ledger can be opened for append without following a symlink."""
+        flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC
+        try:
+            fd = os.open(config.AUDIT_LOG_PATH, flags, 0o640)
+        except OSError as e:
+            return False, str(e)
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                return False, "audit ledger is not a regular file"
+        finally:
+            os.close(fd)
+        return True, None
+
     def evaluate_and_execute(self, payload: dict) -> dict:
+        """Dispatch one request; an executed change that could not be audited is an error."""
+        self._audit_state.failures = 0
+        result = self._evaluate_and_execute(payload)
+        if (
+            payload.get("action") in self.MUTATING_ACTIONS
+            and self._audit_state.failures
+            and isinstance(result, dict)
+            and result.get("status") == "success"
+        ):
+            logger.critical(
+                "Action %s executed but its audit record could not be written; "
+                "it is not in the ledger (and a block would not survive a reboot).",
+                payload.get("action"),
+            )
+            result = dict(result, status="error",
+                          message="Executed, but the audit ledger could not record it; see the journal.")
+        return result
+
+    def _evaluate_and_execute(self, payload: dict) -> dict:
         """
         Enforces schemas, validates capability tokens, checks static limits,
         executes host actions, logs to audit ledger, and logs failures to security DB.
@@ -634,6 +680,16 @@ class PolicyGate:
         except Exception as e:
             logger.error(f"Failed to resolve lattice levels: {e}")
             payload["effective_lattice_level"] = "bwrap"
+
+        if action in self.MUTATING_ACTIONS:
+            available, why = self.audit_ledger_available()
+            if not available:
+                logger.critical("Refusing %s: the audit ledger cannot be written (%s)", action, why)
+                control_health.report("audit_ledger", "failed", f"cannot append: {why}")
+                log_security_event("audit_ledger_unavailable", "policy_gate", "kaiacord",
+                                   hashlib.sha256(str(payload).encode()).hexdigest(), "blocked", session_id)
+                return {"status": "denied",
+                        "message": "The audit ledger cannot be written; refusing to act unaudited."}
 
         effective_permissions = config.GLOBAL_PERMISSIONS.intersection(config.WORKSPACE_PERMISSIONS)
         if action not in effective_permissions:
@@ -929,11 +985,39 @@ class PolicyGate:
                     session_id=sess_id
                 )
                 
-                # Write to append-only JSONL file
-                with open(config.AUDIT_LOG_PATH, "a") as f:
-                    f.write(record.model_dump_json() + "\n")
+                # Append-only JSONL. No-follow: a symlink planted at the ledger
+                # path must not redirect the gate's root-owned writes.
+                line = (record.model_dump_json() + "\n").encode("utf-8")
+                fd = os.open(config.AUDIT_LOG_PATH,
+                             os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o640)
+                try:
+                    if not stat.S_ISREG(os.fstat(fd).st_mode):
+                        raise OSError("audit ledger is not a regular file")
+                    view = memoryview(line)
+                    while view:
+                        view = view[os.write(fd, view):]
+                finally:
+                    os.close(fd)
+                self._report_audit_health(True, "")
+                return True
             except Exception as e:
-                logger.error(f"Failed to write audit ledger: {e}")
+                self._audit_state.failures = getattr(self._audit_state, "failures", 0) + 1
+                # Never log the request itself: it can carry a raw capability token.
+                action = getattr(request, "action", None) or (
+                    request.get("action") if isinstance(request, dict) else None)
+                logger.critical(
+                    "Failed to write audit ledger: action=%s result=%s reason=%s executor=%s: %s",
+                    action, result, reason, executor, e,
+                )
+                self._report_audit_health(False, str(e))
+                return False
+
+    def _report_audit_health(self, ok: bool, detail: str) -> None:
+        if self._audit_ok is ok:
+            return
+        self._audit_ok = ok
+        control_health.report("audit_ledger", "active" if ok else "failed",
+                              "appending" if ok else f"cannot append: {detail}")
 
 
 if __name__ == "__main__":
@@ -1047,6 +1131,9 @@ if __name__ == "__main__":
     health_publisher.start(publish_now=False)
 
     gate = PolicyGate()
+    ledger_ok, ledger_problem = PolicyGate.audit_ledger_available()
+    control_health.report("audit_ledger", "active" if ledger_ok else "failed",
+                          "appending" if ledger_ok else f"cannot append: {ledger_problem}")
     logger.info("Starting standalone Policy Gate Daemon...")
     gate.is_running = True
     try:
