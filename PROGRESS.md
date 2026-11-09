@@ -148,3 +148,33 @@ Handoffs between autonomous maintenance runs. Append a section per run; never re
 
 ### Recommended first action next run
 - The code-only queue is now mostly feature work rather than fixes: signed-package attestation (ROADMAP Tier 5 #2), alert reasons and a level filter in the HUD feed (Tier 5 #1), backup checks (Tier 5 #4, needs the owner's backup location). The highest-value next step is deploying and running #101, which needs the owner.
+
+## Run 2026-11-09 (fifth): first host deployment
+
+**HEAD at start:** b2c1e68 · **HEAD at end:** f900b77 (+ this docs PR)
+
+### Host (target-host verified, kernel 6.18.60-1-lts, systemd 262)
+- Deployed `b2c1e68` with the script now in `scripts/kaia-deploy-verify.sh` (owner ran it; this session has no sudo password).
+- Baseline 34 files; gate active; eBPF all probes attached; honeypot inode watches 4 of 4.
+- Privilege probe: sudo → `privilege_setuid_exec`; `cap_setuid` test → CRITICAL `privilege_escalation_unexpected`.
+- 14 controls publishing; checker and timer work as a DynamicUser; attestation (gate, 16:21) 155 files, 0 altered, 0 unowned, 1 unverifiable (dbus helper, mode 4110, unreadable without CAP_DAC_OVERRIDE, by design); full-root run clean; secret scan (gate, 16:26) 145 files, 0 exposures.
+
+### Merged
+- #123 — host findings: restore-blocks inactive-after-install is healthy, disabled is degraded; timer `OnActiveSec`; host evidence recorded (closes #101)
+- #124 — SSH decoy moved to /var/backups and provisioned by the installer; /root/.ssh write grant removed (closes #102)
+- #125 — `scripts/kaia-deploy-verify.sh` (root writes only to root-owned paths)
+
+### Issues closed
+- #101 (host-verified, evidence in the issue), #102 (#124)
+
+### Needs a redeploy to take effect on the host
+- #123 checker/timer, #124 decoy (expect `honeypot: active`, 5 of 5). Run: `sudo scripts/kaia-deploy-verify.sh`, then read `/var/log/kaia/deploy-*.log`.
+
+### Open
+- #104 (libbpf CO-RE, design-sized), #105 remainder (owner trade-off).
+
+### Baseline for next run
+- suite green (604) · CI on main green
+
+### Recommended first action next run
+- Read the newest `/var/log/kaia/deploy-*.log` if the owner redeployed; confirm honeypot 5 of 5 and `kaia-restore-blocks` healthy. Then feature work: signed-package attestation, HUD alert reasons/filter.
