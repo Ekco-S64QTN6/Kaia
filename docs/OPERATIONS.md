@@ -77,6 +77,22 @@ curses pane show only the last two kinds, from the last 24 hours. Rows of the ol
 drops included, and are ignored. Not seen: credentials overwritten in place without
 `commit_creds()`, and capability-only gains.
 
+## Installed-content attestation (alert only)
+
+Every 6 hours the gate re-checks the files that grant or exercise privilege against what
+pacman recorded when it installed them (`/var/lib/pacman/local/*/mtree`): every
+set-user/group-ID file, PAM modules, the dynamic loader, libc, libpam, NSS, the executor's
+binaries and the interpreter. It also lists set-user/group-ID files under `/usr` that no
+package owns. Findings are recorded once each, as `package_file_altered` or
+`privileged_file_unowned` (CRITICAL) or `package_file_unverifiable`, and never trigger a
+response. Runs wait while pacman holds `db.lck`. A mode or owner set by a package's own
+`/usr/lib/tmpfiles.d` rule is accepted; one from `/etc/tmpfiles.d` is reported.
+
+On demand: `sudo /opt/kaia/scripts/kaia_package_attest.py` (exit 1 on any alteration).
+`pacman -Qkk <pkg>` is the independent cross-check. The local database is not signed, so
+an attacker with root can rewrite a record together with the file; this catches everything
+short of that.
+
 ## Control health
 
 Each control reports what it is actually doing, and the gate publishes that every

@@ -160,7 +160,16 @@ systemctl list-timers kaia-health-check.timer --no-pager
 
 On the owner's host expect `DEGRADED` with exit 1: `fim` (no `CAP_SYS_ADMIN`, step 1) and
 `honeypot` (4 of 5 files). Any `failed` or `stale` line is a control that is not running;
-`ebpf: failed` means no probe, honeypot watching included, is loaded. On a custom `KAIA_STATE_DIR`, verify
+`ebpf: failed` means no probe, honeypot watching included, is loaded.
+
+Installed-content attestation, on demand (the gate's first pass runs 10 minutes after start):
+
+```bash
+sudo /opt/kaia/scripts/kaia_package_attest.py; echo "exit $?"   # expect exit 0, no findings
+```
+
+Any `content_changed`, `mode_changed` or unowned privileged file must be explained (cross-check
+with `pacman -Qkk <package>`) before the host is trusted. On a custom `KAIA_STATE_DIR`, verify
 that `core/config.py` and `scripts/kaia-baseline.sh` resolve the baseline to
 `<KAIA_STATE_DIR>/baseline.sha256`, and that `security/fim_daemon.py` and the web HUD
 both use `<KAIA_STATE_DIR>/fim_audit.db`. The installer migrates the legacy FIM DB
