@@ -4,6 +4,8 @@
 
 ### Operator HUD
 
+- The HUD's capability-token cards show tokens again. Since the audit ledger stopped storing raw tokens, rows carry only `capability_token_metadata` with a `fingerprint`; the cards looked for the raw token and its `signature`, so no token issued since then could appear. Cards now carry the SHA-256 fingerprint; no HMAC signature (even of old, expired tokens) is sent to the browser.
+- The HUD and curses dashboard no longer re-read the whole audit ledger. The HUD parsed all of it (18 MB, 50k rows on the host) on every 5 Hz snapshot to show the newest 50; it now reads a bounded 1 MiB tail. The dashboard's lifetime token counts follow the file incrementally (restarting on rotation or truncation) instead of re-parsing it every 5 s; on the host ledger they match the old full parse exactly. Both refuse a symlinked ledger.
 - The HUD and curses dashboard now show a lockdown while one is in force. They asked `systemctl is-active kaia-lockdown.service`, but that oneshot unit (no `RemainAfterExit`) is "inactive" as soon as the script has loaded the drop-all table, so the `LockdownMode`/`CRITICAL` posture could never appear; every lockdown on 2026-10-30 displayed as "off". The state is now read from the `table inet kaia_lockdown` line of the ruleset the dashboard already fetches through the gate, and shows "unknown" when the gate cannot be asked.
 
 ### Network discovery

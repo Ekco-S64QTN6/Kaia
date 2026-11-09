@@ -21,6 +21,8 @@ import socket
 import glob
 import sqlite3
 import json
+import hashlib
+import stat as stat_module
 import urllib.request
 import urllib.error
 from dataclasses import dataclass, field
@@ -311,6 +313,186 @@ def query_gate_diagnostics(query_type: str, args: list = None) -> Tuple[bool, st
 
 # security.ebpf_telemetry.PRIV_ALERT_EVENTS, without importing BCC into the UI.
 PRIVILEGE_ALERT_EVENT_TYPES = ("privilege_escalation_unexpected", "privilege_setuid_exec_unusual")
+
+# ==================== AUDIT LEDGER READING ====================
+# The ledger is append-only JSONL and only grows: 18 MB / 50k rows on the host by
+# 2026-11, nearly all of them the dashboard's own audited nft polls. Readers take a
+# bounded tail or follow it incrementally; nothing re-reads the whole file per poll.
+
+LEDGER_TAIL_MAX_BYTES = 1024 * 1024
+LEDGER_LINE_MAX_BYTES = 64 * 1024
+LEDGER_MAX_TRACKED_TOKENS = 100_000
+
+
+def _open_ledger(path: str) -> int:
+    return os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+
+
+def _parse_ledger_lines(data: bytes) -> List[dict]:
+    records = []
+    for raw in data.splitlines():
+        if not raw.strip() or len(raw) > LEDGER_LINE_MAX_BYTES:
+            continue
+        try:
+            rec = json.loads(raw)
+        except (ValueError, UnicodeDecodeError):
+            continue
+        if isinstance(rec, dict):
+            records.append(rec)
+    return records
+
+
+def read_ledger_tail(path: str, max_records: int = 50, max_bytes: int = LEDGER_TAIL_MAX_BYTES) -> List[dict]:
+    """The last ``max_records`` parseable records, reading at most ``max_bytes``.
+
+    Refuses a symlinked ledger, like the gate's own readers. Returns [] when the
+    file is absent or unreadable.
+    """
+    try:
+        fd = _open_ledger(path)
+    except OSError:
+        return []
+    try:
+        st = os.fstat(fd)
+        if not stat_module.S_ISREG(st.st_mode):
+            return []
+        start = max(0, st.st_size - max_bytes)
+        os.lseek(fd, start, os.SEEK_SET)
+        chunks, remaining = [], st.st_size - start
+        while remaining > 0:
+            chunk = os.read(fd, min(remaining, 256 * 1024))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+    finally:
+        os.close(fd)
+    data = b"".join(chunks)
+    if start > 0:
+        # Drop the partial first line the seek landed in.
+        newline = data.find(b"\n")
+        data = data[newline + 1:] if newline >= 0 else b""
+    return _parse_ledger_lines(data)[-max_records:]
+
+
+def ledger_token(record: dict) -> Optional[dict]:
+    """Token scope from an audit record, keyed by a stable ``id``, or None.
+
+    Since the audit-redaction change the gate writes ``capability_token: null``,
+    ``request.capability_token: "[REDACTED]"`` and the scope in
+    ``capability_token_metadata`` with a SHA-256 ``fingerprint``. Older rows carry
+    the raw token with its ``signature``. The raw signature is never returned.
+    """
+    candidates = (
+        record.get("capability_token_metadata"),
+        record.get("capability_token"),
+        (record.get("request") or {}).get("capability_token") if isinstance(record.get("request"), dict) else None,
+    )
+    for value in candidates:
+        if not value:
+            continue
+        try:
+            token = json.loads(value) if isinstance(value, str) else value
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(token, dict):
+            continue
+        if isinstance(token.get("fingerprint"), str) and token["fingerprint"]:
+            token_id = token["fingerprint"]
+        elif isinstance(token.get("signature"), str) and token["signature"]:
+            # Legacy row: identify it by a digest, never by the HMAC itself.
+            token_id = hashlib.sha256(token["signature"].encode("utf-8")).hexdigest()
+        else:
+            continue
+        out = {k: token[k] for k in ("capability", "target", "issued_at", "expires", "issued_by")
+               if isinstance(token.get(k), str)}
+        out["id"] = token_id
+        return out
+    return None
+
+
+def token_expiry(token: dict) -> Optional[datetime]:
+    expires = token.get("expires") or ""
+    if not expires:
+        return None
+    try:
+        dt = datetime.fromisoformat(expires[:-1] + "+00:00" if expires.endswith("Z") else expires)
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+
+
+class LedgerTokenCounter:
+    """Lifetime token counts, following the ledger instead of re-reading it.
+
+    Each call reads only the bytes appended since the last one. A ledger that was
+    replaced (rotation: new inode) or truncated is counted again from its start.
+    A token is counted once, by its first record: rejected when that record was
+    denied, otherwise active until its expiry.
+    """
+
+    def __init__(self) -> None:
+        self._ino = None
+        self._offset = 0
+        self._pending = b""
+        self._seen: Set[str] = set()
+        self._rejected = 0
+        self._expiries: Dict[str, Optional[datetime]] = {}
+
+    def _reset(self, ino) -> None:
+        self.__init__()
+        self._ino = ino
+
+    def counts(self, path: str, now: Optional[datetime] = None) -> Tuple[int, int, int]:
+        now = now or datetime.now(UTC)
+        try:
+            fd = _open_ledger(path)
+        except OSError:
+            return self._tally(now)
+        try:
+            st = os.fstat(fd)
+            if not stat_module.S_ISREG(st.st_mode):
+                return self._tally(now)
+            if st.st_ino != self._ino or st.st_size < self._offset:
+                self._reset(st.st_ino)
+            os.lseek(fd, self._offset, os.SEEK_SET)
+            while True:
+                chunk = os.read(fd, 256 * 1024)
+                if not chunk:
+                    break
+                self._offset += len(chunk)
+                self._consume(chunk)
+        finally:
+            os.close(fd)
+        return self._tally(now)
+
+    def _consume(self, chunk: bytes) -> None:
+        data = self._pending + chunk
+        cut = data.rfind(b"\n")
+        if cut < 0:
+            # No complete line yet; never buffer more than one maximal line.
+            self._pending = data if len(data) <= LEDGER_LINE_MAX_BYTES else b""
+            return
+        self._pending = data[cut + 1:]
+        if len(self._pending) > LEDGER_LINE_MAX_BYTES:
+            self._pending = b""
+        for record in _parse_ledger_lines(data[:cut]):
+            token = ledger_token(record)
+            if token is None or token["id"] in self._seen:
+                continue
+            if len(self._seen) >= LEDGER_MAX_TRACKED_TOKENS:
+                continue
+            self._seen.add(token["id"])
+            if record.get("result") == "denied":
+                self._rejected += 1
+            else:
+                self._expiries[token["id"]] = token_expiry(token)
+
+    def _tally(self, now: datetime) -> Tuple[int, int, int]:
+        active = sum(1 for exp in self._expiries.values() if exp is not None and exp > now)
+        expired = sum(1 for exp in self._expiries.values() if exp is not None and exp <= now)
+        return active, expired, self._rejected
+
 
 def controls_summary(health) -> str:
     """One line for the curses pane: overall state and what is not active."""
@@ -691,64 +873,15 @@ class SystemSecurityCollector(threading.Thread):
             "lockdown_state": "unknown",
             "control_health": None,
         }
-        
+        self._token_counter = LedgerTokenCounter()
+
     def get_data(self) -> dict:
         with self._lock:
             return dict(self._data)
             
     def _parse_tokens(self):
-        active = 0
-        expired = 0
-        rejected = 0
-        seen_signatures = set()
-        
-        if os.path.exists(config.AUDIT_LOG_PATH):
-            try:
-                with open(config.AUDIT_LOG_PATH, "r") as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            record = json.loads(line)
-                            result = record.get("result", "")
-                            # New audit rows store only non-replayable capability
-                            # metadata; older rows may still contain the raw token.
-                            cap_token_str = (
-                                record.get("capability_token_metadata")
-                                or record.get("capability_token")
-                            )
-
-                            if not cap_token_str:
-                                continue
-
-                            token_data = json.loads(cap_token_str)
-                            sig = token_data.get("signature") or token_data.get("fingerprint")
-                            if not sig or sig in seen_signatures:
-                                continue
-                            seen_signatures.add(sig)
-                            
-                            if result == "denied":
-                                rejected += 1
-                                continue
-                                
-                            expires_str = token_data.get("expires", "")
-                            if expires_str:
-                                expires_str_aware = expires_str
-                                if expires_str_aware.endswith("Z"):
-                                    expires_str_aware = expires_str_aware[:-1] + "+00:00"
-                                expires_dt = datetime.fromisoformat(expires_str_aware)
-                                if expires_dt.tzinfo is None:
-                                    expires_dt = expires_dt.replace(tzinfo=UTC)
-                                if datetime.now(UTC) > expires_dt:
-                                    expired += 1
-                                else:
-                                    active += 1
-                        except Exception:
-                            pass
-            except Exception:
-                pass
-        return active, expired, rejected
+        # Incremental: reads only what the gate appended since the last poll.
+        return self._token_counter.counts(config.AUDIT_LOG_PATH)
 
     def run(self) -> None:
         while not self._stop.is_set():

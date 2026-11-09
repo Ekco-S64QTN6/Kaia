@@ -56,7 +56,10 @@ from kaia_dashboard import (
     LogEntry,
     ServiceCollector,
     TelemetryCollector,
+    ledger_token,
     query_gate_diagnostics,
+    read_ledger_tail,
+    token_expiry,
 )
 from security.policy_gate import generate_capability_token
 from security.ebpf_telemetry import EBPFTelemetryEngine
@@ -305,75 +308,31 @@ def serialize_snapshot(
         for log in snap.logs
     ]
 
-    # 2. Extract active token cards from audit_ledger
+    # 2. Token cards from the newest ledger records (a bounded tail, not the file).
     tokens_detail: List[Dict[str, Any]] = []
-    seen_sigs: Set[str] = set()
+    seen_ids: Set[str] = set()
     audit_path = config.AUDIT_LOG_PATH if HAS_CONFIG else os.path.join(BASE_DIR, "storage", "security", "audit_ledger.json")
-
-    if os.path.exists(audit_path):
-        try:
-            with open(audit_path, "r") as f:
-                content = f.read().strip()
-            records = []
-            if content.startswith("["):
-                records = json.loads(content)
-            else:
-                for line in content.splitlines():
-                    line = line.strip()
-                    if line:
-                        try:
-                            records.append(json.loads(line))
-                        except json.JSONDecodeError:
-                            continue
-
-            # Process most recent 50 records in reverse
-            for rec in reversed(records[-50:]):
-                cap_token_str = rec.get("capability_token")
-                if not cap_token_str:
-                    req_dict = rec.get("request", {})
-                    if isinstance(req_dict, dict):
-                        cap_token_str = req_dict.get("capability_token")
-                if not cap_token_str:
-                    continue
-
-                try:
-                    tok_obj = json.loads(cap_token_str) if isinstance(cap_token_str, str) else cap_token_str
-                    sig = tok_obj.get("signature", "")
-                    if not sig or sig in seen_sigs:
-                        continue
-                    seen_sigs.add(sig)
-
-                    expires_str = tok_obj.get("expires", "")
-                    ttl_seconds = 0
-                    is_expired = True
-
-                    if expires_str:
-                        exp_iso = expires_str[:-1] + "+00:00" if expires_str.endswith("Z") else expires_str
-                        exp_dt = datetime.fromisoformat(exp_iso)
-                        if exp_dt.tzinfo is None:
-                            exp_dt = exp_dt.replace(tzinfo=UTC)
-                        diff = (exp_dt - datetime.now(UTC)).total_seconds()
-                        if diff > 0:
-                            ttl_seconds = int(diff)
-                            is_expired = False
-
-                    tokens_detail.append({
-                        "id": sig[:8],
-                        "signature": sig,
-                        "capability": tok_obj.get("capability", "UNKNOWN"),
-                        "target": tok_obj.get("target", "*"),
-                        "issued_at": tok_obj.get("issued_at", ""),
-                        "expires": expires_str,
-                        "ttl_seconds": ttl_seconds,
-                        "is_expired": is_expired,
-                        "disposition": rec.get("result", "observed"),
-                    })
-                    if len(tokens_detail) >= 8:
-                        break
-                except Exception:
-                    continue
-        except Exception:
-            pass
+    now_utc = datetime.now(UTC)
+    for rec in reversed(read_ledger_tail(audit_path, max_records=50)):
+        token = ledger_token(rec)
+        if token is None or token["id"] in seen_ids:
+            continue
+        seen_ids.add(token["id"])
+        exp_dt = token_expiry(token)
+        remaining = (exp_dt - now_utc).total_seconds() if exp_dt else 0
+        tokens_detail.append({
+            "id": token["id"][:8],
+            "fingerprint": token["id"],
+            "capability": token.get("capability", "UNKNOWN"),
+            "target": token.get("target", "*"),
+            "issued_at": token.get("issued_at", ""),
+            "expires": token.get("expires", ""),
+            "ttl_seconds": int(remaining) if remaining > 0 else 0,
+            "is_expired": remaining <= 0,
+            "disposition": rec.get("result", "observed"),
+        })
+        if len(tokens_detail) >= 8:
+            break
 
     # 3. Hardware readings from TelemetryCollector or psutil
     hw_telemetry = {
