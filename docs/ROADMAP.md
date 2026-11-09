@@ -54,8 +54,7 @@ face rig) and the command console, behind a strict self-hosted CSP and loopback 
 ## Next (Tier 5, ordered)
 
 1. **Done 2026-11-09:** alert levels and reasons in the HUD feed, with a High+ filter.
-2. **Attestation against signed packages** (Supply chain, above): verify the critical files
-   against the signed `.pkg.tar.zst` in the pacman cache, closing the unsigned-database gap.
+2. **Done 2026-11-09:** daily verification against the signed package archives.
 3. **Wider secrets scanning.** Kaia's own state, logs and tree are scanned (2026-11-09); extend to
    operator-configured scopes (home dotfiles, shell history) outside the gate's `ProtectHome` sandbox.
 4. **Backup checks**: existence, recency and a test restore, never inferred from file presence.

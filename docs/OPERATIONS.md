@@ -88,7 +88,7 @@ package owns. Findings are recorded once each, as `package_file_altered` or
 response. Runs wait while pacman holds `db.lck`. A mode or owner set by a package's own
 `/usr/lib/tmpfiles.d` rule is accepted; one from `/etc/tmpfiles.d` is reported.
 
-On demand: `sudo /opt/kaia/scripts/kaia_package_attest.py` (exit 1 on any alteration). The gate runs without `CAP_DAC_OVERRIDE`, so it cannot read execute-only files such as `/usr/lib/dbus-daemon-launch-helper` (mode 4110) and reports them `unverifiable`; the on-demand run as full root verifies them.
+On demand: `sudo /opt/kaia/scripts/kaia_package_attest.py` (exit 1 on any alteration). Daily, `kaia-package-verify.timer` runs the stronger check as an unprivileged dynamic user: each cached package archive's signature is verified with `gpgv` against pacman's keyring, and the critical files are compared with the signed archive's copies, so a file and its local record rewritten together are still caught (`differs_from_signed_package`, `record_differs_from_signed_package`). Packages whose archive is no longer cached are listed, not failed. A failure fails the unit, which the health check reports. The gate runs without `CAP_DAC_OVERRIDE`, so it cannot read execute-only files such as `/usr/lib/dbus-daemon-launch-helper` (mode 4110) and reports them `unverifiable`; the on-demand run as full root verifies them.
 `pacman -Qkk <pkg>` is the independent cross-check. The local database is not signed, so
 an attacker with root can rewrite a record together with the file; this catches everything
 short of that.

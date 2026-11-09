@@ -39,6 +39,9 @@ UNITS = {
     "kaia-policy-gate.service": {"active_states": ("active",), "must_exist": True},
     "kaia-restore-blocks.service": {"active_states": ("active", "inactive"), "must_exist": False,
                                     "must_be_enabled": True},
+    # Daily oneshot: inactive between runs; a failed result means a privileged
+    # file differs from its signed package (or the check could not run).
+    "kaia-package-verify.service": {"active_states": ("active", "inactive", "activating"), "must_exist": False},
 }
 SYSTEMCTL = "/usr/bin/systemctl"
 

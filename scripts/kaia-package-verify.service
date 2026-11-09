@@ -1,0 +1,31 @@
+# Kaia: compare privileged installed files with the SIGNED package archives in
+# pacman's cache (gpgv against pacman's keyring, then bsdtar per file). The local
+# package database is unsigned; this is the check that root rewriting it cannot
+# pass without also forging a packager's signature. Read-only, unprivileged, no
+# network: archive parsing never happens inside the root Policy Gate.
+# Exit 1 (an alteration) fails the unit; kaia_health_check.py reports it.
+
+[Unit]
+Description=Kaia: verify privileged files against signed packages
+Documentation=file://__DEPLOY_DIR__/security/package_attestation.py
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -I -s __DEPLOY_DIR__/scripts/kaia_package_attest.py --signed
+DynamicUser=yes
+CapabilityBoundingSet=
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+PrivateNetwork=true
+RestrictAddressFamilies=AF_UNIX
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictNamespaces=true
+SystemCallArchitectures=native
+Nice=19
+IOSchedulingClass=idle

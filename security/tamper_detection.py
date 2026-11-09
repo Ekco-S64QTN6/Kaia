@@ -72,6 +72,8 @@ class TamperDetector:
             "/etc/systemd/system/kaia-restore-blocks.service",
             "/etc/systemd/system/kaia-health-check.service",
             "/etc/systemd/system/kaia-health-check.timer",
+            "/etc/systemd/system/kaia-package-verify.service",
+            "/etc/systemd/system/kaia-package-verify.timer",
         ):
             if os.path.exists(path) and path not in self.immutable_files:
                 self.immutable_files.append(path)

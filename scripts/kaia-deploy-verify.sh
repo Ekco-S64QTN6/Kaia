@@ -57,6 +57,9 @@ journalctl -u kaia-policy-gate --since "$START" --no-pager | grep -E "Honeypot i
 
 step "6. installed-content attestation (as root)"
 python3 -I -s /opt/kaia/scripts/kaia_package_attest.py; echo "attest exit $?"
+step "6b. against the signed package archives (as the unprivileged timer runs it)"
+systemctl start kaia-package-verify.service; echo "signed verify exit $?"
+journalctl -u kaia-package-verify -n 8 --no-pager
 
 step "7. versions"
 uname -r; systemctl --version | head -1
