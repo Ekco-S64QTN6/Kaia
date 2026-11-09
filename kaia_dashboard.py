@@ -551,24 +551,8 @@ def controls_color(health) -> int:
         return 0
 
 
-LOCKDOWN_TABLE_RE = re.compile(r"^\s*table\s+inet\s+kaia_lockdown\s*\{")
-
-
-def lockdown_state_from_ruleset(success: bool, ruleset: str) -> str:
-    """'active' / 'inactive' from `nft list ruleset` output, 'unknown' without it.
-
-    The lockdown is the presence of `table inet kaia_lockdown` (kaia-lockdown.sh).
-    `systemctl is-active kaia-lockdown.service` cannot show it: the unit is a
-    oneshot without RemainAfterExit, so it is "inactive" again as soon as the
-    script has finished loading the drop-everything table.
-    """
-    if not success:
-        return "unknown"
-    for line in (ruleset or "").splitlines():
-        if LOCKDOWN_TABLE_RE.match(line):
-            return "active"
-    return "inactive"
-
+from security.firewall_state import LOCKDOWN_TABLE_RE, lockdown_state_from_ruleset  # noqa: E402,F401
+from security import firewall_state  # noqa: E402
 
 # Both collectors need the ruleset (rule counts, lockdown state). Each gate query
 # is an audited request: two collectors polling every 5 and 10 s wrote ~26k
@@ -581,8 +565,16 @@ _ruleset_cache: Dict[str, Any] = {"at": None, "success": False, "stdout": ""}
 
 def query_ruleset(now: Optional[float] = None, query=None) -> Tuple[bool, str]:
     """`nft list ruleset` through the gate, at most once per RULESET_CACHE_SECONDS."""
-    query = query or query_gate_diagnostics
     with _ruleset_lock:
+        if query is None and HAS_CONFIG:
+            # Preferred: the ruleset the gate publishes itself (no request, so
+            # nothing to audit). Fall back to an audited query only when it is
+            # missing or stale: gate down, or a gate older than this dashboard.
+            published = firewall_state.read_state(
+                os.path.join(str(config.STATE_DIR), firewall_state.FILE_NAME))
+            if published is not None:
+                return published
+        query = query or query_gate_diagnostics
         now = time.monotonic() if now is None else now
         at = _ruleset_cache["at"]
         if at is not None and 0 <= now - at < RULESET_CACHE_SECONDS:
