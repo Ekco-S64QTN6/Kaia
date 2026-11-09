@@ -178,3 +178,29 @@ Handoffs between autonomous maintenance runs. Append a section per run; never re
 
 ### Recommended first action next run
 - Read the newest `/var/log/kaia/deploy-*.log` if the owner redeployed; confirm honeypot 5 of 5 and `kaia-restore-blocks` healthy. Then feature work: signed-package attestation, HUD alert reasons/filter.
+
+## Run 2026-11-09 (sixth): decisions, no open issues
+
+**HEAD at end:** 3e5e443 (+ this docs PR)
+
+### Host (second deploy, owner ran `sudo scripts/kaia-deploy-verify.sh`)
+- Honeypot 5 of 5 (#124 verified), restore-blocks healthy (#123 verified), privilege probe both kinds again, attestation clean. Log: /var/log/kaia/deploy-20261109-163253.log.
+
+### Decisions taken (the owner asked the agent to make them)
+- #105: never summarise or drop audit rows; the gate publishes the ruleset and dashboards stop polling (#127).
+- #104: no libbpf CO-RE rewrite; the kernel-upgrade case is surfaced as "reboot to load probes" (#128).
+- CAP_SYS_ADMIN: not granted; fanotify FIM is `off` by design, other failures degraded (#129). Blocking FIM, when built, should be BPF LSM.
+
+### Merged
+- #127 (closes #105), #128 (closes #104), #129
+
+### Open issues: none
+
+### Needs a redeploy
+- #127/#128/#129: `sudo scripts/kaia-deploy-verify.sh`. Expect the health check `ACTIVE` (fim off, decoy_listeners off, yara off), a `firewall` control, and no new `diagnostics`/`dashboard` ledger rows while a dashboard is open.
+
+### Baseline for next run
+- suite green (615) · CI on main green
+
+### Recommended first action next run
+- Read the newest /var/log/kaia/deploy-*.log. Then Tier 5 feature work in order: alert reasons and a level filter in the HUD feed; signed-package attestation; behavioural baselines.
