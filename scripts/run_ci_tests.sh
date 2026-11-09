@@ -44,6 +44,7 @@ tests=(
   tests/test_ledger_reading.py
   tests/test_ebpf_partial_attach.py
   tests/test_package_attestation.py
+  tests/test_dashboard_ruleset_cache.py
   tests/test_ci_covers_all_tests.py
 )
 

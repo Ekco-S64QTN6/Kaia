@@ -536,6 +536,28 @@ def lockdown_state_from_ruleset(success: bool, ruleset: str) -> str:
     return "inactive"
 
 
+# Both collectors need the ruleset (rule counts, lockdown state). Each gate query
+# is an audited request: two collectors polling every 5 and 10 s wrote ~26k
+# ledger rows a day while a dashboard was open (#105). One shared query per
+# RULESET_CACHE_SECONDS serves both; the lock also stops them racing to query.
+RULESET_CACHE_SECONDS = 10.0
+_ruleset_lock = threading.Lock()
+_ruleset_cache: Dict[str, Any] = {"at": None, "success": False, "stdout": ""}
+
+
+def query_ruleset(now: Optional[float] = None, query=None) -> Tuple[bool, str]:
+    """`nft list ruleset` through the gate, at most once per RULESET_CACHE_SECONDS."""
+    query = query or query_gate_diagnostics
+    with _ruleset_lock:
+        now = time.monotonic() if now is None else now
+        at = _ruleset_cache["at"]
+        if at is not None and 0 <= now - at < RULESET_CACHE_SECONDS:
+            return _ruleset_cache["success"], _ruleset_cache["stdout"]
+        success, stdout = query("nft_list")
+        _ruleset_cache.update(at=now, success=success, stdout=stdout)
+        return success, stdout
+
+
 def _get_honeypot_trigger_summary(conn) -> tuple:
     """Return total matching events and latest actor/timestamp without loading history."""
     cursor = conn.cursor()
@@ -586,7 +608,7 @@ class ThreatIntelCollector(threading.Thread):
     def _get_nft_counts(self):
         counts = {"input": 0, "forward": 0, "output": 0}
         gate_offline = False
-        success, stdout = query_gate_diagnostics("nft_list")
+        success, stdout = query_ruleset()
         if not success:
             gate_offline = True
         else:
@@ -888,7 +910,7 @@ class SystemSecurityCollector(threading.Thread):
             active, expired, rejected = self._parse_tokens()
             
             counts = {"input": 0, "forward": 0, "output": 0}
-            success, stdout = query_gate_diagnostics("nft_list")
+            success, stdout = query_ruleset()
             if success:
                 lines = stdout.splitlines()
                 current_chain = None
