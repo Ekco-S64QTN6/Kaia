@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Operator HUD
+
+- The HUD and curses dashboard now show a lockdown while one is in force. They asked `systemctl is-active kaia-lockdown.service`, but that oneshot unit (no `RemainAfterExit`) is "inactive" as soon as the script has loaded the drop-all table, so the `LockdownMode`/`CRITICAL` posture could never appear; every lockdown on 2026-10-30 displayed as "off". The state is now read from the `table inet kaia_lockdown` line of the ruleset the dashboard already fetches through the gate, and shows "unknown" when the gate cannot be asked.
+
 ### Network discovery
 
 - Parse NBNS NB and NBSTAT answer records, including scoped/compressed owner names and bounded active/unique node-name extraction; reject truncated or malformed records without partial persistence.

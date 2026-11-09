@@ -306,6 +306,25 @@ def query_gate_diagnostics(query_type: str, args: list = None) -> Tuple[bool, st
     return False, "Policy Gate offline"
 
 
+LOCKDOWN_TABLE_RE = re.compile(r"^\s*table\s+inet\s+kaia_lockdown\s*\{")
+
+
+def lockdown_state_from_ruleset(success: bool, ruleset: str) -> str:
+    """'active' / 'inactive' from `nft list ruleset` output, 'unknown' without it.
+
+    The lockdown is the presence of `table inet kaia_lockdown` (kaia-lockdown.sh).
+    `systemctl is-active kaia-lockdown.service` cannot show it: the unit is a
+    oneshot without RemainAfterExit, so it is "inactive" again as soon as the
+    script has finished loading the drop-everything table.
+    """
+    if not success:
+        return "unknown"
+    for line in (ruleset or "").splitlines():
+        if LOCKDOWN_TABLE_RE.match(line):
+            return "active"
+    return "inactive"
+
+
 def _get_honeypot_trigger_summary(conn) -> tuple:
     """Return total matching events and latest actor/timestamp without loading history."""
     cursor = conn.cursor()
@@ -632,7 +651,8 @@ class SystemSecurityCollector(threading.Thread):
             "gate_pid": 0,
             "gate_uptime": "N/A",
             "yara_rules_count": 0,
-            "lockdown_active": False
+            "lockdown_active": False,
+            "lockdown_state": "unknown",
         }
         
     def get_data(self) -> dict:
@@ -749,14 +769,9 @@ class SystemSecurityCollector(threading.Thread):
             except Exception:
                 pass
 
-            # Lockdown active
-            lockdown_active = False
-            try:
-                res = subprocess.run(["/usr/bin/systemctl", "is-active", "kaia-lockdown.service"], capture_output=True, text=True, timeout=2.0)
-                if res.stdout.strip() == "active":
-                    lockdown_active = True
-            except Exception:
-                pass
+            # Lockdown: read from the ruleset fetched above, not from the unit state.
+            lockdown_state = lockdown_state_from_ruleset(success, stdout)
+            lockdown_active = lockdown_state == "active"
 
             with self._lock:
                 self._data = {
@@ -768,7 +783,8 @@ class SystemSecurityCollector(threading.Thread):
                     "gate_pid": gate_pid,
                     "gate_uptime": gate_uptime,
                     "yara_rules_count": yara_rules_count,
-                    "lockdown_active": lockdown_active
+                    "lockdown_active": lockdown_active,
+                    "lockdown_state": lockdown_state,
                 }
             self._stop.wait(5.0)
 
@@ -2296,9 +2312,14 @@ class KaiamonUI:
         sy += 2
 
         # Add Lockdown Status
-        lockdown_active = info.get("lockdown_active", False)
-        status_str = "⚠ LOCKDOWN ACTIVE" if lockdown_active else "INACTIVE"
-        status_color = curses.color_pair(5) | curses.A_BOLD if lockdown_active else curses.color_pair(3)
+        lockdown_state = info.get("lockdown_state", "unknown")
+        if lockdown_state == "active":
+            status_str, status_color = "⚠ LOCKDOWN ACTIVE", curses.color_pair(5) | curses.A_BOLD
+        elif lockdown_state == "inactive":
+            status_str, status_color = "INACTIVE", curses.color_pair(3)
+        else:
+            # The ruleset could not be read through the gate: do not claim "off".
+            status_str, status_color = "UNKNOWN (gate unreachable)", curses.color_pair(4)
         self._safe_addstr(sy, sx, f"Lockdown: {status_str}", status_color)
 
     def _draw_command_pane(self, snap: KaiamonSnapshot) -> None:
