@@ -59,16 +59,16 @@ def test_event_struct_carries_old_and_new_identities():
 
 
 def test_exec_is_recognised_only_by_the_exact_cred_being_installed():
-    body = _function_body("kprobe__commit_creds")
+    body = _function_body("probe_commit_creds")
     # A stale map entry must never classify a later, unrelated change as exec.
     assert "if (ec->cred == (u64)new)" in body
     assert "exec_creds.delete(&tid);" in body
-    hook = _function_body("kprobe__security_bprm_committing_creds")
+    hook = _function_body("probe_security_bprm_committing_creds")
     assert "&bprm->cred" in hook and "exec_creds.update(&tid, &ec);" in hook
 
 
 def test_only_gains_of_root_leave_the_kernel():
-    body = _function_body("kprobe__commit_creds")
+    body = _function_body("probe_commit_creds")
     # Already effectively root, or nothing root in the new cred: not a gain.
     assert "if (oe.val == 0 || (nu.val != 0 && ne.val != 0))" in body
     # Outside exec, regaining a root real/saved uid (sudo's seteuid dance) is not a gain.

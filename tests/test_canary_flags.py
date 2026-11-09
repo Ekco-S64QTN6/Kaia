@@ -26,7 +26,7 @@ def test_bpf_program_includes_sock_header():
 
 def test_bpf_program_matches_honeypots_by_inode():
     text = ebpf_telemetry.bpf_text
-    assert "kprobe__security_file_open" in text
+    assert "int probe_security_file_open(" in text
     assert "BPF_HASH(honeypot_inodes" in text
     assert "0x80000000" in text
 

@@ -23,6 +23,23 @@ RINGBUF_STREAMS = (
 )
 RINGBUF_DROP_REPORT_INTERVAL = 30.0
 
+# Kprobes are attached one by one, not by BCC's kprobe__ auto-attach: with
+# auto-attach, one symbol missing or inlined on a kernel made BPF() raise and
+# took down every probe, honeypot watching included. Tracepoints (stable
+# syscall ABI) still auto-attach. (function in bpf_text, kernel symbol, what is lost)
+KPROBES = (
+    ("probe_security_file_open", "security_file_open",
+     "honeypot inode matching (relative paths, ./x, grep -r)"),
+    ("probe_tcp_v4_connect", "tcp_v4_connect", "outbound connection telemetry"),
+    ("probe_tcp_retransmit_skb", "tcp_retransmit_skb", "retransmission telemetry"),
+)
+# Attached together or not at all: commit_creds without the exec marker would
+# classify every sudo as an unexpected root gain.
+PRIVILEGE_KPROBES = (
+    ("probe_security_bprm_committing_creds", "security_bprm_committing_creds"),
+    ("probe_commit_creds", "commit_creds"),
+)
+
 # privilege_event_t.kind values (PRIV_KIND_* in bpf_text).
 PRIV_KIND_SETUID_EXEC = 1
 PRIV_KIND_NO_PRIOR_ROOT = 2
@@ -161,7 +178,7 @@ struct open_event_t {
     char filename[256];
     u32 flags;
 };
-BPF_RINGBUF_OUTPUT(openat2_events, 64);  // 256 KiB, shared by all CPUs
+BPF_RINGBUF_OUTPUT(openat2_events, 256);  // 1024 KiB: 256 KiB overflowed ~10x a day on the host
 BPF_RINGBUF_OUTPUT(honeypot_events, 64);  // 256 KiB, shared by all CPUs
 
 struct delete_event_t {
@@ -186,7 +203,7 @@ struct honeypot_inode_t {
 };
 BPF_HASH(honeypot_inodes, struct honeypot_inode_t, u32);
 
-int kprobe__security_file_open(struct pt_regs *ctx, struct file *file) {
+int probe_security_file_open(struct pt_regs *ctx, struct file *file) {
     struct honeypot_inode_t key = {};
     key.ino = file->f_inode->i_ino;
     key.dev = file->f_inode->i_sb->s_dev;
@@ -216,7 +233,7 @@ TRACEPOINT_PROBE(syscalls, sys_enter_execve) {
     return 0;
 }
 
-int kprobe__tcp_v4_connect(struct pt_regs *ctx, struct sock *sk) {
+int probe_tcp_v4_connect(struct pt_regs *ctx, struct sock *sk) {
     struct tcp_connect_event_t data = {};
     data.pid = bpf_get_current_pid_tgid() >> 32;
     bpf_get_current_comm(&data.comm, sizeof(data.comm));
@@ -235,7 +252,7 @@ int kprobe__tcp_v4_connect(struct pt_regs *ctx, struct sock *sk) {
     return 0;
 }
 
-int kprobe__tcp_retransmit_skb(struct pt_regs *ctx, struct sock *sk, struct sk_buff *skb) {
+int probe_tcp_retransmit_skb(struct pt_regs *ctx, struct sock *sk, struct sk_buff *skb) {
     struct tcp_retransmit_event_t data = {};
     u32 saddr = 0, daddr = 0;
     u16 sport = 0, dport = 0;
@@ -259,7 +276,7 @@ int kprobe__tcp_retransmit_skb(struct pt_regs *ctx, struct sock *sk, struct sk_b
     return 0;
 }
 
-int kprobe__security_bprm_committing_creds(struct pt_regs *ctx, struct linux_binprm *bprm) {
+int probe_security_bprm_committing_creds(struct pt_regs *ctx, struct linux_binprm *bprm) {
     u32 tid = (u32)bpf_get_current_pid_tgid();
     struct exec_cred_t ec = {};
     struct cred *cred = NULL;
@@ -270,7 +287,7 @@ int kprobe__security_bprm_committing_creds(struct pt_regs *ctx, struct linux_bin
     return 0;
 }
 
-int kprobe__commit_creds(struct pt_regs *ctx, struct cred *new) {
+int probe_commit_creds(struct pt_regs *ctx, struct cred *new) {
     u32 tid = (u32)bpf_get_current_pid_tgid();
     struct exec_cred_t *ec = exec_creds.lookup(&tid);
     u64 exec_bprm = 0;
@@ -423,6 +440,9 @@ class EBPFTelemetryEngine:
         
         self.lock = threading.Lock()
 
+        # Kernel symbols whose kprobe could not be attached -> what that loses.
+        self.missing_probes = {}
+
         # Events the kernel could not queue because a ring buffer was full.
         self.ringbuf_drops = {name: 0 for name in RINGBUF_STREAMS}
         self._last_drop_report = 0.0
@@ -446,17 +466,49 @@ class EBPFTelemetryEngine:
             self.bpf["privilege_events"].open_ring_buffer(self._handle_privilege_event)
             self.bpf["honeypot_events"].open_ring_buffer(self._handle_honeypot_event)
             
+            self.missing_probes = self._attach_kprobes()
+
             self.polling_thread = threading.Thread(target=self._poll_ring_buffers, daemon=True, name="ebpf-ringbuf-poll")
             self.polling_thread.start()
             logger.info("eBPF Telemetry engine loaded and polling ring buffers.")
-            control_health.report("ebpf", "active", "probes loaded; no ring buffer drops",
-                                  heartbeat_interval=5.0)
+            control_health.report("ebpf", *self._load_state(), heartbeat_interval=5.0)
             return True
         except Exception as e:
             logger.error(f"Failed to load or compile eBPF probes: {e}")
             control_health.report("ebpf", "failed", f"probes did not load: {e}")
             self.bpf = None
             return False
+
+    def _attach_kprobes(self) -> dict:
+        """Attach each kprobe separately. Returns {symbol: what is lost} for failures."""
+        missing = {}
+        for fn_name, symbol, loses in KPROBES:
+            try:
+                self.bpf.attach_kprobe(event=symbol, fn_name=fn_name)
+            except Exception as e:
+                logger.error("eBPF probe %s not attached (%s): %s is off", symbol, e, loses)
+                missing[symbol] = loses
+        attached = []
+        for fn_name, symbol in PRIVILEGE_KPROBES:
+            try:
+                self.bpf.attach_kprobe(event=symbol, fn_name=fn_name)
+                attached.append(symbol)
+            except Exception as e:
+                logger.error("eBPF probe %s not attached (%s): privilege-gain telemetry is off", symbol, e)
+                for done in attached:
+                    try:
+                        self.bpf.detach_kprobe(event=done)
+                    except Exception as detach_error:
+                        logger.error("Could not detach %s: %s", done, detach_error)
+                missing[symbol] = "privilege-gain telemetry (commit_creds)"
+                break
+        return missing
+
+    def _load_state(self) -> tuple:
+        if not self.missing_probes:
+            return "active", "all probes attached"
+        return "degraded", "not attached: " + "; ".join(
+            f"{sym} ({loses})" for sym, loses in sorted(self.missing_probes.items()))
 
     def stop(self):
         self.stop_event.set()
@@ -547,10 +599,10 @@ class EBPFTelemetryEngine:
         summary = ", ".join(f"{n}={c}" for n, c in sorted(new.items()))
         totals_text = ", ".join(f"{n}={c}" for n, c in sorted(totals.items()) if c)
         # A lost decoy read is a missed intrusion signal; other drops thin telemetry.
+        state, detail = self._load_state()
         if totals.get("honeypot_events"):
-            control_health.report("ebpf", "degraded", f"honeypot events dropped; drops since load: {totals_text}")
-        else:
-            control_health.report("ebpf", "active", f"probes loaded; drops since load: {totals_text}")
+            state, detail = "degraded", f"honeypot events dropped; {detail}"
+        control_health.report("ebpf", state, f"{detail}; drops since load: {totals_text}")
         if "honeypot_events" in new:
             # A dropped decoy read is a missed intrusion signal, not just telemetry.
             logger.error(f"eBPF ring buffer full: dropped events: {summary}")

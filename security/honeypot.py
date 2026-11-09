@@ -356,6 +356,11 @@ class HoneypotCoordinator:
             return
         parts = [f"{len(watched)} of {proposed} decoy/canary files watched"]
         degraded = missing > 0
+        if "security_file_open" in (getattr(ebpf_engine, "missing_probes", None) or {}):
+            # Only the exact absolute path passed to open() is matched now.
+            parts.append("inode probe not attached: relative paths and grep -r go unseen")
+            degraded = True
+            inode_count = None
         if inode_count is not None:
             parts.append(f"{inode_count} by inode")
             degraded = degraded or inode_count < len(watched)
