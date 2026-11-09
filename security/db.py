@@ -3,6 +3,7 @@ import sqlite3
 from datetime import UTC, datetime
 import uuid
 import logging
+import threading
 import config
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,7 @@ def initialize_db():
     conn.commit()
     conn.close()
     logger.info("Security events database initialized.")
+    _report_db_health(True, "initialized")
 
 
 def consume_capability_token(signature: str, expires_at: datetime) -> tuple[bool, str | None]:
@@ -114,30 +116,71 @@ def consume_capability_token(signature: str, expires_at: datetime) -> tuple[bool
                 logger.error("Failed to close capability-token replay database: %s", exc)
 
 
+def new_event_id() -> str:
+    """A 128-bit random event id.
+
+    Ids were 8 hex characters (32 bits) under a PRIMARY KEY: collisions become
+    likely within tens of thousands of events, and each one silently dropped a
+    detection. Historical rows keep their ids; nothing parses the format.
+    """
+    return f"evt_{uuid.uuid4().hex}"
+
+
+_db_state_lock = threading.Lock()
+_db_state = {"ok": None}
+
+
+def _report_db_health(ok: bool, detail: str) -> None:
+    """Control health for the event database, reported on change only."""
+    with _db_state_lock:
+        if _db_state["ok"] is ok:
+            return
+        _db_state["ok"] = ok
+    from security import control_health
+    control_health.report("security_db", "active" if ok else "failed", detail)
+
+
 def log_security_event(event_type: str, source: str, actor: str, payload_hash: str, disposition: str, session_id: str) -> str:
+    """Append a security event and return its id. Never raises.
+
+    A failure is logged with the event's content, so the journal still holds
+    what the database could not, and control health reports the database
+    failed until a write succeeds again.
     """
-    Appends a new security event.
-    Returns the generated event_id.
-    """
-    from datetime import UTC
-    event_id = f"evt_{uuid.uuid4().hex[:8]}"
+    event_id = new_event_id()
     timestamp = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-    
-    conn = sqlite3.connect(config.SECURITY_DB_PATH)
-    cursor = conn.cursor()
+    conn = None
     try:
-        cursor.execute("""
-            INSERT INTO security_events (event_id, timestamp, type, source, actor, payload_hash, disposition, session_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (event_id, timestamp, event_type, source, actor, payload_hash, disposition, session_id))
-        conn.commit()
+        conn = sqlite3.connect(config.SECURITY_DB_PATH, timeout=5.0)
+        for attempt in range(3):
+            try:
+                conn.execute("""
+                    INSERT INTO security_events (event_id, timestamp, type, source, actor, payload_hash, disposition, session_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (event_id, timestamp, event_type, source, actor, payload_hash, disposition, session_id))
+                conn.commit()
+                break
+            except sqlite3.IntegrityError:
+                if attempt == 2:
+                    raise
+                event_id = new_event_id()
         logger.warning(f"Security event recorded: {event_id} | Type: {event_type} | Disposition: {disposition}")
+        _report_db_health(True, "recording events")
     except Exception as e:
-        logger.error(f"Failed to log security event: {e}")
+        logger.error(
+            "Failed to record security event (kept here instead): type=%s source=%s actor=%s "
+            "disposition=%s detail=%s: %s",
+            event_type, source, str(actor)[:200], disposition, str(payload_hash or "")[:300], e,
+        )
+        _report_db_health(False, f"cannot record events: {e}")
     finally:
-        conn.close()
-        
+        if conn is not None:
+            try:
+                conn.close()
+            except sqlite3.Error:
+                pass
     return event_id
+
 
 def query_security_events(limit: int = 100) -> list:
     """

@@ -15,7 +15,7 @@ from pydantic import ValidationError
 import config
 from security.schemas import DiagnosticsRequest, MitigationRequest, UnblockRequest, ServiceControlRequest, StateModificationRequest, ScriptExecutionRequest, AuditRecord
 from security.host_executor import HostExecutor
-from security.db import consume_capability_token, log_security_event
+from security.db import consume_capability_token, log_security_event, new_event_id
 from security.telemetry_daemon import start_script_sentinel, stop_script_sentinel
 from security import control_health
 
@@ -288,7 +288,7 @@ class PolicyGate:
                 )
 
             timestamp = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-            event_id = f"evt_{uuid.uuid4().hex[:8]}"
+            event_id = new_event_id()
             payload_hash = hashlib.sha256(str(payload).encode()).hexdigest()
             cursor.execute(
                 """
