@@ -484,3 +484,116 @@ class PackageAttestationMonitor:
     def stop(self) -> None:
         if self._stop is not None:
             self._stop.set()
+
+
+# --- verification against the signed package archives ---------------------
+# The local database is unsigned: root can rewrite an mtree together with the
+# file it describes. The package archives in pacman's cache are signed by Arch
+# packagers. This pass verifies each archive's signature with gpgv against
+# pacman's public keyring, extracts the critical files from it, and compares
+# them with both the disk and the local record. It runs from
+# kaia-package-verify.timer as an unprivileged dynamic user, so archive parsing
+# never happens inside the root gate.
+
+PACMAN_CACHE = "/var/cache/pacman/pkg"
+PACMAN_KEYRING = "/etc/pacman.d/gnupg/pubring.gpg"
+GPGV = "/usr/bin/gpgv"
+BSDTAR = "/usr/bin/bsdtar"
+SIGNED_KINDS = ("differs_from_signed_package", "record_differs_from_signed_package")
+
+
+def read_desc(path: str) -> dict:
+    """%KEY% blocks of a local package desc file (first value of each)."""
+    fields, key = {}, None
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for line in f.read(1024 * 1024).splitlines():
+            if line.startswith("%") and line.endswith("%"):
+                key = line.strip("%")
+            elif key and line:
+                fields.setdefault(key, line)
+    return fields
+
+
+def cached_package(name: str, version: str, arch: str, cache: str = PACMAN_CACHE):
+    """(archive, signature) paths in the cache, or None when either is missing."""
+    for ext in (".pkg.tar.zst", ".pkg.tar.xz"):
+        pkg = os.path.join(cache, f"{name}-{version}-{arch}{ext}")
+        if os.path.isfile(pkg) and not os.path.islink(pkg) and os.path.isfile(pkg + ".sig"):
+            return pkg, pkg + ".sig"
+    return None
+
+
+def _run(argv, timeout=120, limit=MAX_HASH_BYTES):
+    import subprocess
+    proc = subprocess.run(argv, capture_output=True, timeout=timeout, env={"LC_ALL": "C", "PATH": "/usr/bin"})
+    if len(proc.stdout) > limit:
+        raise ValueError("output exceeds limit")
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+def gpgv_verify(pkg: str, sig: str, keyring: str = PACMAN_KEYRING, run=_run) -> bool:
+    rc, _, _ = run([GPGV, "--keyring", keyring, sig, pkg])
+    return rc == 0
+
+
+def archive_member_sha256(pkg: str, member: str, run=_run):
+    """SHA-256 of one archive member, or None if absent."""
+    rc, out, _ = run([BSDTAR, "-xOf", pkg, member])
+    if rc != 0:
+        return None
+    return hashlib.sha256(out).hexdigest()
+
+
+def signed_attest(fs_root: str = "", verify_sig=gpgv_verify, member_sha256=archive_member_sha256,
+                  cache: str = PACMAN_CACHE) -> dict:
+    """Critical files compared with their signed package archives.
+
+    Findings: ``differs_from_signed_package`` (the file on disk is not what the
+    packager signed), ``record_differs_from_signed_package`` (pacman's local
+    record was changed), ``signature_invalid``, and ``no_signed_package`` (the
+    archive or signature is not cached; informational, the cache may be cleaned).
+    """
+    started = time.time()
+    findings, checked, packages, unverified = [], 0, 0, []
+    for name, mtree_path in iter_packages(fs_root + PACMAN_LOCAL_DB):
+        try:
+            entries = parse_mtree(read_mtree(mtree_path))
+        except Exception:
+            continue
+        critical = {p: e for p, e in entries.items() if is_critical(p, e)}
+        if not critical:
+            continue
+        packages += 1
+        try:
+            desc = read_desc(os.path.join(os.path.dirname(mtree_path), "desc"))
+            located = cached_package(desc["NAME"], desc["VERSION"], desc.get("ARCH", "x86_64"), fs_root + cache)
+        except (OSError, KeyError):
+            located = None
+        if located is None:
+            unverified.append(name)
+            continue
+        pkg, sig = located
+        if not verify_sig(pkg, sig):
+            findings.append({"path": pkg, "kind": "signature_invalid", "package": name,
+                             "detail": "cached package signature does not verify against pacman's keyring"})
+            continue
+        for path, entry in critical.items():
+            checked += 1
+            signed = member_sha256(pkg, path.lstrip("/"))
+            if signed is None:
+                findings.append({"path": path, "kind": "differs_from_signed_package", "package": name,
+                                 "detail": "file not present in the signed package"})
+                continue
+            if entry.get("sha256") and entry["sha256"] != signed:
+                findings.append({"path": path, "kind": "record_differs_from_signed_package", "package": name,
+                                 "detail": "pacman's local record does not match the signed package"})
+            try:
+                on_disk = sha256_no_follow(fs_root + path)
+            except (OSError, ValueError) as e:
+                findings.append({"path": path, "kind": "unreadable", "package": name, "detail": str(e)})
+                continue
+            if on_disk != signed:
+                findings.append({"path": path, "kind": "differs_from_signed_package", "package": name,
+                                 "detail": "SHA-256 differs from the file in the signed package"})
+    return {"packages": packages, "checked": checked, "findings": findings[:MAX_FINDINGS],
+            "no_signed_package": unverified, "duration": round(time.time() - started, 1)}

@@ -202,7 +202,9 @@ class FakeSystemctl:
 
     def __call__(self, argv, **kwargs):
         unit = argv[2]
-        return types.SimpleNamespace(returncode=0, stdout=self.props[unit], stderr="")
+        # Like systemctl show: an unknown unit is reported as not-found.
+        props = self.props.get(unit, "LoadState=not-found\nActiveState=inactive\nSubState=dead\nResult=success\n")
+        return types.SimpleNamespace(returncode=0, stdout=props, stderr="")
 
 
 HEALTHY_UNITS = {
