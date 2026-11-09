@@ -42,6 +42,30 @@ probe reports which tiers the kernel actually accepts.
 probes loaded and the honeypot inode watches active. This does not change the
 `CAP_SYS_ADMIN` decision above.
 
+Before deploying an eBPF change, `PYTHONPATH=.:core pytest tests/test_ebpf_program_compiles.py`
+compiles the program against the local kernel headers (it skips in CI, which has no BCC).
+It catches header, type and field errors, not the verifier's stack limit or a failed attach:
+only the journal line above proves those.
+
+**Privilege-gain probe (2026-11-09).** Privilege telemetry comes from `commit_creds()`
+and reports only gains of root. Verify both kinds after deploying:
+
+```bash
+sudo true    # expect one privilege_setuid_exec ... exec=/usr/bin/sudo, and no CRITICAL line
+# A gain with no prior root identity, outside execve: an interpreter copy holding only
+# CAP_SETUID calls setuid(0). Run it from a filesystem without nosuid (not /tmp).
+cp /usr/bin/python3 ~/kaia-priv-test && sudo setcap cap_setuid+ep ~/kaia-priv-test
+~/kaia-priv-test -c 'import os; os.setuid(0); print(os.getuid())'    # prints 0
+rm -f ~/kaia-priv-test
+journalctl -u kaia-policy-gate --since -2min | grep -E 'privilege_|Unexpected root gain'
+```
+
+Expected: `Unexpected root gain outside execve with no prior root identity: kaia-priv-test …
+uid 1000->0 euid 1000->0 suid 1000`, and a `privilege_escalation_unexpected` event. It is
+alert-only: nothing is blocked. If `sudo true` instead logs an unexpected gain, the exec
+marker (`security_bprm_committing_creds`) is not firing on this kernel: report it rather than
+ignoring the alerts.
+
 ---
 
 ## 2. Deploy

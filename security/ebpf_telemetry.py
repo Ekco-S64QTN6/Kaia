@@ -1,4 +1,5 @@
 import os
+import re
 import stat
 import sys
 import time
@@ -21,6 +22,45 @@ RINGBUF_STREAMS = (
 )
 RINGBUF_DROP_REPORT_INTERVAL = 30.0
 
+# privilege_event_t.kind values (PRIV_KIND_* in bpf_text).
+PRIV_KIND_SETUID_EXEC = 1
+PRIV_KIND_NO_PRIOR_ROOT = 2
+
+# Security event types for a gain of root seen at commit_creds().
+PRIV_EVENT_SETUID_EXEC = "privilege_setuid_exec"
+PRIV_EVENT_SETUID_EXEC_UNUSUAL = "privilege_setuid_exec_unusual"
+PRIV_EVENT_UNEXPECTED = "privilege_escalation_unexpected"
+PRIV_ALERT_EVENTS = (PRIV_EVENT_UNEXPECTED, PRIV_EVENT_SETUID_EXEC_UNUSUAL)
+
+# Where Arch installs its set-user-ID programs (sudo, su, passwd, pkexec,
+# fusermount3, the polkit and dbus helpers). bprm->filename is the path as
+# passed to execve, so a relative path is never "usual".
+SYSTEM_SETUID_PREFIXES = ("/usr/bin/", "/usr/lib/", "/usr/sbin/", "/usr/libexec/")
+_CLEAN_EXEC_PATH = re.compile(r"[A-Za-z0-9_./+-]{1,200}")
+
+
+def classify_privilege_gain(kind: int, exec_path: str) -> str:
+    """Event type for a root gain reported by the commit_creds probe.
+
+    A set-user-ID exec is how sudo, su and pkexec work; it is recorded, and only
+    flagged when the binary is outside the system directories. A gain outside
+    execve by a task that held root in none of uid/euid/suid cannot come from
+    the setuid family without CAP_SETUID: it is the shape of a kernel privilege
+    escalation (prepare_kernel_cred/commit_creds), and of nothing routine.
+    Unknown kinds are treated as unexpected, never as routine.
+    """
+    if kind == PRIV_KIND_SETUID_EXEC:
+        # Judge the raw path: sanitizing first could strip characters out of an
+        # unusual path until it looked like a system one.
+        if (
+            _CLEAN_EXEC_PATH.fullmatch(exec_path or "")
+            and exec_path.startswith(SYSTEM_SETUID_PREFIXES)
+            and "/." not in exec_path
+        ):
+            return PRIV_EVENT_SETUID_EXEC
+        return PRIV_EVENT_SETUID_EXEC_UNUSUAL
+    return PRIV_EVENT_UNEXPECTED
+
 HAS_BCC = False
 try:
     from bcc import BPF
@@ -37,6 +77,9 @@ bpf_text = """
 // kernels leave the type incomplete and the WHOLE program fails to compile,
 // which silently disabled every probe, honeypots included.
 #include <net/sock.h>
+// struct cred / kuid_t and struct linux_binprm, for the commit_creds probe.
+#include <linux/cred.h>
+#include <linux/binfmts.h>
 
 // Events travel through BPF ring buffers: one buffer per stream shared by all
 // CPUs, charged to the memory cgroup rather than RLIMIT_MEMLOCK. The old
@@ -78,12 +121,36 @@ struct tcp_retransmit_event_t {
 };
 BPF_RINGBUF_OUTPUT(tcp_retransmit_events, 16);  // 64 KiB, shared by all CPUs
 
+// Privilege transitions are taken from commit_creds(), where every credential
+// change is installed, not from setuid()/setreuid() syscall entry. Syscall
+// entry saw only the requested uid: privilege *drops* (pacman -> alpm), calls
+// that fail with EPERM, and processes that already were root, while missing
+// setresuid() and every in-kernel change. Only a gain of root is reported:
+// the old credential had no effective root, the new one has root uid or euid.
+#define PRIV_KIND_SETUID_EXEC 1  // installed by execve of a set-user-ID binary
+#define PRIV_KIND_NO_PRIOR_ROOT 2  // outside execve, and no root uid/euid/suid before
 struct privilege_event_t {
     u32 pid;
+    u32 kind;
+    u32 old_uid;
+    u32 old_euid;
+    u32 old_suid;
+    u32 new_uid;
+    u32 new_euid;
     char comm[16];
-    u32 uid;
+    char filename[256];  // the executed binary, for PRIV_KIND_SETUID_EXEC
 };
 BPF_RINGBUF_OUTPUT(privilege_events, 16);  // 64 KiB, shared by all CPUs
+
+// begin_new_exec() calls security_bprm_committing_creds(bprm) and then
+// commit_creds(bprm->cred). The hook records which cred the exec is about to
+// install; commit_creds() treats the change as an exec only when it installs
+// exactly that cred. A leftover entry can never mark a later change as exec.
+struct exec_cred_t {
+    u64 bprm;
+    u64 cred;
+};
+BPF_HASH(exec_creds, u32, struct exec_cred_t, 4096);
 
 struct open_event_t {
     u32 pid;
@@ -189,22 +256,71 @@ int kprobe__tcp_retransmit_skb(struct pt_regs *ctx, struct sock *sk, struct sk_b
     return 0;
 }
 
-TRACEPOINT_PROBE(syscalls, sys_enter_setuid) {
-    struct privilege_event_t data = {};
-    data.pid = bpf_get_current_pid_tgid() >> 32;
-    bpf_get_current_comm(&data.comm, sizeof(data.comm));
-    data.uid = args->uid;
-    if (privilege_events.ringbuf_output(&data, sizeof(data), 0) != 0) {
-        count_drop(3);  // privilege_events
-    }
+int kprobe__security_bprm_committing_creds(struct pt_regs *ctx, struct linux_binprm *bprm) {
+    u32 tid = (u32)bpf_get_current_pid_tgid();
+    struct exec_cred_t ec = {};
+    struct cred *cred = NULL;
+    bpf_probe_read_kernel(&cred, sizeof(cred), &bprm->cred);
+    ec.bprm = (u64)bprm;
+    ec.cred = (u64)cred;
+    exec_creds.update(&tid, &ec);
     return 0;
 }
 
-TRACEPOINT_PROBE(syscalls, sys_enter_setreuid) {
+int kprobe__commit_creds(struct pt_regs *ctx, struct cred *new) {
+    u32 tid = (u32)bpf_get_current_pid_tgid();
+    struct exec_cred_t *ec = exec_creds.lookup(&tid);
+    u64 exec_bprm = 0;
+    if (ec) {
+        if (ec->cred == (u64)new) {
+            exec_bprm = ec->bprm;
+        }
+        exec_creds.delete(&tid);
+    }
+
+    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
+    const struct cred *old = NULL;
+    bpf_probe_read_kernel(&old, sizeof(old), &task->real_cred);
+    if (!old) {
+        return 0;
+    }
+    kuid_t ou = {}, oe = {}, os = {}, nu = {}, ne = {};
+    bpf_probe_read_kernel(&ou, sizeof(ou), &old->uid);
+    bpf_probe_read_kernel(&oe, sizeof(oe), &old->euid);
+    bpf_probe_read_kernel(&os, sizeof(os), &old->suid);
+    bpf_probe_read_kernel(&nu, sizeof(nu), &new->uid);
+    bpf_probe_read_kernel(&ne, sizeof(ne), &new->euid);
+
+    // Not a gain: already effectively root, or the new cred has no root uid/euid.
+    if (oe.val == 0 || (nu.val != 0 && ne.val != 0)) {
+        return 0;
+    }
+    u32 kind = PRIV_KIND_SETUID_EXEC;
+    if (!exec_bprm) {
+        // A set-user-ID program switching back to the root it holds in its
+        // real or saved uid (sudo does this repeatedly) is not a gain.
+        if (ou.val == 0 || os.val == 0) {
+            return 0;
+        }
+        kind = PRIV_KIND_NO_PRIOR_ROOT;
+    }
+
     struct privilege_event_t data = {};
     data.pid = bpf_get_current_pid_tgid() >> 32;
+    data.kind = kind;
+    data.old_uid = ou.val;
+    data.old_euid = oe.val;
+    data.old_suid = os.val;
+    data.new_uid = nu.val;
+    data.new_euid = ne.val;
     bpf_get_current_comm(&data.comm, sizeof(data.comm));
-    data.uid = args->ruid;
+    if (exec_bprm) {
+        const char *fn = NULL;
+        bpf_probe_read_kernel(&fn, sizeof(fn), &((struct linux_binprm *)exec_bprm)->filename);
+        if (fn) {
+            bpf_probe_read_kernel_str(&data.filename, sizeof(data.filename), fn);
+        }
+    }
     if (privilege_events.ringbuf_output(&data, sizeof(data), 0) != 0) {
         count_drop(3);  // privilege_events
     }
@@ -533,30 +649,60 @@ class EBPFTelemetryEngine:
 
     def _handle_privilege_event(self, cpu, data, size):
         event = self.bpf["privilege_events"].event(data)
-        comm = event.comm.decode("utf-8", "ignore")
+        self._record_privilege_event(
+            pid=event.pid,
+            comm=event.comm.decode("utf-8", "ignore"),
+            kind=event.kind,
+            old_ids=(event.old_uid, event.old_euid, event.old_suid),
+            new_ids=(event.new_uid, event.new_euid),
+            filename=event.filename.decode("utf-8", "ignore"),
+        )
+
+    def _record_privilege_event(self, *, pid, comm, kind, old_ids, new_ids, filename):
+        """Classify and record one root gain reported by the commit_creds probe."""
         from security.telemetry_sanitizer import sanitize_telemetry
-        raw_pid = {"pid": str(event.pid)}
-        raw_comm = {"comm": comm}
-        raw_uid = {"uid": str(event.uid)}
-        clean_pid = sanitize_telemetry(raw_pid).get("pid", "")
-        clean_comm = sanitize_telemetry(raw_comm).get("comm", "")
-        clean_uid = sanitize_telemetry(raw_uid).get("uid", "")
-        clean_pid_int = int(clean_pid) if clean_pid else event.pid
-        clean_uid_int = int(clean_uid) if clean_uid else event.uid
+        clean = sanitize_telemetry({"pid": str(pid), "comm": comm, "path": filename})
+        clean_pid = int(clean.get("pid") or 0) or int(pid)
+        clean_comm = clean.get("comm", "")
+        clean_path = clean.get("path", "")
+        o_uid, o_euid, o_suid = (int(x) for x in old_ids)
+        n_uid, n_euid = (int(x) for x in new_ids)
+        event_type = classify_privilege_gain(kind, filename)
+        details = f"uid {o_uid}->{n_uid} euid {o_euid}->{n_euid} suid {o_suid}"
+        if clean_path:
+            details += f" exec={clean_path}"
+
         with self.lock:
             self.priv_deque.append({
-                "pid": clean_pid_int,
+                "pid": clean_pid,
                 "comm": clean_comm,
-                "uid": clean_uid_int,
-                "timestamp": time.time()
+                "type": event_type,
+                "uid": n_uid,
+                "euid": n_euid,
+                "old_uid": o_uid,
+                "old_euid": o_euid,
+                "filename": clean_path,
+                "timestamp": time.time(),
             })
+
+        if event_type == PRIV_EVENT_UNEXPECTED:
+            # Alert only (axiom 5): a heuristic never triggers a response itself.
+            logger.critical(
+                "Unexpected root gain outside execve with no prior root identity: "
+                "%s (PID %d) %s", clean_comm, clean_pid, details,
+            )
+        elif event_type == PRIV_EVENT_SETUID_EXEC_UNUSUAL:
+            logger.warning(
+                "Set-user-ID root exec from outside the system directories: "
+                "%s (PID %d) %s", clean_comm, clean_pid, details,
+            )
         try:
             from security.db import log_security_event
             log_security_event(
-                event_type="privilege_escalation",
+                event_type=event_type,
                 source="ebpf_telemetry",
-                actor=f"{clean_comm} (PID {clean_pid_int})",
-                payload_hash=f"uid={clean_uid_int}",
+                actor=f"{clean_comm} (PID {clean_pid})",
+                payload_hash=details,
                 disposition="observed",
                 session_id="system_protection"
             )

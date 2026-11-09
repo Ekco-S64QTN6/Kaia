@@ -306,6 +306,9 @@ def query_gate_diagnostics(query_type: str, args: list = None) -> Tuple[bool, st
     return False, "Policy Gate offline"
 
 
+# security.ebpf_telemetry.PRIV_ALERT_EVENTS, without importing BCC into the UI.
+PRIVILEGE_ALERT_EVENT_TYPES = ("privilege_escalation_unexpected", "privilege_setuid_exec_unusual")
+
 LOCKDOWN_TABLE_RE = re.compile(r"^\s*table\s+inet\s+kaia_lockdown\s*\{")
 
 
@@ -603,13 +606,20 @@ class ContainmentCollector(threading.Thread):
             privilege_alerts = []
             if os.path.exists(config.SECURITY_DB_PATH):
                 try:
-                    conn = sqlite3.connect(config.SECURITY_DB_PATH)
+                    conn = sqlite3.connect(config.SECURITY_DB_PATH, timeout=1.0)
                     cursor = conn.cursor()
-                    cursor.execute("""
+                    # Only root gains worth an operator's attention, from the last
+                    # 24 h. Routine set-user-ID execs (sudo, su) are recorded as
+                    # privilege_setuid_exec and stay out of the alert count, as do
+                    # pre-2026-11-09 'privilege_escalation' rows, which were
+                    # setuid() syscall attempts (drops included), not gains.
+                    threshold = (datetime.now(UTC) - timedelta(hours=24)).isoformat().replace("+00:00", "Z")
+                    cursor.execute(f"""
                         SELECT actor, timestamp, payload_hash FROM security_events
-                        WHERE type = 'privilege_escalation'
+                        WHERE type IN ({",".join("?" * len(PRIVILEGE_ALERT_EVENT_TYPES))})
+                          AND timestamp >= ?
                         ORDER BY timestamp DESC LIMIT 3
-                    """)
+                    """, (*PRIVILEGE_ALERT_EVENT_TYPES, threshold))
                     rows = cursor.fetchall()
                     for r in rows:
                         privilege_alerts.append({

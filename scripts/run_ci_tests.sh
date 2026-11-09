@@ -38,6 +38,8 @@ tests=(
   tests/test_ebpf_ringbuf_drops.py
   tests/test_privilege_watch.py
   tests/test_lockdown_visibility.py
+  tests/test_privilege_gain_probe.py
+  tests/test_ebpf_program_compiles.py
   tests/test_ci_covers_all_tests.py
 )
 
