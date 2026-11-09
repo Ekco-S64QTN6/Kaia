@@ -44,6 +44,7 @@ shell.
 | **Integrity** | A trusted, operator-recorded baseline loaded without following symlinks; regular single-link file checks and root-owned private permissions in system mode; tamper detection with alert latching and a lockdown circuit breaker |
 | **Telemetry** | eBPF (execve, openat2, connect/retransmit, gains of root at `commit_creds`, unlinkat attempts) and fanotify file monitoring with same-descriptor YARA scanning |
 | **Discovery and intel** | Passive ARP, mDNS, LLMNR, SSDP and NBNS/NBSTAT response records from the wire; InternetDB enrichment; pacman transaction monitoring |
+| **Supply chain and secrets** | pacman transactions recorded; setuid binaries, PAM, the loader and the executor's binaries attested against pacman's records every 6 h; unowned setuid files found; Kaia's own state, logs and tree scanned for the signing secret and common credentials |
 | **Decoys** | Non-destructive filesystem honeypots that only ever remove what they created |
 | **Control health** | Every control reports active / degraded / off / failed with heartbeats; the gate publishes it, the HUD shows it, and an unprivileged timer outside the gate flags a hung gate, a dead control or a failed boot unit |
 | **Operator HUD** | A loopback web HUD — telemetry waterfall, discovery radar, token widget, the Kaia codec avatar and a command console — behind a strict self-hosted CSP and Host/Origin checks; and a curses dashboard |
