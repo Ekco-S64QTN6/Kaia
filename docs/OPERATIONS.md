@@ -334,6 +334,11 @@ next request.
 
 ## Block persistence
 
+Blocks are refused for loopback, unspecified, multicast, broadcast and link-local
+addresses, this host's own addresses, its gateways and its DNS resolvers: a `saddr` drop
+of any of them cuts the host off. Unblocking is never restricted. If an old ledger record
+blocks such an address, `kaia-restore-blocks` reports it as a failed restore at boot.
+
 nftables rules are runtime-only. `kaia-restore-blocks.service` reconstructs the
 currently active Kaia-managed blocks from the audit ledger before the Policy Gate
 accepts new requests. Replay folds approved block_ip and unblock_ip events in
