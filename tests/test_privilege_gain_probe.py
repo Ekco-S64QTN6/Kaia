@@ -167,3 +167,25 @@ def test_dashboard_alert_types_match_the_engine():
     assert tuple(kaia_dashboard.PRIVILEGE_ALERT_EVENT_TYPES) == tuple(PRIV_ALERT_EVENTS)
     source = open(kaia_dashboard.__file__).read()
     assert "WHERE type = 'privilege_escalation'" not in source
+
+
+def test_routine_setuid_exec_records_are_rate_capped_but_alerts_never_are(recorded, monkeypatch, caplog):
+    from security.ebpf_telemetry import PRIV_ROUTINE_RECORDS_PER_MINUTE
+    clock = [1000.0]
+    monkeypatch.setattr(ebpf_telemetry.time, "time", lambda: clock[0])
+    engine = EBPFTelemetryEngine()
+    sudo = dict(pid=1, comm="bash", kind=PRIV_KIND_SETUID_EXEC,
+                old_ids=(1000, 1000, 1000), new_ids=(1000, 0), filename="/usr/bin/sudo")
+    for _ in range(PRIV_ROUTINE_RECORDS_PER_MINUTE + 500):   # a `sudo -n true` loop
+        engine._record_privilege_event(**sudo)
+    assert len(recorded) == PRIV_ROUTINE_RECORDS_PER_MINUTE
+    # Inside the same flooded minute, a real alert still goes through.
+    engine._record_privilege_event(pid=2, comm="x", kind=PRIV_KIND_NO_PRIOR_ROOT,
+                                   old_ids=(1000, 1000, 1000), new_ids=(0, 0), filename="")
+    engine._record_privilege_event(**dict(sudo, filename="/tmp/su"))
+    assert [e["event_type"] for e in recorded[-2:]] == [PRIV_EVENT_UNEXPECTED, PRIV_EVENT_SETUID_EXEC_UNUSUAL]
+    clock[0] += 61
+    with caplog.at_level(logging.WARNING, logger="security.ebpf_telemetry"):
+        engine._record_privilege_event(**sudo)
+    assert any("500 routine set-user-ID exec records suppressed" in r.getMessage() for r in caplog.records)
+    assert recorded[-1]["event_type"] == PRIV_EVENT_SETUID_EXEC

@@ -31,6 +31,8 @@ PRIV_EVENT_SETUID_EXEC = "privilege_setuid_exec"
 PRIV_EVENT_SETUID_EXEC_UNUSUAL = "privilege_setuid_exec_unusual"
 PRIV_EVENT_UNEXPECTED = "privilege_escalation_unexpected"
 PRIV_ALERT_EVENTS = (PRIV_EVENT_UNEXPECTED, PRIV_EVENT_SETUID_EXEC_UNUSUAL)
+# Database records of routine set-user-ID execs per minute (sudo, su, pkexec).
+PRIV_ROUTINE_RECORDS_PER_MINUTE = 60
 
 # Where Arch installs its set-user-ID programs (sudo, su, passwd, pkexec,
 # fusermount3, the polkit and dbus helpers). bprm->filename is the path as
@@ -407,6 +409,9 @@ class EBPFTelemetryEngine:
         self.conn_deque = deque(maxlen=500)
         self.retrans_deque = deque(maxlen=500)
         self.priv_deque = deque(maxlen=500)
+        self._priv_window_start = 0.0
+        self._priv_window_count = 0
+        self._priv_suppressed = 0
         self.honeypot_hits = deque(maxlen=HONEYPOT_HITS_MAX_ENTRIES)
         # Index -> decoy path for inode-matched hits (map value in honeypot_inodes).
         self.honeypot_inode_paths = []
@@ -658,6 +663,27 @@ class EBPFTelemetryEngine:
             filename=event.filename.decode("utf-8", "ignore"),
         )
 
+    def _allow_routine_privilege_record(self, now: float) -> bool:
+        """At most PRIV_ROUTINE_RECORDS_PER_MINUTE routine records per minute.
+
+        Suppressed ones are counted and reported once when the minute ends.
+        """
+        with self.lock:
+            if now - self._priv_window_start >= 60.0:
+                suppressed = self._priv_suppressed
+                self._priv_window_start, self._priv_window_count, self._priv_suppressed = now, 0, 0
+                if suppressed:
+                    logger.warning(
+                        "Privilege telemetry: %d routine set-user-ID exec records suppressed in the "
+                        "last minute (rate cap %d/min); unusual and unexpected gains are never capped.",
+                        suppressed, PRIV_ROUTINE_RECORDS_PER_MINUTE,
+                    )
+            if self._priv_window_count < PRIV_ROUTINE_RECORDS_PER_MINUTE:
+                self._priv_window_count += 1
+                return True
+            self._priv_suppressed += 1
+            return False
+
     def _record_privilege_event(self, *, pid, comm, kind, old_ids, new_ids, filename):
         """Classify and record one root gain reported by the commit_creds probe."""
         from security.telemetry_sanitizer import sanitize_telemetry
@@ -696,6 +722,11 @@ class EBPFTelemetryEngine:
                 "Set-user-ID root exec from outside the system directories: "
                 "%s (PID %d) %s", clean_comm, clean_pid, details,
             )
+        elif not self._allow_routine_privilege_record(time.time()):
+            # Any user can loop `sudo -n true`: one setuid exec, and one database
+            # write, per run before sudo has checked anything. Cap routine records;
+            # the unusual and unexpected kinds above are never capped.
+            return
         try:
             from security.db import log_security_event
             log_security_event(
