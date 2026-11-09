@@ -13,6 +13,7 @@ import subprocess
 import config
 from security.db import log_security_event
 from security import control_health
+from security.decoys import DECOYS
 
 
 logger = logging.getLogger(__name__)
@@ -115,11 +116,7 @@ class HoneypotCoordinator:
         self.yara_scanner = None
         
         # Filesystem decoys
-        self.decoys = {
-            "/etc/api_keys.json": '{"aws_key": "AKIAIOSFODNN7EXAMPLE", "note": "decoy"}',
-            "/var/backups/credentials.txt": 'db_password=example_decoy_do_not_use',
-            os.path.expanduser("~/.ssh/authorized_keys.bak"): '# Authorized keys backup\n'
-        }
+        self.decoys = dict(DECOYS)
         self.decoy_hashes = {}
         self.active_decoy_paths = []
         # Canary "flag" files (e.g. ~/flag.txt, /root/root.txt) are installed by

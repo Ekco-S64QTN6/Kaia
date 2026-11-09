@@ -52,6 +52,7 @@ tests=(
   tests/test_protected_block_targets.py
   tests/test_internetdb_sanitize.py
   tests/test_hud_console_commands.py
+  tests/test_decoy_provisioning.py
   tests/test_ci_covers_all_tests.py
 )
 

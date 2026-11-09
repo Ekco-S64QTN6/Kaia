@@ -317,6 +317,11 @@ python3 "$DEPLOY_DIR/scripts/install_canaries.py" \
     ${CANARY_OWNER:+--owner "$CANARY_OWNER"} \
     --template-dir "$DEPLOY_DIR/security/canaries"
 
+# Filesystem decoys the gate cannot create itself under ProtectSystem=strict are
+# provisioned here, exclusive and no-follow; an existing file is never touched.
+echo "==> Installing filesystem decoys"
+python3 "$DEPLOY_DIR/scripts/install_decoys.py" || echo "WARNING: some decoys could not be provisioned"
+
 # Filesystem decoys are created by HoneypotCoordinator with exclusive, no-follow
 # creation only when the target path is vacant. Never touch, truncate, or chmod a
 # potentially real API-key file, backup credential file, or SSH backup.
