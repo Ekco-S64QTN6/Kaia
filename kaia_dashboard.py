@@ -45,6 +45,40 @@ except ImportError:
 
 # Pure reader/evaluator for the gate's published control health; no BCC, no config.
 from security import control_health
+from security import alert_levels
+
+# Feed level per alert level; panels.js colours ERROR/CRITICAL red, SUCCESS green.
+FEED_LEVEL = {"critical": "CRITICAL", "high": "ERROR", "medium": "WARN", "low": "INFO", "info": "INFO"}
+_HASH_LIKE = re.compile(r"[0-9a-f]{8,64}")
+
+
+def format_security_event(event_type, source, actor, payload_hash, disposition) -> Tuple[str, str]:
+    """(feed level, message) for one security event row.
+
+    The level comes from security.alert_levels, not the disposition: an
+    'observed' sudo exec and an 'observed' unexpected root gain are not alike.
+    payload_hash holds a digest for some events and a readable detail for
+    others (privilege gains, attestation); show the detail when it is one.
+    """
+    level, _reason = alert_levels.level_of(event_type)
+    if disposition == "approved":
+        icon, status = "✓", "approved"
+    elif disposition in ("blocked", "denied"):
+        icon, status = "✗", "denied"
+    else:
+        icon, status = "⚠" if alert_levels.RANK[level] >= alert_levels.RANK["medium"] else "·", str(disposition)
+    feed_level = FEED_LEVEL[level]
+    if level == "info" and disposition == "approved":
+        feed_level = "SUCCESS"
+    payload = str(payload_hash or "")
+    if _HASH_LIKE.fullmatch(payload):
+        detail = f"{actor} hash:{payload[:8]}" if actor else f"hash:{payload[:8]}"
+    else:
+        detail = " ".join(x for x in (str(actor or ""), payload) if x)
+    detail = detail[:160]
+    if source:
+        detail += f" ({source})"
+    return feed_level, f"{icon} {str(event_type).upper():<12} │ {level.upper():<8} │ {status:<8} │ {detail}"
 
 # Optional GPU library
 try:
@@ -763,7 +797,8 @@ class ContainmentCollector(threading.Thread):
             "sentinel_alerts": 0,
             "last_alert_path": "None",
             "fim_alerts": [],
-            "privilege_alerts": []
+            "privilege_alerts": [],
+            "alert_counts_24h": {},
         }
         
     def get_data(self) -> dict:
@@ -833,6 +868,20 @@ class ContainmentCollector(threading.Thread):
                 except Exception as e:
                     logger.error(f"Failed to query FIM audit DB: {e}")
 
+            alert_counts = {name: 0 for name in alert_levels.LEVELS}
+            if os.path.exists(config.SECURITY_DB_PATH):
+                try:
+                    conn = sqlite3.connect(config.SECURITY_DB_PATH, timeout=1.0)
+                    since = (datetime.now(UTC) - timedelta(hours=24)).isoformat().replace("+00:00", "Z")
+                    rows = conn.execute(
+                        "SELECT type, COUNT(*) FROM security_events WHERE timestamp >= ? GROUP BY type",
+                        (since,),
+                    ).fetchall()
+                    conn.close()
+                    alert_counts = alert_levels.count_by_level(dict(rows))
+                except Exception:
+                    pass
+
             privilege_alerts = []
             if os.path.exists(config.SECURITY_DB_PATH):
                 try:
@@ -871,7 +920,8 @@ class ContainmentCollector(threading.Thread):
                     "sentinel_alerts": sentinel_alerts,
                     "last_alert_path": last_alert_path,
                     "fim_alerts": fim_alerts,
-                    "privilege_alerts": privilege_alerts
+                    "privilege_alerts": privilege_alerts,
+                    "alert_counts_24h": alert_counts,
                 }
             self._stop.wait(2.0)
 
@@ -1553,30 +1603,7 @@ class AuditLogCollector:
                 self._last_seen_rowid = rowid
                 disp_ts = ts[:19].split("T")[-1] if "T" in str(ts) else str(ts)[:8]
                 
-                if disposition == "approved":
-                    icon = "✓"
-                    status = "approved"
-                    level = "SUCCESS"
-                elif disposition in ("blocked", "denied"):
-                    icon = "✗"
-                    status = "denied"
-                    level = "ERROR"
-                else:
-                    icon = "⚠"
-                    status = disposition
-                    level = "WARN"
-                    
-                detail = f"hash:{payload_hash[:8]}" if payload_hash else ""
-                if source:
-                    detail += f" ({source})"
-                if str(event_type).startswith("privilege_config"):
-                    # Alert-only privilege watch: the file that changed is the
-                    # whole point; a hash fragment says nothing to an operator.
-                    detail = f"{actor} ({source})"
-                    if event_type == "privilege_config_critical":
-                        level = "ERROR"
-                
-                msg = f"{icon} {event_type.upper():<12} │ {status:<8} │ {detail}"
+                level, msg = format_security_event(event_type, source, actor, payload_hash, disposition)
                 entries.append(LogEntry(timestamp=disp_ts, level=level, message=msg))
             conn.close()
         except Exception:
@@ -2445,6 +2472,12 @@ class KaiamonUI:
                 self._safe_addstr(cy, cx + 2, lbl[:cw], curses.color_pair(4))
                 cy += 1
         cy += 1
+
+        counts = info.get("alert_counts_24h") or {}
+        crit, high = counts.get("critical", 0), counts.get("high", 0)
+        self._safe_addstr(cy, cx, f"Alerts (24h): {crit} critical, {high} high, {counts.get('medium', 0)} medium"[:cw],
+                          curses.color_pair(5) | curses.A_BOLD if crit or high else curses.color_pair(3))
+        cy += 2
 
         # Add Privilege Escalation Alerts
         self._safe_addstr(cy, cx, "Privilege Escalations (eBPF):", curses.color_pair(1) | curses.A_BOLD)
