@@ -16,6 +16,8 @@ Zero-Trust Invariants:
 """
 
 import os
+import re
+import sqlite3
 import sys
 import time
 import json
@@ -624,6 +626,51 @@ def send_policy_gate_ipc(action: str, payload: Dict[str, Any], cap_token: Option
 
     return False, {"message": f"Policy Gate offline or unreachable: {last_error}"}
 
+def show_audit_lines(hours: int, limit: int = 20) -> List[str]:
+    """Newest security events from the last ``hours``, with level and reason. Read-only."""
+    from security import alert_levels
+    db_path = config.SECURITY_DB_PATH if HAS_CONFIG else os.path.join(BASE_DIR, "storage", "security", "security_events.db")
+    since = (datetime.now(UTC) - timedelta(hours=hours)).isoformat().replace("+00:00", "Z")
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=1.0)
+        try:
+            rows = conn.execute(
+                "SELECT timestamp, type, actor, disposition FROM security_events "
+                "WHERE timestamp >= ? ORDER BY timestamp DESC LIMIT ?", (since, limit),
+            ).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error as e:
+        return [f"[ERROR] Cannot read the security event database: {e}"]
+    if not rows:
+        return [f"No security events in the last {hours} h."]
+    lines = [f"Security events, last {hours} h (newest {len(rows)}):"]
+    for ts, event_type, actor, disposition in rows:
+        level, reason = alert_levels.level_of(event_type)
+        lines.append(f"  {str(ts)[:19]}  {level.upper():<8} {event_type}  {str(actor)[:60]}  [{disposition}]  {reason}")
+    return lines
+
+
+def active_block_lines(limit: int = 10) -> List[str]:
+    """Kaia's active blocks, folded from the ledger exactly as boot replay does."""
+    import importlib.util
+    path = os.path.join(BASE_DIR, "scripts", "kaia_restore_blocks.py")
+    try:
+        spec = importlib.util.spec_from_file_location("kaia_restore_blocks", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        blocks = module.collect_blocks(config.AUDIT_LOG_PATH)
+    except Exception as e:
+        return [f"[ERROR] Cannot read the audit ledger: {e}"]
+    if not blocks:
+        return ["No active Kaia blocks recorded in the audit ledger."]
+    lines = [f"Active Kaia blocks (newest {min(limit, len(blocks))} of {len(blocks)}):"]
+    for b in list(reversed(blocks))[:limit]:
+        scope = "all traffic" if b["protocol"] == "all" else f"{b['protocol']}/{b['port']}"
+        lines.append(f"  {b['target_ip']:<40} {scope}")
+    return lines
+
+
 def dispatch_operator_command(cmd_line: str) -> Dict[str, Any]:
     """
     Executes an operator command via schema validation and Policy Gate dispatch.
@@ -731,6 +778,46 @@ def dispatch_operator_command(cmd_line: str) -> Dict[str, Any]:
             else:
                 output_lines.append(f"[ERROR] Failed to query rules: {resp}")
                 return {"success": False, "command": raw_cmd, "lines": output_lines}
+
+        elif cmd == "show" and len(args) >= 1 and args[0] == "audit":
+            hours = 24
+            if len(args) == 3 and args[1] == "--since" and re.fullmatch(r"[0-9]{1,3}h", args[2]):
+                hours = int(args[2][:-1])
+            elif len(args) != 1:
+                return {"success": False, "command": raw_cmd, "lines": ["Usage: show audit [--since <N>h]  (N up to 168)"]}
+            hours = max(1, min(hours, 168))
+            return {"success": True, "command": raw_cmd, "lines": show_audit_lines(hours)}
+
+        elif cmd == "list" and args == ["recent", "blocks"]:
+            return {"success": True, "command": raw_cmd, "lines": active_block_lines()}
+
+        elif cmd == "add" and len(args) >= 3 and args[0] == "rule":
+            name, ioc = args[1], args[2]
+            mitre = args[3] if len(args) > 3 else None
+            if len(args) > 4:
+                return {"success": False, "command": raw_cmd, "lines": ["Usage: add rule <name> <ioc> [mitre]"]}
+            # The gate verifies this exact scope (write_file on rules/<name>.yar)
+            # and validates every field itself; the console only proposes.
+            token = generate_capability_token("write_file", f"rules/{name}.yar", duration_seconds=15)
+            payload = {
+                "rule_name": name,
+                "target_ioc_indicator": ioc,
+                "threat_description": f"Operator-added IOC rule {name}",
+                "author": "operator (HUD console)",
+                "justification": "operator requested YARA rule",
+                "session_id": "sentinel_ui",
+            }
+            if mitre:
+                payload["mitre_framework_id"] = mitre
+            approved, resp = send_policy_gate_ipc("add_rule", payload, token)
+            msg = resp.get("message") if isinstance(resp, dict) else str(resp)
+            if approved:
+                return {"success": True, "command": raw_cmd, "lines": [f"[APPROVED] {msg}"]}
+            return {"success": False, "command": raw_cmd, "lines": [f"[DENIED] add rule rejected: {msg}"]}
+
+        elif cmd in ("add", "list"):
+            return {"success": False, "command": raw_cmd,
+                    "lines": ["Usage: add rule <name> <ioc> [mitre]  |  list recent blocks"]}
 
         elif cmd == "show" and len(args) >= 1 and args[0] == "assets":
             try:
