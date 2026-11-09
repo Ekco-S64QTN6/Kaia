@@ -60,6 +60,7 @@ class PacmanLogMonitor:
         self._cursor = None
         self._cursor_error = False
         self._missing_warned = False
+        self.last_problem = None
         self._load_cursor()
 
     def _load_cursor(self):
@@ -223,25 +224,31 @@ class PacmanLogMonitor:
     def poll_once(self) -> int:
         """Consume a bounded log slice and return the number of package events emitted."""
         with self._poll_lock:
+            # Why the last poll could not read the log, for control health.
+            self.last_problem = None
             try:
                 st = os.stat(self.log_path, follow_symlinks=False)
             except FileNotFoundError:
                 if not self._missing_warned:
                     logger.warning("Pacman log not found at %s; package monitoring is unavailable", self.log_path)
                     self._missing_warned = True
+                self.last_problem = f"{self.log_path} not found"
                 return 0
             except OSError as exc:
                 logger.error("Could not stat pacman log %s: %s", self.log_path, exc)
+                self.last_problem = f"cannot stat {self.log_path}: {exc}"
                 return 0
 
             if not stat.S_ISREG(st.st_mode):
                 logger.error("Pacman log path is not a regular file: %s", self.log_path)
+                self.last_problem = f"{self.log_path} is not a regular file"
                 return 0
             flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
             try:
                 fd = os.open(self.log_path, flags)
             except OSError as exc:
                 logger.error("Could not open pacman log %s: %s", self.log_path, exc)
+                self.last_problem = f"cannot open {self.log_path}: {exc}"
                 return 0
 
             try:
@@ -313,8 +320,9 @@ class PacmanLogMonitor:
                 self._cursor["inode"] = current.st_ino
                 self._save_cursor()
                 return emitted
-            except Exception:
+            except Exception as exc:
                 logger.exception("Pacman log poll failed")
+                self.last_problem = f"poll failed: {exc}"
                 return 0
             finally:
                 os.close(fd)
@@ -333,7 +341,16 @@ class PacmanLogMonitor:
             self._thread.join(timeout=2.0)
 
     def _run(self):
+        reported = "unset"
         while not self._stop.is_set():
             self.poll_once()
+            problem = getattr(self, "last_problem", None)
+            if problem != reported:
+                # Report only on change: a poll that cannot read the log is not "active".
+                if problem:
+                    control_health.report("pacman_monitor", "degraded", problem)
+                else:
+                    control_health.report("pacman_monitor", "active", "following pacman.log transactions")
+                reported = problem
             control_health.heartbeat("pacman_monitor")
             self._stop.wait(self.poll_interval)
