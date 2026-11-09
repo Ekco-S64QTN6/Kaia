@@ -91,3 +91,33 @@ Handoffs between autonomous maintenance runs. Append a section per run; never re
 
 ### Recommended first action next run
 - Check whether #101 has host results; act on any finding. Then code items: #105 (gate-side summary rows for identical read-only diagnostics, keeping every mutation and denial individual), signed-package attestation (ROADMAP Tier 5 #2), alert reasons in the HUD (Tier 5 #1). Gotcha: `cmd | tail` hides the suite's exit status; check `$?` of the suite itself.
+
+## Run 2026-11-09 (third)
+
+**HEAD at start:** ebb900e
+**HEAD at end:** 27f87f8 (+ this docs PR)
+**Batches landed this run:** 4 code PRs + this docs PR
+
+### Merged
+- #116 — security events never dropped silently: 128-bit ids + retry, never raises, journal fallback with the event, `security_db` control — evidence: CI-passing
+- #117 — Policy Gate refuses host changes the audit ledger cannot record (lockdown/diagnostics exempt); post-execution audit failure → error; no-follow ledger writes; token never in the failure log; `audit_ledger` control — evidence: CI-passing; pre-fix check fails 6 tests
+- #118 — executor never blocks loopback/unspecified/multicast/broadcast/link-local, this host, its gateways or resolvers; refuses when undeterminable — evidence: CI-passing; fixtures are the host's /proc/net lines
+- #119 — InternetDB fields allowlisted before cache/display (INV-004) — evidence: CI-passing
+
+### Issues closed / filed
+- none (no new findings outside these fixes; #101, #102, #104, #105 unchanged)
+
+### Housekeeping
+- Deleted 13 remote branches left from merged PRs.
+
+### In progress / blocked
+- #101 — host verification. **Host-verification blocker**: /opt/kaia is still at the 2026-11-01 code (checked this run); nothing from #98 onward is deployed. Deploy order unchanged: install, review, **re-baseline before the next boot**, start.
+- #102 owner decision; #104 design-sized; #105 remainder (gate-side summary rows) is an audit-completeness trade-off for the owner.
+
+### Baseline for next run
+- `scripts/run_ci_tests.sh`: green (584)
+- CI on main: green
+- Lint/type: no gate in the repo
+
+### Recommended first action next run
+- If deployed, work through #101's checklist and fix what the host shows. Otherwise, code items: signed-package attestation (ROADMAP Tier 5 #2); alert reasons and a level filter in the HUD feed (Tier 5 #1); multi-table policy-routing gateways for the block guard. The fail-closed sweep covered db.py, the audit ledger, the executor's block path and threat intel; still unswept: `rule_engine` isolated validation, `web_bridge` command parsing, `fim_daemon` response path.
