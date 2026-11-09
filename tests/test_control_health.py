@@ -245,6 +245,25 @@ def test_gate_not_running_or_not_installed_fails(tmp_path):
         assert checker.run(path, now=1001.0, runner=FakeSystemctl(units))["exit_status"] == 2
 
 
+def test_restore_blocks_inactive_after_install_is_fine_but_disabled_is_not(tmp_path):
+    """Host finding 2026-11-09: the installer stops the boot oneshot; until the next
+    boot it is inactive with a successful result, which is not a fault."""
+    checker = _checker()
+    path = _published(tmp_path, {"ebpf": {"state": "active"}})
+    after_install = "LoadState=loaded\nActiveState=inactive\nSubState=dead\nResult=success\nUnitFileState=enabled\n"
+    units = dict(HEALTHY_UNITS, **{"kaia-restore-blocks.service": after_install})
+    assert checker.run(path, now=1001.0, runner=FakeSystemctl(units))["exit_status"] == 0
+    disabled = after_install.replace("UnitFileState=enabled", "UnitFileState=disabled")
+    units = dict(HEALTHY_UNITS, **{"kaia-restore-blocks.service": disabled})
+    report = checker.run(path, now=1001.0, runner=FakeSystemctl(units))
+    assert report["exit_status"] == 1 and "will not run at boot" in checker.format_lines(report)[-1]
+
+
+def test_timer_does_not_fire_at_enable_time():
+    timer = (ROOT / "scripts/kaia-health-check.timer").read_text()
+    assert "OnActiveSec=5min" in timer and "\nOnBootSec" not in timer
+
+
 def test_restore_blocks_not_installed_is_off(tmp_path):
     checker = _checker()
     units = dict(HEALTHY_UNITS, **{"kaia-restore-blocks.service": "LoadState=not-found\nActiveState=inactive\nSubState=dead\nResult=success\n"})
