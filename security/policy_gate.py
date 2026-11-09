@@ -1101,11 +1101,22 @@ if __name__ == "__main__":
     if not fim_started:
         logger.warning("FIMDaemon could not start. Falling back to watchdog script sentinel.")
         start_script_sentinel()
-        control_health.report(
-            "fim", "degraded",
-            "fanotify unavailable (needs CAP_SYS_ADMIN, checklist step 1); "
-            "watchdog script sentinel on the workspace only, no YARA on file events",
-        )
+        import errno as _errno
+        if getattr(fim, "start_errno", None) == _errno.EPERM:
+            # By design: CAP_SYS_ADMIN is not granted to the gate (it is close to
+            # full root). fanotify FIM is therefore not provisioned here: "off",
+            # not a fault. The watchdog script sentinel still covers the workspace.
+            control_health.report(
+                "fim", "off",
+                "fanotify FIM not provisioned: the gate is deliberately not granted CAP_SYS_ADMIN; "
+                "watchdog script sentinel covers the workspace (no YARA on file events)",
+            )
+        else:
+            control_health.report(
+                "fim", "degraded",
+                "fanotify did not start (see the journal); "
+                "watchdog script sentinel on the workspace only, no YARA on file events",
+            )
     else:
         # Register reload callback to dynamically update FIM rules on rule addition
         rule_engine.register_reload_callback(fim.reload_rules)

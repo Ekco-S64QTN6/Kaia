@@ -427,3 +427,11 @@ def test_every_gate_control_starts_failed_and_reports_for_itself():
     reported = set(re.findall(r'control_health\.report\(\s*"(\w+)"', sources))
     assert set(control_health.GATE_CONTROLS) <= reported
     assert "health_publisher.start(publish_now=False)" in gate
+
+
+def test_fim_without_cap_sys_admin_is_off_by_design_other_failures_degraded():
+    gate = (ROOT / "security/policy_gate.py").read_text()
+    block = gate[gate.index('if getattr(fim, "start_errno", None) == _errno.EPERM:'):]
+    assert '"fim", "off"' in block.split("else:")[0]
+    assert '"fim", "degraded"' in block.split("else:")[1][:400]
+    assert "self.start_errno = errno" in (ROOT / "security/fim_daemon.py").read_text()

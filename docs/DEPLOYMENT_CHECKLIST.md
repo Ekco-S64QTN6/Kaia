@@ -10,7 +10,15 @@ This checklist records deployment findings last documented on **2026-09-08**. Mo
 
 ---
 
-## 1. Decide whether `CAP_SYS_ADMIN` is needed
+## 1. `CAP_SYS_ADMIN`: decided 2026-11-09, not granted
+
+The gate does not get `CAP_SYS_ADMIN`: it is close to full root and would undo most of the
+unit's capability sandbox for one control. fanotify FIM is therefore not provisioned, and
+control health reports `fim: off` (by design); the watchdog script sentinel still covers
+the workspace. Execution-blocking FIM, when built, should use a BPF LSM program (see
+ROADMAP), not fanotify permission events. The notes below are the original analysis.
+
+
 
 ```bash
 cd ~/github/Kaia
