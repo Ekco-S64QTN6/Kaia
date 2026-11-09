@@ -2,7 +2,9 @@
 Description=Kaia: check the security controls every 5 minutes
 
 [Timer]
-OnBootSec=3min
+# OnActiveSec, not OnBootSec: enabling the timer long after boot (the installer
+# does) made an elapsed OnBootSec fire at once, before the gate was started.
+OnActiveSec=5min
 OnUnitActiveSec=5min
 AccuracySec=30s
 

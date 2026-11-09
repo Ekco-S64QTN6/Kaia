@@ -47,6 +47,11 @@ compiles the program against the local kernel headers (it skips in CI, which has
 It catches header, type and field errors, not the verifier's stack limit or a failed attach:
 only the journal line above proves those.
 
+**Recorded 2026-11-09 (kernel 6.18.60-1-lts, systemd 262, deploy of `b2c1e68`):** baseline 34
+files; gate up; eBPF all probes attached, honeypot inode watches 4 of 4; `privilege_setuid_exec` for
+sudo and `Unexpected root gain ... uid 1000->0` for the `cap_setuid` test; `kaia_health_check.py`
+`DEGRADED` (fim, honeypot) as expected; `kaia_package_attest.py` as root 155 files, exit 0.
+
 **Privilege-gain probe (2026-11-09).** Privilege telemetry comes from `commit_creds()`
 and reports only gains of root. Verify both kinds after deploying:
 

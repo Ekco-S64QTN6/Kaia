@@ -10,9 +10,8 @@ numbers below link the detail.
 Nothing below is worth more than this. The repository can prove what its code does; only the
 installed host can prove what is running.
 
-1. **Deploy and verify the 2026-11-09 changes** ([#101](https://github.com/Ekco-S64QTN6/Kaia/issues/101)):
-   the `commit_creds` privilege probe (both checklist tests), control health and
-   `kaia-health-check.timer`, and the HUD token cards. Re-record the baseline before the next boot.
+1. **Done 2026-11-09** ([#101](https://github.com/Ekco-S64QTN6/Kaia/issues/101)): `main` deployed, baseline
+   recorded, privilege probe (both kinds), control health, timer and attestation verified on the host.
 2. Verify the installed systemd unit, `ExecStart`, `WorkingDirectory`, state directory and the
    trusted integrity baseline (deployment below `/opt`, state below `/var/lib`, `/srv` or `/mnt`,
    neither overlapping the checkout).

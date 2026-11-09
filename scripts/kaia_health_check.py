@@ -31,11 +31,14 @@ from security import control_health  # noqa: E402  (stays importable without cor
 
 DEFAULT_PATH = os.path.join(os.environ.get("KAIA_STATE_DIR", "/var/lib/kaia"), control_health.FILE_NAME)
 
-# unit -> what a healthy host shows. kaia-restore-blocks is a RemainAfterExit
-# oneshot: "active" after it has run, and a failed Result means blocks were lost.
+# unit -> what a healthy host shows. kaia-restore-blocks is a boot oneshot: the
+# installer stops it, so between an install and the next boot it is inactive
+# with a successful result, which is fine. What matters is that it is enabled
+# (it will run at boot) and that its last run did not fail (blocks were lost).
 UNITS = {
     "kaia-policy-gate.service": {"active_states": ("active",), "must_exist": True},
-    "kaia-restore-blocks.service": {"active_states": ("active",), "must_exist": False},
+    "kaia-restore-blocks.service": {"active_states": ("active", "inactive"), "must_exist": False,
+                                    "must_be_enabled": True},
 }
 SYSTEMCTL = "/usr/bin/systemctl"
 
@@ -49,7 +52,7 @@ def unit_states(units=UNITS, runner=subprocess.run) -> list:
     for unit, expect in units.items():
         try:
             out = runner(
-                [SYSTEMCTL, "show", unit, "--property=LoadState,ActiveState,SubState,Result"],
+                [SYSTEMCTL, "show", unit, "--property=LoadState,ActiveState,SubState,Result,UnitFileState"],
                 capture_output=True, text=True, timeout=10,
             )
         except Exception as e:
@@ -68,6 +71,9 @@ def unit_states(units=UNITS, runner=subprocess.run) -> list:
             detail = "unit not installed"
         elif active == "failed" or result not in ("", "success"):
             state = "failed"
+        elif expect.get("must_be_enabled") and props.get("UnitFileState", "enabled") != "enabled":
+            state = "degraded"
+            detail += f"; not enabled ({props.get('UnitFileState')}): it will not run at boot"
         elif active in expect["active_states"]:
             state = "active"
         else:
