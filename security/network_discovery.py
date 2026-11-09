@@ -8,6 +8,7 @@ import logging
 import threading
 from collections import OrderedDict
 from queue import Empty, Full, Queue
+from security import control_health
 import config
 
 logger = logging.getLogger(__name__)
@@ -239,14 +240,20 @@ class PassiveDiscoveryEngine:
             self.sock.bind((ifname, 0))
         except Exception as e:
             logger.error(f"Failed to open raw socket for passive discovery: {e}. Requires CAP_NET_RAW.")
+            control_health.report("discovery", "failed", f"raw socket: {e}")
             return
 
+        control_health.report("discovery", "active", f"passive capture on {ifname}",
+                              heartbeat_interval=5.0)
         while not self.stop_event.is_set():
+            control_health.heartbeat("discovery")
             try:
                 packet, addr = self.sock.recvfrom(65535)
             except socket.timeout:
                 continue
-            except Exception:
+            except Exception as e:
+                logger.error(f"Passive discovery capture stopped: {e}")
+                control_health.report("discovery", "failed", f"capture stopped: {e}")
                 break
 
             if len(packet) < 14:

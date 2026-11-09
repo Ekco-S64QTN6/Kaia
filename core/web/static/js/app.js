@@ -114,6 +114,24 @@ document.addEventListener('DOMContentLoaded', () => {
       + ' · trends: last 60 s · process CPU as % of all cores');
   }
 
+  // ── Control health (security/control_health.py) ──
+  // One dot per control: green active, grey deliberately off, yellow degraded,
+  // red failed or stale. The detail is the hover title.
+  const CONTROL_DOT = { active: 'green', off: 'grey', degraded: 'yellow', failed: 'red', stale: 'red' };
+  function renderControls(health) {
+    const el = $('controls-strip');
+    if (!health) { el.innerHTML = '<span class="item">Controls <b class="warn">unknown</b></span>'; return; }
+    const head = health.fresh
+      ? ''
+      : `<span class="item" title="${esc(health.problem)}"><span class="dot red"></span>Controls <b class="bad">NOT REPORTING</b></span>`;
+    const items = (health.controls || []).map((c) => {
+      const dot = CONTROL_DOT[c.state] || 'red';
+      const label = c.state === 'active' ? esc(c.name) : `${esc(c.name)} <b class="${dot === 'red' ? 'bad' : dot === 'yellow' ? 'warn' : ''}">${esc(c.state)}</b>`;
+      return `<span class="item" title="${esc(c.detail)}"><span class="dot ${dot}"></span>${label}</span>`;
+    });
+    el.innerHTML = head + items.join('');
+  }
+
   // ── Policy gate & containment ──
   function renderPolicy(snap) {
     const sec = snap.system_security || {};
@@ -134,6 +152,7 @@ document.addEventListener('DOMContentLoaded', () => {
         : '<span class="item">Lockdown <b class="warn">unknown</b></span>';
     const posture = `<span class="item">Posture <b>${esc(snap.sentinel_state || '--')}</b></span>`;
     $('gate-strip').innerHTML = gate + lock + posture;
+    renderControls(sec.control_health);
     setText('gate-meta', snap.timestamp_unix ? `UPDATED ${clockTime(snap.timestamp_unix)}` : '');
 
     setText('st-tok-active', sec.tokens_active ?? '--');

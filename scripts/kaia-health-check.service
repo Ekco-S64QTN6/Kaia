@@ -1,0 +1,38 @@
+# Kaia: independent check that the security controls are running.
+#
+# Reads __STATE_DIR__/control_health.json (published by the Policy Gate) and the
+# state of Kaia's units, and logs what is degraded or down. Runs outside the gate
+# so a hung or dead gate is still noticed. Read-only; it never acts.
+# Exit 1 (something degraded) is logged as a warning but is not a unit failure;
+# exit 2 (failed, stale, or the gate is down) fails the unit, so it shows in
+# `systemctl --failed`.
+
+[Unit]
+Description=Kaia: check that the security controls are running
+Documentation=file://__DEPLOY_DIR__/scripts/kaia_health_check.py
+After=kaia-policy-gate.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -I -s __DEPLOY_DIR__/scripts/kaia_health_check.py --path __STATE_DIR__/control_health.json --journal
+SuccessExitStatus=1
+
+# An unprivileged throwaway user that can read the group-readable health file.
+DynamicUser=yes
+SupplementaryGroups=kaiacord
+CapabilityBoundingSet=
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+PrivateNetwork=true
+# AF_UNIX only: systemctl show talks to systemd over the system bus socket.
+RestrictAddressFamilies=AF_UNIX
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictNamespaces=true
+SystemCallArchitectures=native
+ReadOnlyPaths=__STATE_DIR__

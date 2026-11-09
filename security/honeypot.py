@@ -12,6 +12,7 @@ import threading
 import subprocess
 import config
 from security.db import log_security_event
+from security import control_health
 
 
 logger = logging.getLogger(__name__)
@@ -293,14 +294,16 @@ class HoneypotCoordinator:
         self._register_canaries()
 
         # Register only exact verified decoys, never every proposed path.
+        watched = list(self.active_decoy_paths) + list(self.active_canary_paths)
+        inode_count = None
         if ebpf_engine:
-            watched = list(self.active_decoy_paths) + list(self.active_canary_paths)
             if watched:
                 ebpf_engine.register_honeypot_paths(watched)
                 # Inode matching catches relative paths, ./x, grep -r, etc.
                 register_inodes = getattr(ebpf_engine, "register_honeypot_inodes", None)
                 if register_inodes:
                     count = register_inodes(watched)
+                    inode_count = count
                     logger.info("Honeypot inode watches active on %d of %d decoy/canary files.",
                                 count, len(watched))
             t = threading.Thread(
@@ -329,6 +332,37 @@ class HoneypotCoordinator:
                 "Network namespace decoy listeners disabled (namespace '%s' not found or libc unavailable).",
                 self.ns_name,
             )
+            control_health.report(
+                "decoy_listeners", "off",
+                f"network namespace '{self.ns_name}' not provisioned (the installer does not create it)",
+            )
+        listeners = [t for t in self.threads if t.name.startswith("decoy-listener-")]
+        if listeners:
+            control_health.report("decoy_listeners", "active",
+                                  f"{len(listeners)} listeners in namespace '{self.ns_name}'")
+
+        self._report_health(ebpf_engine, watched, inode_count)
+
+    def _report_health(self, ebpf_engine, watched, inode_count) -> None:
+        """File decoys and canaries are only watched through the eBPF probes."""
+        proposed = len(self.decoys) + len(self.canary_paths)
+        missing = proposed - len(watched)
+        if not ebpf_engine or not getattr(ebpf_engine, "bpf", None):
+            control_health.report("honeypot", "failed",
+                                  f"eBPF not loaded: none of {len(watched)} decoy/canary files is watched")
+            return
+        if not watched:
+            control_health.report("honeypot", "failed", "no decoy or canary file could be prepared")
+            return
+        parts = [f"{len(watched)} of {proposed} decoy/canary files watched"]
+        degraded = missing > 0
+        if inode_count is not None:
+            parts.append(f"{inode_count} by inode")
+            degraded = degraded or inode_count < len(watched)
+        if missing > 0:
+            parts.append(f"{missing} could not be prepared (see the journal)")
+        control_health.report("honeypot", "degraded" if degraded else "active",
+                              "; ".join(parts), heartbeat_interval=5.0)
 
     def _remove_managed_decoy_if_unchanged(self, path: str, expected: dict) -> bool:
         """Unlink only a file this process created whose identity and bytes are intact."""
@@ -434,6 +468,7 @@ class HoneypotCoordinator:
     def _check_ebpf_honeypots(self, ebpf_engine):
         while not self.stop_event.is_set():
             time.sleep(1.0)
+            control_health.heartbeat("honeypot")
             hits = ebpf_engine.get_honeypot_hits()
             for hit in hits:
                 path = hit["filename"]

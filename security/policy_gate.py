@@ -17,6 +17,7 @@ from security.schemas import DiagnosticsRequest, MitigationRequest, UnblockReque
 from security.host_executor import HostExecutor
 from security.db import consume_capability_token, log_security_event
 from security.telemetry_daemon import start_script_sentinel, stop_script_sentinel
+from security import control_health
 
 logger = logging.getLogger(__name__)
 
@@ -422,11 +423,15 @@ class PolicyGate:
             logger.info(f"Policy Gate listening on Unix socket: {self.socket_path}")
         except Exception as e:
             logger.critical(f"Failed to bind socket {self.socket_path}: {e}")
+            control_health.report("policy_gate", "failed", f"cannot bind {self.socket_path}: {e}")
             self.is_running = False
             return
 
+        control_health.report("policy_gate", "active", f"listening on {self.socket_path}",
+                              heartbeat_interval=5.0)
         self.server_socket.settimeout(1.0)
         while self.is_running:
+            control_health.heartbeat("policy_gate")
             try:
                 conn, _ = self.server_socket.accept()
                 if not self._client_slots.acquire(blocking=False):
@@ -942,6 +947,12 @@ if __name__ == "__main__":
     from security.honeypot import HoneypotCoordinator
     from security.supply_chain_monitor import PacmanLogMonitor
     
+    # Every control this daemon runs starts as "failed" until it reports for
+    # itself, so one that never gets that far is published as failed rather
+    # than silently missing from the file.
+    for _name in control_health.GATE_CONTROLS:
+        control_health.report(_name, "failed", "did not report its state at startup")
+
     # Initialize security DB
     security.db.initialize_db()
 
@@ -949,6 +960,8 @@ if __name__ == "__main__":
     # reported by the collector and must not prevent the Policy Gate starting.
     pacman_monitor = PacmanLogMonitor()
     pacman_monitor.start()
+    control_health.report("pacman_monitor", "active", "following pacman.log transactions",
+                          heartbeat_interval=pacman_monitor.poll_interval)
     
     # Configure logging with rotation and stdout
     from logging.handlers import RotatingFileHandler
@@ -969,15 +982,36 @@ if __name__ == "__main__":
     # Initialize YARA Rule Engine
     rule_engine = RuleEngine.get_instance()
     
+    from security.rule_engine import HAS_YARA
+    try:
+        rule_files = sum(1 for n in os.listdir(rule_engine.rules_dir) if n.endswith(".yar"))
+    except OSError:
+        rule_files = 0
+    if not HAS_YARA:
+        control_health.report("yara", "failed", "yara-python not installed: no rule scanning")
+    elif rule_engine.scanner is not None:
+        control_health.report("yara", "active", f"{rule_files} rule files compiled")
+    elif rule_files:
+        control_health.report("yara", "failed", f"{rule_files} rule files did not compile; see the journal")
+    else:
+        control_health.report("yara", "off", "no rules added yet")
+
     # Initialize and start FIMDaemon
     fim = FIMDaemon(yara_scanner=rule_engine.scanner)
     fim_started = fim.start()
     if not fim_started:
         logger.warning("FIMDaemon could not start. Falling back to watchdog script sentinel.")
         start_script_sentinel()
+        control_health.report(
+            "fim", "degraded",
+            "fanotify unavailable (needs CAP_SYS_ADMIN, checklist step 1); "
+            "watchdog script sentinel on the workspace only, no YARA on file events",
+        )
     else:
         # Register reload callback to dynamically update FIM rules on rule addition
         rule_engine.register_reload_callback(fim.reload_rules)
+        control_health.report("fim", "active", "fanotify notification mode (observes, does not block)",
+                              heartbeat_interval=5.0)
 
     # Initialize and start eBPF telemetry engine
     ebpf = EBPFTelemetryEngine.get_instance()
@@ -985,12 +1019,18 @@ if __name__ == "__main__":
 
     # Initialize and start Passive Discovery
     discovery = PassiveDiscoveryEngine.get_instance()
-    discovery.start()
+    if not discovery.start():
+        control_health.report("discovery", "failed", "did not start (asset database); see the journal")
 
     # Initialize and start Honeypot coordinator
     honeypots = HoneypotCoordinator.get_instance()
     honeypots.start(ebpf_engine=ebpf)
     
+    # Publish every control's state for the HUD and kaia-health-check.timer.
+    # The first write waits one interval, so it follows the socket bind below.
+    health_publisher = control_health.HealthPublisher(config.CONTROL_HEALTH_PATH)
+    health_publisher.start(publish_now=False)
+
     gate = PolicyGate()
     logger.info("Starting standalone Policy Gate Daemon...")
     gate.is_running = True
@@ -1009,3 +1049,4 @@ if __name__ == "__main__":
         discovery.stop()
         honeypots.stop()
         pacman_monitor.stop()
+        health_publisher.stop()

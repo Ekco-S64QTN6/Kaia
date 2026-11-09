@@ -344,6 +344,9 @@ header {
 .status-strip b.ok { color: var(--green); }
 .status-strip b.bad { color: var(--red); }
 .status-strip b.warn { color: var(--yellow); }
+.controls-strip { flex-wrap: wrap; row-gap: 4px; }
+.controls-strip .item { cursor: help; }
+.dot.grey { background: var(--dim); }
 
 .stat-grid {
   display: grid;

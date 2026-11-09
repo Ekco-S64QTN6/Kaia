@@ -41,6 +41,9 @@ try:
 except ImportError:
     HAS_CONFIG = False
 
+# Pure reader/evaluator for the gate's published control health; no BCC, no config.
+from security import control_health
+
 # Optional GPU library
 try:
     import pynvml
@@ -308,6 +311,29 @@ def query_gate_diagnostics(query_type: str, args: list = None) -> Tuple[bool, st
 
 # security.ebpf_telemetry.PRIV_ALERT_EVENTS, without importing BCC into the UI.
 PRIVILEGE_ALERT_EVENT_TYPES = ("privilege_escalation_unexpected", "privilege_setuid_exec_unusual")
+
+def controls_summary(health) -> str:
+    """One line for the curses pane: overall state and what is not active."""
+    if not health:
+        return "Controls: unknown"
+    if not health.get("fresh"):
+        return f"Controls: NOT REPORTING ({health.get('problem', '')})"
+    bad = [f"{c['name']} {c['state']}" for c in health.get("controls", [])
+           if c.get("state") not in ("active", "off")]
+    return f"Controls: {health.get('overall', 'unknown').upper()}" + (f" ({', '.join(bad)})" if bad else "")
+
+
+def controls_color(health) -> int:
+    overall = (health or {}).get("overall")
+    try:
+        if overall == "active":
+            return curses.color_pair(3)
+        if overall == "degraded":
+            return curses.color_pair(4)
+        return curses.color_pair(5) | curses.A_BOLD
+    except curses.error:
+        return 0
+
 
 LOCKDOWN_TABLE_RE = re.compile(r"^\s*table\s+inet\s+kaia_lockdown\s*\{")
 
@@ -663,6 +689,7 @@ class SystemSecurityCollector(threading.Thread):
             "yara_rules_count": 0,
             "lockdown_active": False,
             "lockdown_state": "unknown",
+            "control_health": None,
         }
         
     def get_data(self) -> dict:
@@ -783,6 +810,12 @@ class SystemSecurityCollector(threading.Thread):
             lockdown_state = lockdown_state_from_ruleset(success, stdout)
             lockdown_active = lockdown_state == "active"
 
+            # What each security control is actually doing, as the gate last published it.
+            if HAS_CONFIG:
+                health = control_health.load_and_evaluate(config.CONTROL_HEALTH_PATH)
+            else:
+                health = control_health.evaluate(None, time.time(), "configuration unavailable")
+
             with self._lock:
                 self._data = {
                     "tokens_active": active,
@@ -795,6 +828,7 @@ class SystemSecurityCollector(threading.Thread):
                     "yara_rules_count": yara_rules_count,
                     "lockdown_active": lockdown_active,
                     "lockdown_state": lockdown_state,
+                    "control_health": health,
                 }
             self._stop.wait(5.0)
 
@@ -2331,6 +2365,8 @@ class KaiamonUI:
             # The ruleset could not be read through the gate: do not claim "off".
             status_str, status_color = "UNKNOWN (gate unreachable)", curses.color_pair(4)
         self._safe_addstr(sy, sx, f"Lockdown: {status_str}", status_color)
+        sy += 1
+        self._safe_addstr(sy, sx, controls_summary(info.get("control_health")), controls_color(info.get("control_health")))
 
     def _draw_command_pane(self, snap: KaiamonSnapshot) -> None:
         """Draw Pane 5: Command Interface."""

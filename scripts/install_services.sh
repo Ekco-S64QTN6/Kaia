@@ -296,10 +296,11 @@ if [ -n "$CANARY_OWNER" ] && [ "$CANARY_OWNER" != "root" ]; then
     [ -n "$OWNER_HOME" ] || OWNER_HOME="/nonexistent"
 fi
 
-for SERVICE in kaia-policy-gate kaia-lockdown kaia-restore-blocks; do
-    SRC="$KAIA_PROJECT_DIR/scripts/${SERVICE}.service"
+for UNIT in kaia-policy-gate.service kaia-lockdown.service kaia-restore-blocks.service \
+            kaia-health-check.service kaia-health-check.timer; do
+    SRC="$KAIA_PROJECT_DIR/scripts/${UNIT}"
     [ -f "$SRC" ] || continue
-    DEST="/etc/systemd/system/${SERVICE}.service"
+    DEST="/etc/systemd/system/${UNIT}"
     sed -e "s|/home/ekco/github/Kaia|${DEPLOY_DIR}|g" \
         -e "s|__DEPLOY_DIR__|${DEPLOY_DIR}|g" \
         -e "s|__STATE_DIR__|${STATE_DIR}|g" \
@@ -330,6 +331,9 @@ chmod 600 /etc/kaia/state.env
 systemctl daemon-reload
 systemctl enable kaia-restore-blocks.service 2>/dev/null || true
 systemctl enable kaia-policy-gate.service
+# Read-only, unprivileged supervision of the gate and its controls. Safe to start
+# now: before the gate runs it only reports that nothing is published yet.
+systemctl enable --now kaia-health-check.timer
 
 echo
 echo "==> Deployment installed; the Policy Gate is NOT started automatically."
@@ -338,3 +342,4 @@ echo "        sudo ${DEPLOY_DIR}/scripts/kaia-baseline.sh"
 echo "        sudo systemctl start kaia-policy-gate.service"
 echo "The service stays stopped until the reviewed baseline is recorded."
 echo "kaia-lockdown.service is installed but not enabled (start manually on breach)."
+echo "Control health: ${DEPLOY_DIR}/scripts/kaia_health_check.py (kaia-health-check.timer, every 5 min)."

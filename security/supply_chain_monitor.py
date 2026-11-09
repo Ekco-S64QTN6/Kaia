@@ -19,6 +19,7 @@ from typing import Optional
 
 import config
 from security.db import log_security_event
+from security import control_health
 
 logger = logging.getLogger(__name__)
 
@@ -334,4 +335,5 @@ class PacmanLogMonitor:
     def _run(self):
         while not self._stop.is_set():
             self.poll_once()
+            control_health.heartbeat("pacman_monitor")
             self._stop.wait(self.poll_interval)
