@@ -124,9 +124,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const gate = sec.gate_running
       ? `<span class="item"><span class="dot green"></span>Gate <b class="ok">ENFORCING</b> pid ${esc(sec.gate_pid)} · up ${esc(sec.gate_uptime || '--')}</span>`
       : '<span class="item"><span class="dot red"></span>Gate <b class="bad">OFFLINE</b></span>';
-    const lock = sec.lockdown_active
+    // lockdown_state comes from the live ruleset; "unknown" means the gate could
+    // not be asked, which must not read as "off".
+    const lockState = sec.lockdown_state || (sec.lockdown_active ? 'active' : 'unknown');
+    const lock = lockState === 'active'
       ? '<span class="item">Lockdown <b class="bad">ACTIVE</b></span>'
-      : '<span class="item">Lockdown <b>off</b></span>';
+      : lockState === 'inactive'
+        ? '<span class="item">Lockdown <b>off</b></span>'
+        : '<span class="item">Lockdown <b class="warn">unknown</b></span>';
     const posture = `<span class="item">Posture <b>${esc(snap.sentinel_state || '--')}</b></span>`;
     $('gate-strip').innerHTML = gate + lock + posture;
     setText('gate-meta', snap.timestamp_unix ? `UPDATED ${clockTime(snap.timestamp_unix)}` : '');

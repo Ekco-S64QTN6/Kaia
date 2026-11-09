@@ -343,6 +343,7 @@ header {
 .status-strip b { color: var(--text-bright); font-weight: 600; }
 .status-strip b.ok { color: var(--green); }
 .status-strip b.bad { color: var(--red); }
+.status-strip b.warn { color: var(--yellow); }
 
 .stat-grid {
   display: grid;
