@@ -121,3 +121,30 @@ Handoffs between autonomous maintenance runs. Append a section per run; never re
 
 ### Recommended first action next run
 - If deployed, work through #101's checklist and fix what the host shows. Otherwise, code items: signed-package attestation (ROADMAP Tier 5 #2); alert reasons and a level filter in the HUD feed (Tier 5 #1); multi-table policy-routing gateways for the block guard. The fail-closed sweep covered db.py, the audit ledger, the executor's block path and threat intel; still unswept: `rule_engine` isolated validation, `web_bridge` command parsing, `fim_daemon` response path.
+
+## Run 2026-11-09 (fourth)
+
+**HEAD at start:** 87ab66b
+**HEAD at end:** d0f8c78 (+ this docs PR)
+**Batches landed this run:** 1
+
+### Merged
+- #121 — HUD console: `show audit`, `add rule`, `list recent blocks` implemented (help had advertised them; all returned "Unknown command"); a test runs every help entry through the dispatcher — evidence: CI-passing
+
+### Reviewed, no change needed
+- Web bridge command console: Host/Origin checked before body parsing, 2048-char cap, tokens scoped per command, the gate validates everything.
+- `add_rule` gate path: extra payload keys are ignored by the schema; `add_rule` is in both permission sets.
+- Threat-intel fetches: bounded (1 MiB, streaming, 10 s timeout).
+
+### Deferred findings (not filed: low value)
+- `fim_daemon._run` stops parsing a fanotify batch at a malformed `event_len` without checking `vers`; descriptors of later records in that batch would leak. It needs a malformed kernel record, and FIM is inactive on the host (no `CAP_SYS_ADMIN`). Fix it together with any FIM work.
+
+### In progress / blocked
+- #101 — **host-verification blocker**: `/opt/kaia` is still the 2026-11-01 code (checked this run). Nothing from #98 onward is deployed.
+- #102 owner decision · #104 design-sized · #105 remainder is an audit-completeness trade-off for the owner.
+
+### Baseline for next run
+- `scripts/run_ci_tests.sh`: green (593) · CI on main: green · lint/type: no gate
+
+### Recommended first action next run
+- The code-only queue is now mostly feature work rather than fixes: signed-package attestation (ROADMAP Tier 5 #2), alert reasons and a level filter in the HUD feed (Tier 5 #1), backup checks (Tier 5 #4, needs the owner's backup location). The highest-value next step is deploying and running #101, which needs the owner.
