@@ -306,6 +306,12 @@ def serialize_snapshot(
             "timestamp": log.timestamp,
             "level": log.level,
             "message": log.message,
+            # Structured security-event fields (empty for plain journal lines).
+            "event": getattr(log, "event", ""),
+            "status": getattr(log, "status", ""),
+            "alert_level": getattr(log, "alert_level", ""),
+            "reason": getattr(log, "reason", ""),
+            "detail": getattr(log, "detail", ""),
         }
         for log in snap.logs
     ]

@@ -163,6 +163,7 @@
         <div class="title">AUDIT LOG</div>
         <div class="filters">
           <button class="filter-pill active" data-filter="all">All</button>
+          <button class="filter-pill" data-filter="high" title="High and critical security events">High+</button>
           <button class="filter-pill" data-filter="denied">Denied</button>
           <button class="filter-pill" data-filter="approved">Approved</button>
           <button class="filter-pill" data-filter="system">System</button>
@@ -174,7 +175,7 @@
         </div>
         <div class="table-fit">
           <table class="data-table">
-            <thead><tr><th>TIME</th><th>RESULT</th><th>EVENT</th><th>SOURCE</th></tr></thead>
+            <thead><tr><th>TIME</th><th>RESULT</th><th>LEVEL</th><th>EVENT</th><th>SOURCE</th></tr></thead>
             <tbody id="audit-body"></tbody>
           </table>
         </div>

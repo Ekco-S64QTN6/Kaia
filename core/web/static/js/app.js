@@ -37,7 +37,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const waterfall = new SyscallWaterfallCanvas($('waterfall-canvas'), $('waterfall-meta'), $('waterfall-inspector'));
   const networkRadar = new NetworkRadarCanvas($('network-radar'), $('network-meta'), $('radar-risk'));
   const tProcs = new FitTable('procs-body', 5);
-  const tAudit = new FitTable('audit-body', 4);
+  const tAudit = new FitTable('audit-body', 5);
   const tBlocks = new FitTable('blocks-body', 3);
   const tAssets = new FitTable('assets-body', 5);
 
@@ -223,18 +223,28 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // ── Audit log ──
+  function levelTag(level) {
+    if (!level) return '<span class="tag neutral">--</span>';
+    const cls = level === 'critical' ? 'bad' : level === 'high' ? 'warn' : level === 'medium' ? 'warn' : 'neutral';
+    return `<span class="tag ${cls}">${esc(level.toUpperCase())}</span>`;
+  }
+
   function renderAudit(logs) {
     lastLogs = logs;
     const parsed = logs.map(parseAuditLine).reverse();
     const isDenied = (p) => /denied|error|violation|blocked/.test(p.result);
     const isApproved = (p) => /approved|ok|success/.test(p.result);
+    // Levels from security/alert_levels.py; plain journal lines have none.
+    const isHigh = (p) => p.alertLevel === 'high' || p.alertLevel === 'critical';
     const filtered = parsed.filter((p) => logFilter === 'all'
+      || (logFilter === 'high' && isHigh(p))
       || (logFilter === 'denied' && isDenied(p))
       || (logFilter === 'approved' && isApproved(p))
       || (logFilter === 'system' && !isDenied(p) && !isApproved(p)));
     const { shown, total } = tAudit.render(filtered.map((p) => (
       `<tr><td class="dim">${esc(p.time)}</td><td>${resultTag(p.result)}</td>`
-      + `<td title="${esc(p.hash ? `hash ${p.hash}` : '')}">${esc(p.event)}</td><td class="mid">${esc(p.source)}</td></tr>`
+      + `<td>${levelTag(p.alertLevel)}</td>`
+      + `<td title="${esc(p.reason || (p.hash ? `hash ${p.hash}` : ''))}">${esc(p.event)}</td><td class="mid">${esc(p.source)}</td></tr>`
     )), 'No matching audit events');
     const denied = parsed.filter(isDenied).length, approved = parsed.filter(isApproved).length;
     setText('audit-foot', `showing ${shown} of ${total} · buffer: ${denied} denied, ${approved} approved · full history: "show audit --since 2h"`);
