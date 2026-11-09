@@ -1150,6 +1150,11 @@ if __name__ == "__main__":
     )
     firewall_state.start()
 
+    # Recent, restorable backup (checked against the live system, every 6 h).
+    from security.backup_check import BackupMonitor
+    backup_monitor = BackupMonitor()
+    backup_monitor.start()
+
     # Persist the exec baseline and report it, alongside the health publisher.
     def _exec_baseline_loop(stop=threading.Event()):
         while not stop.wait(60.0):
@@ -1190,6 +1195,7 @@ if __name__ == "__main__":
         package_attestation.stop()
         secret_exposure.stop()
         firewall_state.stop()
+        backup_monitor.stop()
         for _b in (ebpf.exec_baseline, ebpf.conn_baseline):
             if _b is not None:
                 _b.persist(force=True)

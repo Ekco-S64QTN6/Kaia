@@ -102,6 +102,15 @@ A hit is recorded once as `secret_exposure` with the file, line and pattern; the
 itself is never written anywhere. If the live secret is found, treat it as compromised:
 rotate it (below) and remove the copy.
 
+## Backup check
+
+Every 6 hours the gate checks the backup mirror at `/mnt/backup_linux` (set
+`KAIA_BACKUP_PATH` in the unit to change it): mounted, last written within 14 days (30 is
+a failure), and sample files that have not changed since the backup are byte-identical in
+it. The last-run time comes from the ctime of the mirror's `etc`, `usr` and `var`, which
+`rsync -a` cannot preserve. The result is the `backup` control. Running the backup
+(`~/backup_home.sh`) clears a stale warning at the next check.
+
 ## Control health
 
 Each control reports what it is actually doing, and the gate publishes that every

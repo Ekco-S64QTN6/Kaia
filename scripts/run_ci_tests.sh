@@ -60,6 +60,7 @@ tests=(
   tests/test_signed_package_attestation.py
   tests/test_exec_baseline.py
   tests/test_conn_baseline.py
+  tests/test_backup_check.py
   tests/test_ci_covers_all_tests.py
 )
 
