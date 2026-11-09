@@ -50,7 +50,7 @@ SCHEMA = 1
 GATE_CONTROLS = (
     "policy_gate", "tamper_detection", "privilege_watch", "fim", "yara", "ebpf",
     "honeypot", "decoy_listeners", "discovery", "pacman_monitor", "package_attestation",
-    "secret_exposure", "security_db", "audit_ledger",
+    "secret_exposure", "security_db", "audit_ledger", "firewall",
 )
 
 

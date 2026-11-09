@@ -1126,6 +1126,15 @@ if __name__ == "__main__":
     honeypots.start(ebpf_engine=ebpf)
     
     # Publish every control's state for the HUD and kaia-health-check.timer.
+    # The gate reads the firewall itself and publishes it, so the dashboards do
+    # not send an audited request every few seconds to learn it (#105).
+    from security.firewall_state import FirewallStateMonitor, FILE_NAME as FIREWALL_STATE_FILE
+    firewall_state = FirewallStateMonitor(
+        os.path.join(str(config.STATE_DIR), FIREWALL_STATE_FILE),
+        read_ruleset=lambda: HostExecutor.execute_diagnostics("nft_list", []),
+    )
+    firewall_state.start()
+
     # The first write waits one interval, so it follows the socket bind below.
     health_publisher = control_health.HealthPublisher(config.CONTROL_HEALTH_PATH)
     health_publisher.start(publish_now=False)
@@ -1153,4 +1162,5 @@ if __name__ == "__main__":
         pacman_monitor.stop()
         package_attestation.stop()
         secret_exposure.stop()
+        firewall_state.stop()
         health_publisher.stop()

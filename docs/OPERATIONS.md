@@ -338,6 +338,10 @@ emergency lockdown and read-only diagnostics keep working. Control health shows
 `audit_ledger: failed` with the reason. Fix the file, and changes are accepted again on the
 next request.
 
+The dashboards do not query the gate for the firewall state: the gate publishes the
+ruleset to `$STATE_DIR/firewall_state.json` every 10 s and they read it. Every request the
+gate does receive is audited; nothing is summarised or dropped.
+
 ## Block persistence
 
 Blocks are refused for loopback, unspecified, multicast, broadcast and link-local
