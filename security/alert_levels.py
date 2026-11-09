@@ -71,6 +71,7 @@ EVENT_LEVELS: Dict[str, Tuple[str, str]] = {
     "schema_validation_failure": ("medium", "a malformed request was refused"),
     "restart_healthy_service_blocked": ("medium", "a restart of a healthy service was refused"),
     "policy_gate_unavailable": ("high", "the Policy Gate could not be reached"),
+    "audit_ledger_unavailable": ("high", "a change was refused because the audit ledger cannot be written"),
     "service_restart_event": ("info", "an approved service restart"),
     "block_ip": ("info", "an IP block was applied"),
     "unblock_ip": ("info", "an IP block was lifted"),
