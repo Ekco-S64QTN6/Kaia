@@ -47,6 +47,7 @@ tests=(
   tests/test_dashboard_ruleset_cache.py
   tests/test_alert_levels.py
   tests/test_secret_exposure.py
+  tests/test_security_db_writes.py
   tests/test_ci_covers_all_tests.py
 )
 
