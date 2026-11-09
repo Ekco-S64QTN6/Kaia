@@ -58,6 +58,7 @@ tests=(
   tests/test_ebpf_kernel_upgrade.py
   tests/test_hud_feed_levels.py
   tests/test_signed_package_attestation.py
+  tests/test_exec_baseline.py
   tests/test_ci_covers_all_tests.py
 )
 

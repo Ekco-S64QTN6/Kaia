@@ -51,6 +51,7 @@ GATE_CONTROLS = (
     "policy_gate", "tamper_detection", "privilege_watch", "fim", "yara", "ebpf",
     "honeypot", "decoy_listeners", "discovery", "pacman_monitor", "package_attestation",
     "secret_exposure", "security_db", "audit_ledger", "firewall",
+    "exec_baseline",
 )
 
 
@@ -134,7 +135,7 @@ def heartbeat(name: str) -> None:
 
 # --- publishing ---
 
-def write_snapshot(path: str, snapshot: dict) -> None:
+def write_snapshot(path: str, snapshot: dict, max_bytes: Optional[int] = None) -> None:
     """Atomically replace ``path``: same-directory temp file, no-follow, 0640.
 
     Group read is for the dashboards (group kaiacord: the gate runs with
@@ -143,8 +144,8 @@ def write_snapshot(path: str, snapshot: dict) -> None:
     directory = os.path.dirname(path) or "."
     tmp = os.path.join(directory, f".{os.path.basename(path)}.{os.getpid()}.tmp")
     data = json.dumps(snapshot, separators=(",", ":"), sort_keys=True).encode("utf-8")
-    if len(data) > MAX_FILE_BYTES:
-        raise ValueError("control health snapshot exceeds size limit")
+    if len(data) > (MAX_FILE_BYTES if max_bytes is None else max_bytes):
+        raise ValueError("snapshot exceeds size limit")
     try:
         os.unlink(tmp)
     except FileNotFoundError:

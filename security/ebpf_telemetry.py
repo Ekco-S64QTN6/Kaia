@@ -452,6 +452,8 @@ class EBPFTelemetryEngine:
         # Kernel symbols whose kprobe could not be attached -> what that loses.
         self.missing_probes = {}
         self._last_reported_state = None
+        # security.behaviour_baseline.ExecBaseline, set by the gate.
+        self.exec_baseline = None
 
         # Events the kernel could not queue because a ring buffer was full.
         self.ringbuf_drops = {name: 0 for name in RINGBUF_STREAMS}
@@ -658,6 +660,12 @@ class EBPFTelemetryEngine:
                 "filename": clean_filename,
                 "timestamp": time.time()
             })
+        baseline = self.exec_baseline
+        if baseline is not None:
+            try:
+                baseline.observe(clean_filename, clean_comm, clean_pid)
+            except Exception as e:
+                logger.error("Exec baseline failed: %s", e)
 
     def _handle_openat2_event(self, cpu, data, size):
         event = self.bpf["openat2_events"].event(data)

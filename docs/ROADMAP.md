@@ -58,8 +58,8 @@ face rig) and the command console, behind a strict self-hosted CSP and loopback 
 3. **Wider secrets scanning.** Kaia's own state, logs and tree are scanned (2026-11-09); extend to
    operator-configured scopes (home dotfiles, shell history) outside the gate's `ProtectHome` sandbox.
 4. **Backup checks**: existence, recency and a test restore, never inferred from file presence.
-5. **Behavioural baselines** for processes, connections and file activity, and only after alert
-   confidence, so their output has somewhere honest to go.
+5. **Behavioural baselines:** executables done (2026-11-09: 7-day learning, first-seen alerts).
+   Next: outbound connections per process, then file-activity rates.
 6. **Threat-intel datasets**: local GeoLite2, CVE and passive-DNS stores, historical snapshots,
    optional DuckDB analysis.
 

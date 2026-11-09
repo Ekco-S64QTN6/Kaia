@@ -1125,6 +1125,8 @@ if __name__ == "__main__":
 
     # Initialize and start eBPF telemetry engine
     ebpf = EBPFTelemetryEngine.get_instance()
+    from security.behaviour_baseline import ExecBaseline, FILE_NAME as EXEC_BASELINE_FILE
+    ebpf.exec_baseline = ExecBaseline(os.path.join(str(config.STATE_DIR), EXEC_BASELINE_FILE))
     ebpf.start()
 
     # Initialize and start Passive Discovery
@@ -1145,6 +1147,17 @@ if __name__ == "__main__":
         read_ruleset=lambda: HostExecutor.execute_diagnostics("nft_list", []),
     )
     firewall_state.start()
+
+    # Persist the exec baseline and report it, alongside the health publisher.
+    def _exec_baseline_loop(stop=threading.Event()):
+        while not stop.wait(60.0):
+            baseline = ebpf.exec_baseline
+            if baseline is None:
+                continue
+            baseline.persist()
+            control_health.report("exec_baseline", *baseline.health(), heartbeat_interval=60.0)
+    control_health.report("exec_baseline", *ebpf.exec_baseline.health(), heartbeat_interval=60.0)
+    threading.Thread(target=_exec_baseline_loop, daemon=True, name="exec-baseline").start()
 
     # The first write waits one interval, so it follows the socket bind below.
     health_publisher = control_health.HealthPublisher(config.CONTROL_HEALTH_PATH)
@@ -1174,4 +1187,6 @@ if __name__ == "__main__":
         package_attestation.stop()
         secret_exposure.stop()
         firewall_state.stop()
+        if ebpf.exec_baseline is not None:
+            ebpf.exec_baseline.persist(force=True)
         health_publisher.stop()
