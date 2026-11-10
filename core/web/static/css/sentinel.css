@@ -119,6 +119,8 @@ header {
 
 .pill b { color: var(--text-bright); font-weight: 600; }
 .pill.warn { border-color: var(--yellow); }
+.pill-btn { cursor: pointer; font: inherit; }
+.pill-btn b.ok { color: var(--green); }
 .pill.warn b { color: var(--yellow); }
 .pill.alert { border-color: var(--red); background: var(--red-dim); }
 .pill.alert b { color: var(--red); }
