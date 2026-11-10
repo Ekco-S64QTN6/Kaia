@@ -1,0 +1,6 @@
+#!/bin/bash
+# KAIA // SENTINEL as a desktop app (GTK + WebKitGTK window, no browser).
+# The terminal dashboard is separate: scripts/activate_kaia_env.sh or kaia_dashboard.py.
+DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+PY="$DIR/.venv/bin/python"; [ -x "$PY" ] || PY=python3
+exec "$PY" "$DIR/kaia_hud.py" "$@"

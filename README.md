@@ -80,6 +80,14 @@ The installer rejects a missing key, a malformed one, and the historically leake
 
 Country annotations on blocked IPs need a free MaxMind key: `MAXMIND_LICENSE_KEY=… ./scripts/update_geoip.sh`.
 
+Dashboards, two separate programs:
+
+```bash
+.venv/bin/python kaia_dashboard.py   # the terminal TUI (curses)
+./kaia-hud                           # the HUD as a desktop app (GTK + WebKitGTK window, no browser)
+./kaia-hud --install-desktop         # add "Kaia Sentinel" to the application menu
+```
+
 **Deploying for real** — a root-owned copy under `/opt/kaia`, state under `/var/lib/kaia`, a trusted
 baseline, the systemd units — is in [Operations](docs/OPERATIONS.md), with the acceptance tests in
 the [deployment checklist](docs/DEPLOYMENT_CHECKLIST.md).
