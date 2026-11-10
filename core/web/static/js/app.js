@@ -264,6 +264,9 @@ document.addEventListener('DOMContentLoaded', () => {
       + (ti.gate_offline ? '<span class="item"><b class="bad">GATE OFFLINE: firewall state unverified</b></span>' : '');
 
     const blocks = ti.recent_blocks || [];
+    // An empty "Blocked" table only took rows from the sockets and assets below.
+    const blocksBox = document.querySelector('#panel-network .table-blocks');
+    if (blocksBox) blocksBox.classList.toggle('is-empty', !blocks.length);
     tBlocks.render(blocks.map((b) => {
       const ip = b.ip || b.target || b.address || '?';
       const reason = b.reason || b.rule || b.source || '';

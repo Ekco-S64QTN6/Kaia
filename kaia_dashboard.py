@@ -752,7 +752,7 @@ class ThreatIntelCollector(threading.Thread):
             try:
                 from security.network_discovery import PassiveDiscoveryEngine
                 discovery = PassiveDiscoveryEngine.get_instance()
-                recent_assets = discovery.get_recent_assets(5)
+                recent_assets = discovery.get_recent_assets(40)   # the radar plots every recent device
             except Exception as e:
                 logger.error(f"Failed to fetch LAN assets: {e}")
             # The radar lists the 5 newest; the node count is every distinct

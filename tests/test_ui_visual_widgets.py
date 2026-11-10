@@ -42,7 +42,7 @@ def test_radar_uses_observed_reputation_scores():
     assert "score <= 30" in radar
     assert "score <= 65" in radar
     assert "UNRATED" in radar
-    assert "INPUT DROP RULES" in radar
+    assert "ring = last seen" in radar  # the radar legend (it showed INPUT DROP RULES)
     assert "this.activeBlocks" not in radar
 
 

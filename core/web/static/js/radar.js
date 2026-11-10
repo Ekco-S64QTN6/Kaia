@@ -1,7 +1,9 @@
 /**
  * KAIA // PASSIVE-DISCOVERY RADAR
- * Nodes are deterministic visual placements for observed LAN assets, not
- * geographic coordinates or inferred network connections. Block nodes and
+ * Each LAN asset seen in the last 24 h is plotted by meaning: distance from the
+ * centre is how long ago it was last seen (log scale: 5 min, 1 h, 24 h rings),
+ * the sector is how it was discovered (ARP, mDNS, SSDP, LLMNR, NBNS). Position
+ * within a sector is a stable hash of the address. Not geography or topology. Block nodes and
  * reputation meters use only records supplied by ThreatIntelCollector.
  */
 class NetworkRadarCanvas {
@@ -50,6 +52,9 @@ class NetworkRadarCanvas {
       this.metaEl.textContent = `${nodes} LAN NODES (24 H) · ${this.blocks.length} RECENT BLOCKS${state}`;
     }
     this.renderRisk();
+    // The reputation column only takes space when there is something to score.
+    const wrap = this.canvas && this.canvas.parentElement;
+    if (wrap) wrap.classList.toggle('has-risk', this.blocks.length > 0);
   }
 
   renderRisk() {
@@ -99,76 +104,117 @@ class NetworkRadarCanvas {
     requestAnimationFrame((next) => this.frame(next));
   }
 
+  /** Ring radius (0..1) for a last-seen age: log scale, now at the centre, 24 h at the edge. */
+  static ageRadius(ageSec) {
+    const a = Math.max(0, Math.min(86400, ageSec));
+    return 0.14 + 0.82 * (Math.log10(a + 1) / Math.log10(86401));
+  }
+
   draw(nowMs) {
     if (!this.ctx || !this.width || !this.height) return;
     const { ctx, width: w, height: h } = this;
     const dt = Math.max(0, Math.min(0.1, (nowMs - this.lastNow) / 1000));
     this.lastNow = nowMs;
-    this.angle = (this.angle + dt * 0.75) % (Math.PI * 2);
+    this.angle = (this.angle + dt * 0.6) % (Math.PI * 2);
     ctx.clearRect(0, 0, w, h);
     ctx.fillStyle = '#03070c';
     ctx.fillRect(0, 0, w, h);
-    const cx = w / 2, cy = h / 2;
-    const r = Math.max(8, Math.min(w * 0.42, h * 0.43));
-    ctx.strokeStyle = 'rgba(0, 240, 255, 0.3)';
-    ctx.lineWidth = 1;
-    for (const f of [0.35, 0.67, 1]) {
-      ctx.beginPath();
-      ctx.arc(cx, cy, r * f, 0, Math.PI * 2);
-      ctx.stroke();
-    }
-    ctx.beginPath();
-    ctx.moveTo(cx - r, cy); ctx.lineTo(cx + r, cy);
-    ctx.moveTo(cx, cy - r); ctx.lineTo(cx, cy + r);
-    ctx.strokeStyle = 'rgba(0, 240, 255, 0.18)';
-    ctx.stroke();
+    const cx = w / 2, cy = h / 2 + 4;
+    const r = Math.max(10, Math.min(w * 0.46, h * 0.44));
 
-    // Rotating sweep with a short phosphor trail.
+    // Rings are last-seen age: 5 min, 1 h, 24 h (log scale).
+    ctx.lineWidth = 1;
+    ctx.font = '9px ui-monospace, monospace';
+    for (const [sec, label] of [[300, '5m'], [3600, '1h'], [86400, '24h']]) {
+      const rr = r * NetworkRadarCanvas.ageRadius(sec);
+      ctx.strokeStyle = 'rgba(0, 240, 255, 0.22)';
+      ctx.beginPath(); ctx.arc(cx, cy, rr, 0, Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = 'rgba(114, 131, 164, 0.9)';
+      ctx.fillText(label, cx + 3, cy - rr + 10);
+    }
+
+    // Sectors are how a device was discovered.
+    const sectors = NetworkRadarCanvas.SECTORS;
+    const span = (Math.PI * 2) / sectors.length;
+    sectors.forEach((name, i) => {
+      const a0 = -Math.PI / 2 + i * span;
+      ctx.strokeStyle = 'rgba(0, 240, 255, 0.10)';
+      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(a0) * r, cy + Math.sin(a0) * r); ctx.stroke();
+      const am = a0 + span / 2;
+      ctx.fillStyle = 'rgba(0, 240, 255, 0.55)';
+      ctx.textAlign = 'center';
+      ctx.fillText(name, cx + Math.cos(am) * (r + 2), cy + Math.sin(am) * (r + 2) + 3);
+    });
+    ctx.textAlign = 'left';
+
+    // Sweep.
     for (let i = 8; i >= 0; i--) {
       const a = this.angle - i * 0.035;
-      ctx.beginPath();
-      ctx.moveTo(cx, cy);
-      ctx.arc(cx, cy, r, a - 0.025, a + 0.025);
-      ctx.closePath();
-      ctx.fillStyle = `rgba(0, 240, 255, ${0.012 + (8 - i) * 0.008})`;
+      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.arc(cx, cy, r, a - 0.025, a + 0.025); ctx.closePath();
+      ctx.fillStyle = `rgba(0, 240, 255, ${0.01 + (8 - i) * 0.006})`;
       ctx.fill();
     }
 
-    const plotNode = (ip, kind, i) => {
+    const now = Date.now();
+    const placed = [];
+    const plot = (ip, label, sector, ageSec, kind) => {
+      const idx = Math.max(0, sectors.indexOf(sector));
+      const a0 = -Math.PI / 2 + idx * span;
       const hash = this.hash(ip);
-      const angle = ((hash % 360) / 180) * Math.PI + (kind === 'block' ? 0.12 : 0);
-      const dist = r * (0.25 + ((hash >>> 9) % 60) / 100);
-      const x = cx + Math.cos(angle) * dist;
-      const y = cy + Math.sin(angle) * dist;
-      const color = kind === 'block' ? '#ff3860' : '#3dff8a';
+      const angle = a0 + span * (0.08 + 0.84 * ((hash % 1000) / 1000));
+      // Small stable radial jitter separates devices last seen at the same time.
+      const dist = r * Math.min(0.98, NetworkRadarCanvas.ageRadius(ageSec) + (((hash >>> 10) % 7) - 3) * 0.012);
+      const x = cx + Math.cos(angle) * dist, y = cy + Math.sin(angle) * dist;
+      const color = kind === 'block' ? '#ff3860'
+        : ageSec < 600 ? '#3dff8a' : ageSec < 3600 ? '#2bbf6a' : '#1f7a48';
       ctx.save();
-      ctx.shadowBlur = 7;
+      ctx.shadowBlur = ageSec < 600 || kind === 'block' ? 8 : 0;
       ctx.shadowColor = color;
       ctx.fillStyle = color;
-      ctx.beginPath();
-      ctx.arc(x, y, kind === 'block' ? 2.5 : 2, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.beginPath(); ctx.arc(x, y, kind === 'block' ? 4 : 3.2, 0, Math.PI * 2); ctx.fill();
       ctx.restore();
-      if (i < 2) {
-        ctx.font = '7px ui-monospace, monospace';
-        ctx.fillStyle = color;
-        ctx.fillText(String(ip), Math.max(1, Math.min(w - 60, x + 4)), Math.max(7, Math.min(h - 3, y - 4)));
-      }
+      // Labels: skip one that would overlap an earlier label.
+      const tx = Math.max(2, Math.min(w - 92, x + 6)), ty = Math.max(10, Math.min(h - 4, y + 3));
+      if (placed.some(([px, py]) => Math.abs(px - tx) < 70 && Math.abs(py - ty) < 10)) return;
+      placed.push([tx, ty]);
+      ctx.font = '10px ui-monospace, monospace';
+      ctx.fillStyle = kind === 'block' ? '#ff8aa0' : '#c6f7d8';
+      ctx.fillText(label, tx, ty);
     };
-    this.assets.slice(0, 20).forEach((asset, i) => plotNode(asset.ip, 'asset', i));
-    this.blocks.slice(0, 5).forEach((block, i) => plotNode(block.ip, 'block', i));
+    const ageOf = (when) => {
+      const t = Date.parse(when || '');
+      return Number.isFinite(t) ? Math.max(0, (now - t) / 1000) : 86400;
+    };
+    const shortName = (a) => {
+      const host = String(a.hostname || '').split('.')[0];
+      const name = host && host.toLowerCase() !== 'unknown' ? host.slice(0, 12) : '';
+      const octet = String(a.ip).includes('.') ? '.' + String(a.ip).split('.').pop() : String(a.ip).slice(-6);
+      return name ? `${octet} ${name}` : octet;
+    };
+    this.assets
+      .filter((a) => ageOf(a.last_seen) <= 86400)
+      .sort((a, b) => ageOf(a.last_seen) - ageOf(b.last_seen))      // newest labels win
+      .slice(0, 40)
+      .forEach((a) => plot(a.ip, shortName(a), NetworkRadarCanvas.sectorOf(a.detection_vector), ageOf(a.last_seen), 'asset'));
+    this.blocks.slice(0, 8).forEach((b) => plot(b.ip, `${b.ip} BLOCKED`, 'OTHER', ageOf(b.timestamp || b.time), 'block'));
+
     ctx.fillStyle = '#00f0ff';
-    ctx.shadowBlur = 6;
-    ctx.shadowColor = '#00f0ff';
-    ctx.beginPath();
-    ctx.arc(cx, cy, 2.5, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.shadowBlur = 8; ctx.shadowColor = '#00f0ff';
+    ctx.beginPath(); ctx.arc(cx, cy, 3.5, 0, Math.PI * 2); ctx.fill();
     ctx.shadowBlur = 0;
-    ctx.font = '7px ui-monospace, monospace';
-    ctx.fillStyle = this.gateOffline ? '#ff3860' : '#7283a4';
+    ctx.font = '9px ui-monospace, monospace';
+    ctx.fillStyle = '#7fd8ff';
     ctx.textAlign = 'center';
-    ctx.fillText(this.gateOffline ? 'GATE OFFLINE' : `INPUT DROP RULES ${this.inputDropRules}`, cx, h - 4);
+    ctx.fillText('THIS HOST', cx, cy + 14);
+    ctx.fillStyle = this.gateOffline ? '#ff3860' : '#7283a4';
+    ctx.fillText(this.gateOffline ? 'GATE OFFLINE' : 'ring = last seen · sector = how discovered', cx, h - 3);
     ctx.textAlign = 'left';
   }
 }
+NetworkRadarCanvas.SECTORS = ['ARP', 'mDNS', 'SSDP', 'LLMNR', 'NBNS', 'OTHER'];
+NetworkRadarCanvas.sectorOf = (vector) => {
+  const v = String(vector || '').toUpperCase();
+  const hit = NetworkRadarCanvas.SECTORS.find((s) => s.toUpperCase() === v || (s === 'NBNS' && v.startsWith('NB')));
+  return hit || 'OTHER';
+};
 window.NetworkRadarCanvas = NetworkRadarCanvas;

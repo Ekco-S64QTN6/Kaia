@@ -4,6 +4,7 @@
 
 ### Operator HUD
 
+- The network radar shows information instead of decoration: every device seen in the last 24 hours is plotted with distance from the centre = how long ago it was last seen (rings at 5 min, 1 h, 24 h, log scale) and sector = how it was discovered (ARP, mDNS, SSDP, LLMNR, NBNS); each is labelled with its last octet and short hostname, newest first, without overlapping labels. Positions had been random hashes, only 5 nodes were plotted and 2 labelled in 7 px text on an 81 px canvas. The canvas is twice as tall, the reputation column appears only when there are blocks, and an empty "Blocked" table no longer takes rows from the sockets and assets tables.
 - The operator command console is taller: its row scales with the window (`clamp(200px, 22vh, 320px)`, about 10 lines of output at 1080 px) instead of a fixed 128 px that showed two.
 - The HUD is a desktop application: `./kaia-hud` starts the loopback bridge on a free port and opens it in its own GTK + WebKitGTK window (the KaiaRX/KaiaBooth approach; `core/web/app_window.py`), with no browser, address bar, context menu or developer tools, and no navigation away from the HUD's origin. Closing the window stops the bridge. `./kaia-hud --install-desktop` adds "Kaia Sentinel" to the application menu. Without WebKitGTK it says what to install; it never falls back to a browser.
 - `kaia_dashboard.py` is the strict terminal TUI again by default (it had defaulted to serving the web HUD; the TUI needed `--tui`). `--web` serves the bridge only.
