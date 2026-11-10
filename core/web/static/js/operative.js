@@ -30,7 +30,8 @@ class SentinelAvatarController {
   _mountCodec() {
     const container = document.getElementById('kaia-character-container');
     if (!container || !window.KaiaCodec) return;
-    const face = new URLSearchParams(location.search).get('face') || undefined;   // ?face=k59 etc.
+    // ?face=k59 pins one portrait; otherwise rotate through all six, as KaiaRX and KaiaBooth do.
+    const face = new URLSearchParams(location.search).get('face') || 'random';
     let codec = null;
     this.mountAnimationViewport({
       init: (el, state) => {

@@ -178,7 +178,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const rc = sec.rules_counts || ti.rules_counts || {};
     setText('st-blocks', ti.active_blocks ?? '--');
-    setText('st-rules', `${rc.input ?? '-'} in · ${rc.forward ?? '-'} fwd · ${rc.output ?? '-'} out`);
+    // Host firewall drop/reject rules per hook (chain policies are not rules).
+    setText('st-rules', `host fw: ${rc.input ?? '-'} in · ${rc.forward ?? '-'} fwd · ${rc.output ?? '-'} out`);
     setText('st-yara', sec.yara_rules_count ?? '--');
     setClass('st-yara', 'stat-value', sec.yara_rules_count === 0 ? 'warn' : '');
 
@@ -257,8 +258,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const rc = ti.rules_counts || {};
     const hp = ti.honeypot_status || {};
     $('net-strip').innerHTML =
-      `<span class="item">Input drop/reject rules <b>${esc(ti.active_blocks ?? '--')}</b></span>`
-      + `<span class="item">nft rules <b>${esc(rc.input ?? '-')}</b> in · <b>${esc(rc.forward ?? '-')}</b> fwd · <b>${esc(rc.output ?? '-')}</b> out</span>`
+      `<span class="item">Kaia blocks <b>${esc(ti.active_blocks ?? '--')}</b></span>`
+      + `<span class="item">host drop rules <b>${esc(rc.input ?? '-')}</b> in · <b>${esc(rc.forward ?? '-')}</b> fwd · <b>${esc(rc.output ?? '-')}</b> out</span>`
       + `<span class="item">Honeypot <b class="${hp.total_triggers ? 'bad' : ''}">${esc(hp.total_triggers ?? 0)}</b> trips</span>`
       + (ti.gate_offline ? '<span class="item"><b class="bad">GATE OFFLINE: firewall state unverified</b></span>' : '');
 

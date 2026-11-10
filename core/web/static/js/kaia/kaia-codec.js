@@ -4,6 +4,9 @@
  * Mounts the animated Kaia codec into a container element:
  *   const codec = await KaiaCodec.mount(stageEl);
  *   codec.setMood('happy'); codec.speak('Handshake captured.'); codec.react('capture');
+ *
+ * `portrait: 'random'` picks one of KaiaCodec.PORTRAITS, never the one this
+ * browser showed last (KaiaCodec.randomPortrait).
  */
 
 class KaiaCodec {
@@ -15,7 +18,8 @@ class KaiaCodec {
 
   constructor(container, { assets = '/static/assets/kaia', portrait = KaiaCodec.DEFAULT_PORTRAIT, maxFps = 60, still = false } = {}) {
     this.container = container;
-    this.assets = `${assets}/${portrait}`;
+    this.portrait = portrait === 'random' ? KaiaCodec.randomPortrait() : portrait;
+    this.assets = `${assets}/${this.portrait}`;
     this.frameInterval = 1000 / maxFps;
     this.animator = new window.KaiaAnimator();
     this.animator.still = still;
@@ -90,5 +94,35 @@ class KaiaCodec {
 /** Portrait folders under assets/kaia/ (each: kaia_codec.webp + kaia_rig.json). */
 KaiaCodec.PORTRAITS = ['k60', 'k59', 'k28', 't1', 't2', 't3'];
 KaiaCodec.DEFAULT_PORTRAIT = 'k60';
+
+/** The next of PORTRAITS in a shuffled rotation: every one shown once before
+ *  any repeats, and a new shuffle never opens on the one just shown. "Any but
+ *  the last" was random, not a rotation — t3, t2, t1, k59, t2 over five booth
+ *  launches, and A-B-A runs often — so some faces came round again and again
+ *  while others rarely did. Remembered under `key` (last shown) and `key`-bag
+ *  (still to come); storage may be unavailable, so best effort. */
+KaiaCodec.randomPortrait = function (key = 'kaia-codec-portrait') {
+  const all = KaiaCodec.PORTRAITS;
+  let last = null, bag = [];
+  try {
+    last = localStorage.getItem(key);
+    bag = JSON.parse(localStorage.getItem(`${key}-bag`) || '[]');
+  } catch (e) { /* no storage, or a bad bag */ }
+  bag = Array.isArray(bag) ? bag.filter((p) => all.includes(p)) : [];
+  if (!bag.length) {
+    bag = all.slice();
+    for (let i = bag.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [bag[i], bag[j]] = [bag[j], bag[i]];
+    }
+    if (bag.length > 1 && bag[0] === last) bag.push(bag.shift());
+  }
+  const pick = bag.shift();
+  try {
+    localStorage.setItem(key, pick);
+    localStorage.setItem(`${key}-bag`, JSON.stringify(bag));
+  } catch (e) { /* no storage */ }
+  return pick;
+};
 
 window.KaiaCodec = KaiaCodec;

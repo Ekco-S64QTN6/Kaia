@@ -58,11 +58,40 @@ def kaia_block_rule_count(ruleset: str) -> int:
             inside, depth = True, 0
         if inside:
             depth += line.count("{") - line.count("}")
-            if " drop" in f" {line.strip()}" and "policy" not in line:
+            if re.search(r"\b(drop|reject)\b", line) and "policy" not in line:
                 count += 1
             if depth <= 0 and "}" in line:
                 inside = False
     return count
+
+
+_HOOK = re.compile(r"\bhook\s+(input|forward|output)\b")
+
+
+def drop_rule_counts(ruleset: str) -> dict:
+    """Drop/reject *rules* per hook (input, forward, output), across all tables.
+
+    A chain is classified by its ``type ... hook <name>`` line, not its name,
+    and the ``policy drop;`` on that line is a chain default, not a rule: the
+    old counter included it, so an empty forward chain read as one "block".
+    """
+    counts = {"input": 0, "forward": 0, "output": 0}
+    hook = None
+    for line in (ruleset or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("chain "):
+            hook = None
+            continue
+        if stripped == "}":
+            hook = None
+            continue
+        m = _HOOK.search(stripped)
+        if m and stripped.startswith("type "):
+            hook = m.group(1)
+            continue
+        if hook and not stripped.startswith("#") and re.search(r"\b(drop|reject)\b", stripped):
+            counts[hook] += 1
+    return counts
 
 
 def write_state(path: str, success: bool, ruleset: str, now: Optional[float] = None) -> None:

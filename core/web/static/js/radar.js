@@ -46,7 +46,8 @@ class NetworkRadarCanvas {
     this.gateOffline = Boolean(data.gate_offline);
     if (this.metaEl) {
       const state = this.gateOffline ? ' · GATE OFFLINE' : '';
-      this.metaEl.textContent = `${this.assets.length} LAN NODES · ${this.blocks.length} RECENT BLOCKS${state}`;
+      const nodes = Number.isInteger(data.lan_nodes_24h) ? data.lan_nodes_24h : this.assets.length;
+      this.metaEl.textContent = `${nodes} LAN NODES (24 H) · ${this.blocks.length} RECENT BLOCKS${state}`;
     }
     this.renderRisk();
   }

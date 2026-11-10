@@ -662,35 +662,16 @@ class ThreatIntelCollector(threading.Thread):
             return dict(self._data)
             
     def _get_nft_counts(self):
-        counts = {"input": 0, "forward": 0, "output": 0}
-        gate_offline = False
+        """(host drop-rule counts per hook, Kaia's own block rules, gate offline?)."""
         success, stdout = query_ruleset()
         if not success:
-            gate_offline = True
-        else:
-            lines = stdout.splitlines()
-            current_chain = None
-            for line in lines:
-                line_strip = line.strip()
-                if "chain " in line_strip:
-                    if "input" in line_strip:
-                        current_chain = "input"
-                    elif "forward" in line_strip:
-                        current_chain = "forward"
-                    elif "output" in line_strip:
-                        current_chain = "output"
-                    else:
-                        current_chain = None
-                elif line_strip == "}":
-                    current_chain = None
-                elif current_chain and ("drop" in line_strip.lower() or "reject" in line_strip.lower()):
-                    counts[current_chain] += 1
-        return counts, gate_offline
+            return {"input": 0, "forward": 0, "output": 0}, 0, True
+        return firewall_state.drop_rule_counts(stdout), firewall_state.kaia_block_rule_count(stdout), False
 
     def run(self) -> None:
         from security import threat_intel
         while not self._stop.is_set():
-            counts, gate_offline = self._get_nft_counts()
+            counts, kaia_blocks, gate_offline = self._get_nft_counts()
             
             # Additional connection ping check checking both paths
             socket_paths = []
@@ -715,7 +696,7 @@ class ThreatIntelCollector(threading.Thread):
             if not has_alive_socket:
                 gate_offline = True
                 
-            active_blocks = counts["input"]
+            active_blocks = kaia_blocks   # Kaia's own block rules, not the host firewall's
             
             recent_blocks = []
             if os.path.exists(config.SECURITY_DB_PATH):
@@ -774,6 +755,19 @@ class ThreatIntelCollector(threading.Thread):
                 recent_assets = discovery.get_recent_assets(5)
             except Exception as e:
                 logger.error(f"Failed to fetch LAN assets: {e}")
+            # The radar lists the 5 newest; the node count is every distinct
+            # address seen in 24 h (the header showed the list length, max 5).
+            lan_nodes_24h = None
+            try:
+                since = (datetime.now(UTC) - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
+                conn = sqlite3.connect(f"file:{config.ASSETS_DB_PATH}?mode=ro", uri=True, timeout=1.0)
+                try:
+                    lan_nodes_24h = conn.execute(
+                        "SELECT COUNT(DISTINCT ip) FROM assets WHERE last_seen >= ?", (since,)).fetchone()[0]
+                finally:
+                    conn.close()
+            except Exception:
+                pass
 
             # Honeypot triggers
             total_triggers = 0
@@ -799,6 +793,7 @@ class ThreatIntelCollector(threading.Thread):
                     "gate_offline": gate_offline,
                     "rules_counts": counts,
                     "recent_assets": recent_assets,
+                    "lan_nodes_24h": lan_nodes_24h,
                     "honeypot_status": honeypot_status
                 }
             self._stop.wait(10.0)
@@ -981,27 +976,9 @@ class SystemSecurityCollector(threading.Thread):
         while not self._stop.is_set():
             active, expired, rejected = self._parse_tokens()
             
-            counts = {"input": 0, "forward": 0, "output": 0}
             success, stdout = query_ruleset()
-            if success:
-                lines = stdout.splitlines()
-                current_chain = None
-                for line in lines:
-                    line_strip = line.strip()
-                    if "chain " in line_strip:
-                        if "input" in line_strip:
-                            current_chain = "input"
-                        elif "forward" in line_strip:
-                            current_chain = "forward"
-                        elif "output" in line_strip:
-                            current_chain = "output"
-                        else:
-                            current_chain = None
-                    elif line_strip == "}":
-                        current_chain = None
-                    elif current_chain and ("drop" in line_strip.lower() or "reject" in line_strip.lower()):
-                        counts[current_chain] += 1
-                
+            counts = firewall_state.drop_rule_counts(stdout) if success else {"input": 0, "forward": 0, "output": 0}
+
             gate_running = False
             gate_pid = 0
             gate_uptime = "N/A"
@@ -2384,7 +2361,7 @@ class KaiamonUI:
             self._safe_addstr(ty, tx, "⚠ POLICY GATE OFFLINE".center(tw), curses.color_pair(5) | curses.A_BOLD)
             ty += 2
             
-        self._safe_addstr(ty, tx, f"Active Firewall Blocks: {info.get('active_blocks', 0)}", curses.color_pair(2) | curses.A_BOLD)
+        self._safe_addstr(ty, tx, f"Kaia Blocks: {info.get('active_blocks', 0)}", curses.color_pair(2) | curses.A_BOLD)
         ty += 1
         
         self._safe_addstr(ty, tx, "Recent Blocks:", curses.color_pair(1) | curses.A_BOLD)
@@ -2634,22 +2611,24 @@ class KaiamonUI:
 # ==================== ENTRY POINT ====================
 
 def main() -> None:
-    """Launch Kaia Dashboard (Cyber-Sentinel Operations Center or curses TUI)."""
+    """The strict terminal dashboard (curses). The HUD is a separate application:
+    ./kaia-hud (a desktop window, no browser). --web serves the HUD bridge only."""
     import argparse
-    parser = argparse.ArgumentParser(description="Kaia System & Security Monitoring")
-    parser.add_argument("--tui", "--curses", action="store_true", help="Launch terminal curses TUI dashboard")
-    parser.add_argument("--web", action="store_true", default=False, help="Launch Cyber-Sentinel Web Operations Center")
-    parser.add_argument("--host", default="127.0.0.1", help="Web bridge host (Default: 127.0.0.1)")
-    parser.add_argument("--port", type=int, default=8765, help="Web bridge port (Default: 8765)")
+    parser = argparse.ArgumentParser(description="Kaia terminal security dashboard")
+    parser.add_argument("--tui", "--curses", action="store_true", help="(default) the terminal dashboard")
+    parser.add_argument("--web", action="store_true", default=False,
+                        help="serve the HUD bridge on loopback instead (normally started by ./kaia-hud)")
+    parser.add_argument("--host", default="127.0.0.1", help="HUD bridge host (loopback only)")
+    parser.add_argument("--port", type=int, default=8765, help="HUD bridge port")
     args = parser.parse_args()
 
-    if args.tui:
-        ui = KaiamonUI()
-        ui.run()
-    else:
+    if args.web:
         from core.web_bridge import KaiaWebBridge
         bridge = KaiaWebBridge(host=args.host, port=args.port)
         bridge.run_sync()
+    else:
+        ui = KaiamonUI()
+        ui.run()
 
 
 if __name__ == "__main__":
