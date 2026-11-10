@@ -49,7 +49,7 @@ face rig) and the command console, behind a strict self-hosted CSP and loopback 
 | **Full-body avatar** | The avatar is a face-rig codec. The full-body figure in the design references ([`design/`](design/)) is not built. |
 | **Bundled fonts** | The HUD uses system fonts; bundling the display and mono faces keeps the look identical across hosts without loosening the CSP. |
 | **Audio cues** | Optional Web Audio cues for alerts and state changes. |
-| **Browser checks** | Stress and fallback tests in a real browser: no WebGL2, slow sockets, a long-running HUD; the control strip and token cards against live data. |
+| **Browser checks** | Headless Chromium against the live state on 2026-11-09: control strip, level column and filters render (found and fixed the startup false-surge). Still to do: no-WebGL2 fallback, slow sockets, a long-running HUD. |
 
 ## Next (Tier 5, ordered)
 

@@ -1472,9 +1472,11 @@ class AuditLogCollector:
         self._filter_mode: str = "All"
         self._thread: Optional[threading.Thread] = None
         # State tracking for incremental reads
-        self._last_seen_rowid: int = 0
-        self._last_ledger_size: int = 0
-        self._last_ledger_entries: int = 0
+        self._last_seen_rowid: Optional[int] = None   # None: first poll seeds from the tail
+        self._ledger_ino = None
+        self._ledger_offset: int = 0
+        self._ledger_pending: bytes = b""
+        self._backlog: bool = False   # set by a poll that returned history, not new events
         # Resolve DB paths
         self._security_db_path: str = ""
         self._audit_ledger_path: str = ""
@@ -1595,7 +1597,11 @@ class AuditLogCollector:
             cursor.execute("SELECT MAX(rowid) FROM security_events")
             max_rowid_row = cursor.fetchone()
             max_rowid = max_rowid_row[0] if max_rowid_row and max_rowid_row[0] is not None else 0
-            if max_rowid < self._last_seen_rowid:
+            if self._last_seen_rowid is None:
+                # First look: show the newest 50 rows as history, not as new events.
+                self._last_seen_rowid = max(0, max_rowid - 50)
+                self._backlog = True
+            elif max_rowid < self._last_seen_rowid:
                 self._last_seen_rowid = 0
                 
             cursor.execute("""
@@ -1619,72 +1625,61 @@ class AuditLogCollector:
 
     # --- data source: audit_ledger.json ---
 
+    @staticmethod
+    def _ledger_entry(record: dict) -> "LogEntry":
+        ts = str(record.get("timestamp", ""))
+        disp_ts = ts[:19].split("T")[-1] if "T" in ts else ts[:8]
+        request_dict = record.get("request", {})
+        action = request_dict.get("action", "unknown") if isinstance(request_dict, dict) else "unknown"
+        result = record.get("result", "")
+        reason = str(record.get("reason") or "")
+        if result == "approved":
+            icon, status, level = "✓", "approved", "SUCCESS"
+        elif result in ("denied", "blocked"):
+            icon, status, level = "✗", "denied", "ERROR"
+        else:
+            icon, status, level = "⚠", str(result), "WARN"
+        msg = f"{icon} {str(action).upper():<12} │ {status:<8} │ {reason[:60]}"
+        return LogEntry(timestamp=disp_ts, level=level, message=msg)
+
     def _poll_audit_ledger(self) -> List[LogEntry]:
-        """Read new entries from audit_ledger.json since last poll."""
-        entries = []
-        if not os.path.exists(self._audit_ledger_path):
+        """New ledger records since the last poll, read by byte offset.
+
+        The first poll shows only a bounded tail of history, and the ledger is
+        never re-read from the start (it was, on every change: 18 MB on the
+        host). A replaced (rotated) or truncated ledger is followed from its
+        start. Backlog is flagged so it does not count as live log rate.
+        """
+        entries: List[LogEntry] = []
+        try:
+            fd = _open_ledger(self._audit_ledger_path)
+        except OSError:
             return entries
         try:
-            file_size = os.path.getsize(self._audit_ledger_path)
-            
-            # Handle truncation/purge of ledger
-            if file_size < self._last_ledger_size:
-                self._last_ledger_entries = 0
-                
-            if file_size == self._last_ledger_size:
-                return entries  # No changes
-            self._last_ledger_size = file_size
-
-            with open(self._audit_ledger_path, "r") as f:
-                content = f.read().strip()
-            if not content:
+            st = os.fstat(fd)
+            if not stat_module.S_ISREG(st.st_mode):
                 return entries
-
-            if content.startswith("["):
-                records = json.loads(content)
-            else:
-                records = []
-                for line in content.splitlines():
-                    line = line.strip()
-                    if line:
-                        try:
-                            records.append(json.loads(line))
-                        except json.JSONDecodeError:
-                            continue
-
-            # Handle reset case if records list size was truncated
-            if len(records) < self._last_ledger_entries:
-                self._last_ledger_entries = 0
-
-            new_records = records[self._last_ledger_entries:]
-            self._last_ledger_entries = len(records)
-
-            for record in new_records:
-                ts = str(record.get("timestamp", ""))
-                disp_ts = ts[:19].split("T")[-1] if "T" in ts else ts[:8]
-                request_dict = record.get("request", {})
-                action = request_dict.get("action", "unknown") if isinstance(request_dict, dict) else "unknown"
-                result = record.get("result", "")
-                reason = record.get("reason", "")
-                
-                if result == "approved":
-                    icon = "✓"
-                    status = "approved"
-                    level = "SUCCESS"
-                elif result in ("denied", "blocked"):
-                    icon = "✗"
-                    status = "denied"
-                    level = "ERROR"
-                else:
-                    icon = "⚠"
-                    status = result
-                    level = "WARN"
-                    
-                msg = f"{icon} {action.upper():<12} │ {status:<8} │ {reason[:60]}"
-                entries.append(LogEntry(timestamp=disp_ts, level=level, message=msg))
-        except Exception:
-            pass  # Never crash the collector
-        return entries
+            if self._ledger_ino is None:
+                # First look: seed the display from the tail, then follow from EOF.
+                self._ledger_ino, self._ledger_offset = st.st_ino, st.st_size
+                self._backlog = True
+                return [self._ledger_entry(r) for r in read_ledger_tail(self._audit_ledger_path, max_records=50)]
+            if st.st_ino != self._ledger_ino or st.st_size < self._ledger_offset:
+                self._ledger_ino, self._ledger_offset, self._ledger_pending = st.st_ino, 0, b""
+            if st.st_size == self._ledger_offset:
+                return entries
+            os.lseek(fd, self._ledger_offset, os.SEEK_SET)
+            data = os.read(fd, min(st.st_size - self._ledger_offset, 4 * 1024 * 1024))
+            self._ledger_offset += len(data)
+        finally:
+            os.close(fd)
+        data = self._ledger_pending + data
+        cut = data.rfind(b"\n")
+        if cut < 0:
+            self._ledger_pending = data[-LEDGER_LINE_MAX_BYTES:]
+            return entries
+        self._ledger_pending = data[cut + 1:][-LEDGER_LINE_MAX_BYTES:]
+        return [self._ledger_entry(r) for r in _parse_ledger_lines(data[:cut])]
 
     # --- split-lock detection (preserved from original) ---
 
@@ -1715,13 +1710,16 @@ class AuditLogCollector:
                     new_entries.extend(self._poll_audit_ledger())
                     ledger_tick = 0
 
+                backlog, self._backlog = self._backlog, False
                 if new_entries:
                     now = time.time()
                     with self._lock:
                         if not self._paused:
                             for entry in new_entries:
                                 self._logs.append(entry)
-                                self._lps_timestamps.append(now)
+                                # History shown at startup is not live activity.
+                                if not backlog:
+                                    self._lps_timestamps.append(now)
                                 self._check_split_lock(entry.message, entry.timestamp)
             except Exception:
                 pass  # Never crash the collector
