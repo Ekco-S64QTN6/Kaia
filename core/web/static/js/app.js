@@ -285,8 +285,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }), 'No LAN assets discovered');
   }
 
+  const alertAudio = new AlertAudio($('audio-toggle'));
+
   function handleSnapshot(snap) {
     if (!snap || typeof snap !== 'object') return;
+    alertAudio.observe(snap);
     renderHeader(snap);
     renderHost(snap);
     renderPolicy(snap);
