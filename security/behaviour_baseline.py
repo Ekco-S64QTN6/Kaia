@@ -204,3 +204,113 @@ class ConnBaseline(ExecBaseline):
     def judge(self, observed: str) -> str:
         comm = observed.split("|", 1)[0]
         return EVENT_NET_SHELL if SHELL_LIKE.fullmatch(comm) else EVENT_NET_FIRST_SEEN
+
+
+# --- file deletion rates -----------------------------------------------------
+DELETE_FILE_NAME = "delete_rate_baseline.json"
+EVENT_MASS_DELETION = "mass_deletion"
+DELETE_WINDOW = 10.0          # seconds per counting window
+DELETE_FLOOR = 1000           # never alert below this many deletions per window
+DELETE_FACTOR = 10            # ... nor below this multiple of the learned peak
+DELETE_REPORT_COOLDOWN = 600  # per program
+
+
+class DeletionRateBaseline:
+    """Per-program peak unlinkat rate; a burst far above it is a wiper's shape.
+
+    Learns each program's highest deletions-per-window for LEARNING_SECONDS,
+    then reports ``mass_deletion`` (high) once per program per cooldown when a
+    window reaches max(DELETE_FLOOR, DELETE_FACTOR x learned peak). Counts come
+    from unlinkat syscall *attempts* (sys_enter), which is what a wiper issues.
+    Alert-only.
+    """
+
+    def __init__(self, state_path: Optional[str], log_event=None, clock=time.time,
+                 learning_seconds: float = LEARNING_SECONDS):
+        self.state_path = state_path
+        self._log_event = log_event
+        self._clock = clock
+        self.learning_seconds = learning_seconds
+        self._lock = threading.Lock()
+        self.peaks = {}             # comm -> highest count in one window
+        self.started_at = clock()
+        self._windows = {}          # comm -> (window start, count)
+        self._last_report = {}
+        self._dirty = False
+        self.reported = 0
+        self._load()
+
+    def _load(self) -> None:
+        if not self.state_path:
+            return
+        try:
+            fd = os.open(self.state_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+            with os.fdopen(fd, "r", encoding="utf-8") as f:
+                doc = json.loads(f.read(4 * 1024 * 1024))
+            if isinstance(doc.get("started_at"), (int, float)) and isinstance(doc.get("peaks"), dict):
+                self.started_at = float(doc["started_at"])
+                self.peaks = {k: int(v) for k, v in doc["peaks"].items()
+                              if isinstance(k, str) and isinstance(v, int) and not isinstance(v, bool)}
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            logger.warning("Deletion-rate baseline %s unreadable (%s); learning starts again", self.state_path, e)
+
+    def persist(self, force: bool = False) -> None:
+        if not self.state_path or not (self._dirty or force):
+            return
+        from security.control_health import write_snapshot
+        with self._lock:
+            doc = {"started_at": self.started_at, "peaks": dict(self.peaks)}
+            self._dirty = False
+        try:
+            write_snapshot(self.state_path, doc, max_bytes=4 * 1024 * 1024)
+        except Exception as e:
+            logger.error("Could not persist deletion-rate baseline: %s", e)
+
+    @property
+    def learning(self) -> bool:
+        return self._clock() - self.started_at < self.learning_seconds
+
+    def observe(self, comm: str, pid: int = 0, path: str = "") -> Optional[str]:
+        now = self._clock()
+        with self._lock:
+            start, count = self._windows.get(comm, (now, 0))
+            if now - start >= DELETE_WINDOW:
+                start, count = now, 0
+            count += 1
+            self._windows[comm] = (start, count)
+            if len(self._windows) > 4096:
+                self._windows = {c: w for c, w in self._windows.items() if now - w[0] < DELETE_WINDOW}
+            learning = now - self.started_at < self.learning_seconds
+            peak = self.peaks.get(comm, 0)
+            if learning:
+                if count > peak and len(self.peaks) < MAX_KNOWN:
+                    self.peaks[comm] = count
+                    self._dirty = True
+                return None
+            threshold = max(DELETE_FLOOR, DELETE_FACTOR * peak)
+            if count != threshold:          # report on crossing, not on every later deletion
+                return None
+            if now - self._last_report.get(comm, -1e18) < DELETE_REPORT_COOLDOWN:
+                return None
+            self._last_report[comm] = now
+            self.reported += 1
+        detail = (f"{count} deletions in {int(DELETE_WINDOW)} s (learned peak {peak}); "
+                  f"latest: {path[:150]}")
+        logger.warning("Mass deletion by %s (PID %d): %s", comm, pid, detail)
+        log = self._log_event
+        if log is None:
+            from security.db import log_security_event as log
+        try:
+            log(event_type=EVENT_MASS_DELETION, source="delete_rate_baseline", actor=f"{comm} (PID {pid})"[:200],
+                payload_hash=detail[:300], disposition="observed", session_id="system_protection")
+        except Exception as e:
+            logger.error("Could not record mass_deletion: %s", e)
+        return EVENT_MASS_DELETION
+
+    def health(self) -> tuple:
+        if self.learning:
+            left = self.learning_seconds - (self._clock() - self.started_at)
+            return "active", f"learning: {len(self.peaks)} programs, {int(left // 3600)} h left"
+        return "active", f"{len(self.peaks)} programs with learned deletion peaks; {self.reported} bursts reported"

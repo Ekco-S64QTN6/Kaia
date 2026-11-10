@@ -40,6 +40,7 @@ EVENT_LEVELS: Dict[str, Tuple[str, str]] = {
     "exec_first_seen": ("low", "an executable this host had not run before"),
     "net_shell_first_seen": ("high", "a shell or interpreter connected out on a port it had never used"),
     "net_first_seen": ("low", "a process connected out on a port it had never used"),
+    "mass_deletion": ("high", "a program deleted files far faster than it ever had (wiper or ransomware shape)"),
     # Installed content.
     "package_file_altered": ("critical", "a privileged packaged file differs from its package"),
     "privileged_file_unowned": ("critical", "a set-user/group-ID file no package owns"),

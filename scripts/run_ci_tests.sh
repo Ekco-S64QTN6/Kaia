@@ -62,6 +62,7 @@ tests=(
   tests/test_conn_baseline.py
   tests/test_backup_check.py
   tests/test_vuln_advisories.py
+  tests/test_deletion_rate_baseline.py
   tests/test_ci_covers_all_tests.py
 )
 
