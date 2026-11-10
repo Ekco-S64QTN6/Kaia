@@ -65,6 +65,7 @@ tests=(
   tests/test_deletion_rate_baseline.py
   tests/test_hud_startup_backlog.py
   tests/test_suite_isolation.py
+  tests/test_hud_gate_telemetry.py
   tests/test_ci_covers_all_tests.py
 )
 
