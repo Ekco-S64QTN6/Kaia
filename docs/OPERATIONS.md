@@ -111,6 +111,14 @@ it. The last-run time comes from the ctime of the mirror's `etc`, `usr` and `var
 `rsync -a` cannot preserve. The result is the `backup` control. Running the backup
 (`~/backup_home.sh`) clears a stale warning at the next check.
 
+## Security advisories
+
+Daily, `kaia-vuln-check.timer` matches Arch's public advisory list against the installed
+packages. `journalctl -u kaia-vuln-check` lists every affected package, most severe first.
+The unit fails, and the health check shows it, only when a High or Critical advisory has a
+fix this host has not installed: run `sudo pacman -Syu`. On demand:
+`/opt/kaia/scripts/kaia_vuln_check.py`.
+
 ## Control health
 
 Each control reports what it is actually doing, and the gate publishes that every
