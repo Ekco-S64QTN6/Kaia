@@ -1129,6 +1129,8 @@ if __name__ == "__main__":
                                              CONN_FILE_NAME)
     ebpf.exec_baseline = ExecBaseline(os.path.join(str(config.STATE_DIR), EXEC_BASELINE_FILE))
     ebpf.conn_baseline = ConnBaseline(os.path.join(str(config.STATE_DIR), CONN_FILE_NAME))
+    from security.behaviour_baseline import DeletionRateBaseline, DELETE_FILE_NAME
+    ebpf.delete_baseline = DeletionRateBaseline(os.path.join(str(config.STATE_DIR), DELETE_FILE_NAME))
     ebpf.start()
 
     # Initialize and start Passive Discovery
@@ -1158,13 +1160,15 @@ if __name__ == "__main__":
     # Persist the exec baseline and report it, alongside the health publisher.
     def _exec_baseline_loop(stop=threading.Event()):
         while not stop.wait(60.0):
-            for name, baseline in (("exec_baseline", ebpf.exec_baseline), ("conn_baseline", ebpf.conn_baseline)):
+            for name, baseline in (("exec_baseline", ebpf.exec_baseline), ("conn_baseline", ebpf.conn_baseline),
+                                   ("delete_rate_baseline", ebpf.delete_baseline)):
                 if baseline is None:
                     continue
                 baseline.persist()
                 control_health.report(name, *baseline.health(), heartbeat_interval=60.0)
     control_health.report("exec_baseline", *ebpf.exec_baseline.health(), heartbeat_interval=60.0)
     control_health.report("conn_baseline", *ebpf.conn_baseline.health(), heartbeat_interval=60.0)
+    control_health.report("delete_rate_baseline", *ebpf.delete_baseline.health(), heartbeat_interval=60.0)
     threading.Thread(target=_exec_baseline_loop, daemon=True, name="exec-baseline").start()
 
     # The first write waits one interval, so it follows the socket bind below.
@@ -1196,7 +1200,7 @@ if __name__ == "__main__":
         secret_exposure.stop()
         firewall_state.stop()
         backup_monitor.stop()
-        for _b in (ebpf.exec_baseline, ebpf.conn_baseline):
+        for _b in (ebpf.exec_baseline, ebpf.conn_baseline, ebpf.delete_baseline):
             if _b is not None:
                 _b.persist(force=True)
         health_publisher.stop()

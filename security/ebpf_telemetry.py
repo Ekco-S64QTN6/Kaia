@@ -460,6 +460,7 @@ class EBPFTelemetryEngine:
         # security.behaviour_baseline.ExecBaseline, set by the gate.
         self.exec_baseline = None
         self.conn_baseline = None
+        self.delete_baseline = None
 
         # Events the kernel could not queue because a ring buffer was full.
         self.ringbuf_drops = {name: 0 for name in RINGBUF_STREAMS}
@@ -713,6 +714,12 @@ class EBPFTelemetryEngine:
         }
         with self.lock:
             self.delete_deque.append(record)
+        rates = self.delete_baseline
+        if rates is not None:
+            try:
+                rates.observe(record["comm"], record["pid"], record["filename"])
+            except Exception as e:
+                logger.error("Deletion-rate baseline failed: %s", e)
 
     def _handle_tcp_connect(self, cpu, data, size):
         event = self.bpf["tcp_connect_events"].event(data)

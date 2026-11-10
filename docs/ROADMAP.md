@@ -59,7 +59,7 @@ face rig) and the command console, behind a strict self-hosted CSP and loopback 
    operator-configured scopes (home dotfiles, shell history) outside the gate's `ProtectHome` sandbox.
 4. **Done 2026-11-09:** backup recency and sampled restorability (`backup` control).
 5. **Behavioural baselines:** executables done (2026-11-09: 7-day learning, first-seen alerts).
-   Outbound (process, port) pairs done too. Next: file-activity rates.
+   Outbound (process, port) pairs and per-program deletion rates done too.
 6. **Threat-intel datasets:** installed-package advisories done (2026-11-09, daily). Remaining: local GeoLite2, CVE and passive-DNS stores, historical snapshots,
    optional DuckDB analysis.
 
