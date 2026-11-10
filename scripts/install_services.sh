@@ -298,7 +298,8 @@ fi
 
 for UNIT in kaia-policy-gate.service kaia-lockdown.service kaia-restore-blocks.service \
             kaia-health-check.service kaia-health-check.timer \
-            kaia-package-verify.service kaia-package-verify.timer; do
+            kaia-package-verify.service kaia-package-verify.timer \
+            kaia-vuln-check.service kaia-vuln-check.timer; do
     SRC="$KAIA_PROJECT_DIR/scripts/${UNIT}"
     [ -f "$SRC" ] || continue
     DEST="/etc/systemd/system/${UNIT}"
@@ -341,6 +342,7 @@ systemctl enable kaia-policy-gate.service
 # now: before the gate runs it only reports that nothing is published yet.
 systemctl enable --now kaia-health-check.timer
 systemctl enable --now kaia-package-verify.timer
+systemctl enable --now kaia-vuln-check.timer
 
 echo
 echo "==> Deployment installed; the Policy Gate is NOT started automatically."

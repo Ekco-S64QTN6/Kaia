@@ -61,6 +61,10 @@ step "6b. against the signed package archives (as the unprivileged timer runs it
 systemctl start kaia-package-verify.service; echo "signed verify exit $?"
 journalctl -u kaia-package-verify -n 8 --no-pager
 
+step "6c. security advisories"
+systemctl start kaia-vuln-check.service; echo "vuln check exit $?"
+journalctl -u kaia-vuln-check -n 12 --no-pager
+
 step "7. versions"
 uname -r; systemctl --version | head -1
 echo; echo "DONE. Log: $OUT"

@@ -1,0 +1,29 @@
+# Kaia: installed packages affected by Arch Linux security advisories.
+# Fetches the public advisory list (nothing about this host is sent) and matches
+# it locally. Unprivileged, no capabilities, read-only; network for the fetch only.
+# Exit 1 (a High/Critical advisory with a fix not installed) fails the unit, which
+# kaia_health_check.py reports; run `pacman -Syu`.
+
+[Unit]
+Description=Kaia: check installed packages against Arch security advisories
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -I -s __DEPLOY_DIR__/scripts/kaia_vuln_check.py
+DynamicUser=yes
+CapabilityBoundingSet=
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictNamespaces=true
+SystemCallArchitectures=native
+Nice=19
