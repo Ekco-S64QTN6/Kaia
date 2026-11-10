@@ -4,6 +4,7 @@
 
 ### Operator HUD
 
+- The operator command console is taller: its row scales with the window (`clamp(200px, 22vh, 320px)`, about 10 lines of output at 1080 px) instead of a fixed 128 px that showed two.
 - The HUD is a desktop application: `./kaia-hud` starts the loopback bridge on a free port and opens it in its own GTK + WebKitGTK window (the KaiaRX/KaiaBooth approach; `core/web/app_window.py`), with no browser, address bar, context menu or developer tools, and no navigation away from the HUD's origin. Closing the window stops the bridge. `./kaia-hud --install-desktop` adds "Kaia Sentinel" to the application menu. Without WebKitGTK it says what to install; it never falls back to a browser.
 - `kaia_dashboard.py` is the strict terminal TUI again by default (it had defaulted to serving the web HUD; the TUI needed `--tui`). `--web` serves the bridge only.
 - The avatar uses KaiaRX/KaiaBooth's codec: it rotates through all six portraits (k28, k59, k60, t1, t2, t3) without repeats; `./kaia-hud --face t1` pins one.

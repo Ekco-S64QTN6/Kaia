@@ -55,7 +55,8 @@ html, body {
   padding: 8px 12px 10px;
   gap: 8px;
   grid-template-columns: 1fr 1fr 1fr;
-  grid-template-rows: 38px minmax(280px, 0.95fr) minmax(260px, 1.05fr) 128px;
+  /* The console row scales with the window: ~10 lines of output at 1080 px tall. */
+  grid-template-rows: 38px minmax(250px, 0.95fr) minmax(240px, 1.05fr) clamp(200px, 22vh, 320px);
   grid-template-areas:
     "header  header  header"
     "host    policy  kaia"
