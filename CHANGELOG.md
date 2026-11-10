@@ -4,6 +4,7 @@
 
 ### Operator HUD
 
+- One HUD client that stops reading (a frozen tab, a stalled connection) no longer slows the stream for every other client. Sends were sequential and each waited for its socket to drain: measured live, a healthy client fell from ~4.3 to 0.47 updates/s with 3-second gaps. Sends are now concurrent; a client that cannot take a frame within 2 s is closed and dropped (the browser reconnects). After the fix, live: 4.2 updates/s, no gaps. A 3-minute soak showed stable memory (98 to 104 MiB plateau).
 - Opt-in audio cues: an `AUDIO` toggle in the HUD header plays short synthesised tones (Web Audio, no files, within the CSP) for a new critical or high security event and a distinct alarm when a lockdown starts. Off by default, never for events already present when the HUD loads, at most one cue per 1.5 s; the choice is remembered in the browser.
 - The audit feed shows local time, like the HUD clock and the process waterfall (it showed the stored UTC), and orders the history it loads at startup across both sources by timestamp.
 - The HUD shows the gate's real eBPF events (exec, openat2, unlinkat, connect): the gate publishes its newest events to `$STATE_DIR/telemetry_recent.json` every 2 s (0640, group `kaiacord`), and the HUD reads them. It had created its own unprivileged eBPF engine, which compiled with clang on every start, failed, and left the waterfall on a process sampler ("eBPF unavailable"). The HUD no longer imports BCC at all.
