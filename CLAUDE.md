@@ -131,6 +131,15 @@ Committed together, after reviewing ChatGPT's PRs #85–#89.
 
 ## Host context
 
+The gate is deployed: `kaia-policy-gate.service` runs `/opt/kaia/security/policy_gate.py` from a
+root-owned copy, with state in `/var/lib/kaia`. Its tamper detector hashes the tree it runs from
+(`core.config.BASE_DIR`) every 30 s and a mismatch locks the network down, so never edit `/opt/kaia`
+while it runs; this checkout is the source and is safe to edit. Deploy with the sequence in
+`docs/OPERATIONS.md` (stop, `sudo scripts/install_services.sh`, start); the owner runs the sudo
+steps. Check `systemctl cat kaia-policy-gate` before assuming which tree is live. Root's
+`/usr/bin/python3` lacks packages the user's `~/.local` supplies: check imports as root with
+`env -i /usr/bin/python3 -s -c "import X"`.
+
 The owner's machine runs both `ufw` and `nftables.service`. `nftables.service`
 starts about 2 s after ufw at boot and `/etc/nftables.conf` begins with
 `flush ruleset`, so ufw's rules do not survive boot there; nftables.conf is the
