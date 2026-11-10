@@ -81,13 +81,25 @@ def format_security_event(event_type, source, actor, payload_hash, disposition) 
     return feed_level, f"{icon} {str(event_type).upper():<12} │ {level.upper():<8} │ {status:<8} │ {detail}"
 
 
+def local_clock(iso_ts: str) -> str:
+    """HH:MM:SS in local time from a stored UTC ISO timestamp (the HUD clock is local)."""
+    s = str(iso_ts or "")
+    try:
+        dt = datetime.fromisoformat(s[:-1] + "+00:00" if s.endswith("Z") else s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=UTC)
+        return dt.astimezone().strftime("%H:%M:%S")
+    except ValueError:
+        return s[:19].split("T")[-1] if "T" in s else s[:8]
+
+
 def security_event_entry(timestamp, event_type, source, actor, payload_hash, disposition) -> "LogEntry":
     """A feed entry carrying the event's level and reason as fields, not only as text."""
     feed_level, msg = format_security_event(event_type, source, actor, payload_hash, disposition)
     level, reason = alert_levels.level_of(event_type)
     detail = msg.split("│")[-1].strip()
     status = "approved" if disposition == "approved" else "denied" if disposition in ("blocked", "denied") else str(disposition)
-    return LogEntry(timestamp=timestamp, level=feed_level, message=msg, event=str(event_type),
+    return LogEntry(timestamp=local_clock(timestamp), iso=str(timestamp), level=feed_level, message=msg, event=str(event_type),
                     status=status, alert_level=level, reason=reason, detail=detail)
 
 # Optional GPU library
@@ -206,6 +218,8 @@ class LogEntry:
     timestamp: str
     level: str      # "INFO" | "WARN" | "ERROR" | "SUCCESS"
     message: str
+    # Full ISO timestamp, for ordering entries from different sources.
+    iso: str = ""
     # Structured fields, set for security events (security.alert_levels).
     event: str = ""
     status: str = ""
@@ -1615,9 +1629,8 @@ class AuditLogCollector:
             for row in rows:
                 rowid, ts, event_type, source, actor, payload_hash, disposition, session_id = row
                 self._last_seen_rowid = rowid
-                disp_ts = ts[:19].split("T")[-1] if "T" in str(ts) else str(ts)[:8]
                 
-                entries.append(security_event_entry(disp_ts, event_type, source, actor, payload_hash, disposition))
+                entries.append(security_event_entry(ts, event_type, source, actor, payload_hash, disposition))
             conn.close()
         except Exception:
             pass  # Never crash the collector
@@ -1628,7 +1641,6 @@ class AuditLogCollector:
     @staticmethod
     def _ledger_entry(record: dict) -> "LogEntry":
         ts = str(record.get("timestamp", ""))
-        disp_ts = ts[:19].split("T")[-1] if "T" in ts else ts[:8]
         request_dict = record.get("request", {})
         action = request_dict.get("action", "unknown") if isinstance(request_dict, dict) else "unknown"
         result = record.get("result", "")
@@ -1640,7 +1652,7 @@ class AuditLogCollector:
         else:
             icon, status, level = "⚠", str(result), "WARN"
         msg = f"{icon} {str(action).upper():<12} │ {status:<8} │ {reason[:60]}"
-        return LogEntry(timestamp=disp_ts, level=level, message=msg)
+        return LogEntry(timestamp=local_clock(ts), iso=ts, level=level, message=msg)
 
     def _poll_audit_ledger(self) -> List[LogEntry]:
         """New ledger records since the last poll, read by byte offset.
@@ -1700,7 +1712,7 @@ class AuditLogCollector:
 
     def _run(self) -> None:
         """Poll security_events.db (250ms) and audit_ledger.json (500ms)."""
-        ledger_tick = 0
+        ledger_tick = 1   # poll both on the first pass, so startup history is ordered together
         while not self._stop.is_set():
             try:
                 new_entries = []
@@ -1711,6 +1723,9 @@ class AuditLogCollector:
                     ledger_tick = 0
 
                 backlog, self._backlog = self._backlog, False
+                if backlog:
+                    # History from two sources: show it in time order.
+                    new_entries.sort(key=lambda e: e.iso)
                 if new_entries:
                     now = time.time()
                     with self._lock:

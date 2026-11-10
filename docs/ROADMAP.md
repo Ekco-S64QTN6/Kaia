@@ -26,7 +26,7 @@ installed host can prove what is running.
 |:--|:--|:--|
 | **Control health** | Every control reports its state with heartbeats (including the event database and the audit ledger); an unprivileged timer outside the gate checks freshness and `kaia-restore-blocks` | Host verification (#101); database and threat-intel freshness |
 | **Kernel telemetry** | execve, connect/retransmit, `commit_creds` root gains, openat2, unlinkat attempts, honeypot inodes; ring buffers with drop counters; kprobes attached individually (a partial load is `degraded`); a local compile check | After a kernel upgrade, control health says the probes need a reboot (#104; CO-RE not taken: decision in the changelog); not seen: in-place cred overwrites and capability-only gains; correlation of syscall attempts with outcomes |
-| **Execution-blocking FIM** | Notification-mode fanotify observes, does not block | A design for blocking. Two candidates, both available on the host kernel (`CONFIG_FANOTIFY_ACCESS_PERMISSIONS=y`; BPF LSM active, BTF present): fanotify `FAN_OPEN_EXEC_PERM` (needs `CAP_SYS_ADMIN`, userspace verdict per exec, deadlock and timeout semantics) or a BPF LSM `bprm_check_security` program (in-kernel verdict, fails open if unloaded). Either needs explicit fail-open/fail-closed rules and target-kernel tests |
+| **Execution-blocking FIM** | Decided 2026-11-09: not built on this host | Builds legitimately execute from /tmp and cache directories, so a blocking policy (BPF LSM `bprm_check_security`) risks making the machine unusable on any bug; `exec_unusual_location` alerts cover detection. Revisit for a server profile with a fixed workload |
 | **End-to-end FIM / YARA response** | Rule generation, isolated validation and same-FD scanning exist | The full event → verdict → response path, exercised on a controlled host |
 | **Network discovery** | NB and NBSTAT answer records, first-level encoded names, scoped names, bounded DNS compression parsing, and rejection of fragmented/reserved-flag IPv4 frames before UDP parsing | Alternate NBNS name encodings and target-network validation |
 | **Supply chain** | Completed pacman transactions are recorded; critical installed files (setuid/setgid, PAM, loader, libc, executor binaries) are attested against pacman's `mtree` every 6 h, and unowned setuid files under `/usr` are found | Attestation against signed packages in the cache (the local database is unsigned); wider scope on demand; AUR build tracking, repository and metadata changes, dependency-graph drift |
@@ -49,7 +49,7 @@ face rig) and the command console, behind a strict self-hosted CSP and loopback 
 | **Full-body avatar** | The avatar is a face-rig codec. The full-body figure in the design references ([`design/`](design/)) is not built. |
 | **Bundled fonts** | The HUD uses system fonts; bundling the display and mono faces keeps the look identical across hosts without loosening the CSP. |
 | **Audio cues** | Optional Web Audio cues for alerts and state changes. |
-| **Browser checks** | Headless Chromium against the live state on 2026-11-09: control strip, level column and filters render (found and fixed the startup false-surge). Still to do: no-WebGL2 fallback, slow sockets, a long-running HUD. |
+| **Browser checks** | Headless Chromium against the live state on 2026-11-09: control strip, level column, filters and the gate's eBPF waterfall render; the no-WebGL2 fallback shows the static portrait. Still to do: slow sockets, a long-running HUD. |
 
 ## Next (Tier 5, ordered)
 
