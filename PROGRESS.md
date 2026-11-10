@@ -231,3 +231,28 @@ Handoffs between autonomous maintenance runs. Append a section per run; never re
 ### Next
 - After deploy: read /var/log/kaia/deploy-*.log; confirm the backup control works through the automount inside the gate's namespace.
 - Remaining roadmap: HUD streaming output, bundled fonts, audio cues, no-WebGL2 fallback check; NBNS alternate encodings; BPF-LSM execution blocking (design first).
+
+## Run 2026-11-09 (eighth)
+
+**HEAD at end:** a6a9ed5 (+ this docs PR)
+
+### Host: fourth deploy verified
+- Control health ACTIVE (20 active, 3 off by design); backup control reads the automounted mirror from inside the gate; exec/conn/deletion baselines learning (7 days, until ~2026-11-16); signed-package timer (149 files) and advisory timer run as dynamic users; HUD shows the gate's eBPF events.
+
+### Merged (CI-passing)
+- #141 feed local time + ordered history; host evidence + decision: no exec blocking on this host
+- #142 opt-in HUD audio cues (tested in node)
+- #143 HUD head-of-line blocking: one stalled client cut others to 0.47 updates/s; now concurrent sends with a 2 s timeout (live: 4.2/s, no gaps); 3-minute soak memory stable
+
+### Live checks done this run (headless Chromium + WebSocket clients against the live state)
+- Rendering, no-WebGL2 fallback, slow client, 3-minute soak.
+
+### Needs a redeploy for #141–#143 (HUD runs from the checkout, so it already uses them)
+- `sudo scripts/kaia-deploy-verify.sh` when convenient; nothing in the gate changed since the fourth deploy except docs.
+
+### Remaining roadmap (all low value or need assets)
+- HUD: bundled fonts (system fonts work), streaming command output (no long-running commands exist yet), full-body avatar (needs art).
+- Discovery: alternate NBNS encodings.
+- After 2026-11-16 (learning ends): review the first baseline alerts for noise and tune.
+
+### Baseline: suite green (695) · CI green · open issues: none
