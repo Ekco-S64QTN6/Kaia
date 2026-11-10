@@ -84,3 +84,36 @@ def test_backlog_is_not_counted_as_live_log_rate(tmp_path):
     c._run()
     assert len(c._logs) == 100                      # 50 rows + 50 ledger lines displayed
     assert c._calculate_logs_per_second() == 0      # none counted as activity
+
+
+def test_feed_shows_local_time_and_orders_startup_history(tmp_path, monkeypatch):
+    import time as _time
+    from kaia_dashboard import local_clock
+    monkeypatch.setenv("TZ", "America/Chicago")
+    _time.tzset()
+    try:
+        assert local_clock("2026-11-10T01:38:32.1Z") == "19:38:32"
+        c, ledger = _collector(tmp_path, ledger_lines=0, db_rows=0)
+        ledger.write_text(json.dumps({"timestamp": "2026-11-09T10:00:05Z", "result": "approved",
+                                      "request": {"action": "block_ip"}}) + "\n")
+        with sqlite3.connect(c._security_db_path) as conn:
+            for i, ts in enumerate(("2026-11-09T10:00:01Z", "2026-11-09T10:00:09Z")):
+                conn.execute("INSERT INTO security_events VALUES (?,?,?,?,?,?,?,?)",
+                             (f"x{i}", ts, "tamper_detected", "t", "a", "", "blocked", "s"))
+        polls = iter(range(1))
+
+        class Stop:
+            def is_set(self):
+                return False
+
+            def wait(self, _):
+                if next(polls, None) is None:
+                    Stop.is_set = lambda self: True
+
+        c._stop = Stop()
+        c._run()
+        assert [e.iso for e in c._logs] == ["2026-11-09T10:00:01Z", "2026-11-09T10:00:05Z", "2026-11-09T10:00:09Z"]
+        assert c._logs[0].timestamp == "04:00:01"
+    finally:
+        monkeypatch.delenv("TZ")
+        _time.tzset()

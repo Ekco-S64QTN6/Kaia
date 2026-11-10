@@ -4,6 +4,7 @@
 
 ### Operator HUD
 
+- The audit feed shows local time, like the HUD clock and the process waterfall (it showed the stored UTC), and orders the history it loads at startup across both sources by timestamp.
 - The HUD shows the gate's real eBPF events (exec, openat2, unlinkat, connect): the gate publishes its newest events to `$STATE_DIR/telemetry_recent.json` every 2 s (0640, group `kaiacord`), and the HUD reads them. It had created its own unprivileged eBPF engine, which compiled with clang on every start, failed, and left the waterfall on a process sampler ("eBPF unavailable"). The HUD no longer imports BCC at all.
 - HUD start no longer reports a false `AuditSurge` / `ELEVATED`: history replayed at startup (the event database from row 0 and the whole ledger, 50 rows per 250 ms) was counted as live log rate for minutes. The collector now shows the newest 50 rows of each as history, not activity, and follows the ledger by byte offset (restarting on rotation) instead of re-reading all of it on every change. Found in a headless-browser check of the live HUD.
 - The test suite no longer reaches the production Policy Gate. On the owner's machine (user in `kaiacord`), a test running the console's `status` command sent an audited request to the live gate on every run; `tests/conftest.py` now redirects the production socket path for every test.
