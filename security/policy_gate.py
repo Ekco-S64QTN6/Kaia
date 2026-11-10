@@ -1139,6 +1139,11 @@ if __name__ == "__main__":
         control_health.report("discovery", "failed", "did not start (asset database); see the journal")
 
     # Initialize and start Honeypot coordinator
+    # Recent eBPF events for the HUD, which cannot load probes itself.
+    from security.telemetry_publish import TelemetryPublisher, FILE_NAME as TELEMETRY_FILE
+    telemetry_publisher = TelemetryPublisher(ebpf, os.path.join(str(config.STATE_DIR), TELEMETRY_FILE))
+    telemetry_publisher.start()
+
     honeypots = HoneypotCoordinator.get_instance()
     honeypots.start(ebpf_engine=ebpf)
     
@@ -1200,6 +1205,7 @@ if __name__ == "__main__":
         secret_exposure.stop()
         firewall_state.stop()
         backup_monitor.stop()
+        telemetry_publisher.stop()
         for _b in (ebpf.exec_baseline, ebpf.conn_baseline, ebpf.delete_baseline):
             if _b is not None:
                 _b.persist(force=True)

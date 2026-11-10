@@ -64,7 +64,6 @@ from kaia_dashboard import (
     token_expiry,
 )
 from security.policy_gate import generate_capability_token
-from security.ebpf_telemetry import EBPFTelemetryEngine
 
 
 # ==================== CONSTANTS & INVARIANTS ====================
@@ -288,7 +287,7 @@ def serialize_snapshot(
     snap: KaiamonSnapshot,
     telemetry_collector: Optional[TelemetryCollector] = None,
     service_collector: Optional[ServiceCollector] = None,
-    ebpf_engine: Optional[EBPFTelemetryEngine] = None,
+    ebpf_engine: Optional[Any] = None,  # the engine API: recent execs, opens, deletes
     proc_sampler: Optional[ProcessSyscallSampler] = None,
     state_tracker: Optional[SentinelStateTracker] = None,
     introspector: Optional[HostIntrospector] = None,
@@ -953,7 +952,11 @@ class KaiaWebBridge:
         self._stop_event = threading.Event()
         self.telemetry_collector = telemetry_collector or TelemetryCollector(self._stop_event)
         self.service_collector = service_collector or ServiceCollector(self._stop_event)
-        self.ebpf_engine = EBPFTelemetryEngine.get_instance()
+        # The gate is the only process that can load eBPF; read what it publishes
+        # instead of compiling (and failing) an unprivileged engine here.
+        from security.telemetry_publish import PublishedTelemetry, FILE_NAME as TELEMETRY_FILE
+        state_dir = str(config.STATE_DIR) if HAS_CONFIG else os.path.join(BASE_DIR, "storage", "security")
+        self.ebpf_engine = PublishedTelemetry(os.path.join(state_dir, TELEMETRY_FILE))
         self.proc_sampler = ProcessSyscallSampler()
         self.state_tracker = SentinelStateTracker()
         self.introspector = HostIntrospector()
@@ -1246,10 +1249,6 @@ class KaiaWebBridge:
             pass
         try:
             self.service_collector.start()
-        except Exception:
-            pass
-        try:
-            self.ebpf_engine.start()
         except Exception:
             pass
 
