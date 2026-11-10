@@ -68,6 +68,8 @@ tests=(
   tests/test_hud_gate_telemetry.py
   tests/test_hud_audio_cues.py
   tests/test_hud_slow_client.py
+  tests/test_dashboard_firewall_counts.py
+  tests/test_hud_desktop_app.py
   tests/test_ci_covers_all_tests.py
 )
 
