@@ -94,9 +94,11 @@ the [deployment checklist](docs/DEPLOYMENT_CHECKLIST.md).
 
 The capability-token signing secret is an authorization root; [Operations](docs/OPERATIONS.md#capability-token-trust-and-rotation) documents its custody, limitations and rotation.
 
-> **Stop the Policy Gate before editing Kaia's own source.** Tamper detection re-hashes its core
-> files every 30 seconds; an edit while it runs is indistinguishable from an intruder and triggers a
-> lockdown that drops all traffic. `sudo systemctl stop kaia-policy-gate`, edit, then start it to
+> **Stop the Policy Gate before editing the tree it runs from.** Tamper detection re-hashes its core
+> files every 30 seconds in the directory the gate was started from (`/opt/kaia` once deployed; the
+> checkout only when the gate runs from it); an edit there while it runs is indistinguishable from an
+> intruder and triggers a lockdown that drops all traffic. Editing a checkout the gate does not run
+> from is safe; deploying it is the stop → `install_services.sh` → start sequence in Operations. `sudo systemctl stop kaia-policy-gate`, edit, then start it to
 > re-baseline. If the network goes down anyway: `sudo ~/kaia-panic-unlock.sh` (see
 > [Operations](docs/OPERATIONS.md#if-the-network-goes-down-unexpectedly)).
 
