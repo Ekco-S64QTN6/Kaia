@@ -204,3 +204,30 @@ Handoffs between autonomous maintenance runs. Append a section per run; never re
 
 ### Recommended first action next run
 - Read the newest /var/log/kaia/deploy-*.log. Then Tier 5 feature work in order: alert reasons and a level filter in the HUD feed; signed-package attestation; behavioural baselines.
+
+## Run 2026-11-09 (seventh)
+
+**HEAD at end:** b1d188f (+ this docs PR)
+
+### Merged (all CI-passing)
+- #131 HUD feed: level column, reasons, High+ filter, structured fields; node syntax check of HUD JS
+- #132 signed-package verification (daily unprivileged timer; host run 149 files clean)
+- #133 / #134 / #137 behavioural baselines: first-seen executables, outbound (process, port), per-program deletion rate
+- #135 backup recency + sampled restorability (host: last backup 2026-11-01, 5/5 samples match)
+- #136 Arch security advisories daily (host: 24 affected, 4 High, none fixable yet)
+- #138 HUD start false AuditSurge fixed; ledger followed by offset; **test suite no longer reaches the live gate**
+- #139 HUD shows the gate's published eBPF events; the HUD no longer loads BCC
+
+### Host
+- Third deploy (#127–#129) verified: health ACTIVE (14 active, 3 off), firewall control, honeypot 5/5.
+- Headless Chromium against the live state: renders; found and fixed #138 and #139.
+
+### Needs a redeploy: `sudo scripts/kaia-deploy-verify.sh`
+- Expect new controls exec_baseline, conn_baseline, delete_rate_baseline (learning, 7 days), backup (active), and timers kaia-package-verify and kaia-vuln-check (steps 6b/6c).
+
+### Open issues: none
+### Baseline: suite green (691), CI green
+
+### Next
+- After deploy: read /var/log/kaia/deploy-*.log; confirm the backup control works through the automount inside the gate's namespace.
+- Remaining roadmap: HUD streaming output, bundled fonts, audio cues, no-WebGL2 fallback check; NBNS alternate encodings; BPF-LSM execution blocking (design first).
