@@ -48,7 +48,7 @@ face rig) and the command console, behind a strict self-hosted CSP and loopback 
 | **Streaming command output** | Long-running diagnostics and sandboxed operations return one completed response. Needs a bounded, framed streaming protocol with cancellation, timeouts and UI back-pressure tests. |
 | **Full-body avatar** | The avatar is a face-rig codec. The full-body figure in the design references ([`design/`](design/)) is not built. |
 | **Bundled fonts** | The HUD uses system fonts; bundling the display and mono faces keeps the look identical across hosts without loosening the CSP. |
-| **Browser checks** | Headless Chromium against the live state on 2026-11-09: control strip, level column, filters and the gate's eBPF waterfall render; the no-WebGL2 fallback shows the static portrait. Still to do: slow sockets, a long-running HUD. |
+| **Browser checks** | Headless Chromium against the live state on 2026-11-09: control strip, level column, filters and the gate's eBPF waterfall render; the no-WebGL2 fallback shows the static portrait. Slow-client and 3-minute soak checks done (found and fixed head-of-line blocking; memory stable). |
 
 ## Next (Tier 5, ordered)
 

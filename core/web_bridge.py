@@ -71,6 +71,7 @@ from security.policy_gate import generate_capability_token
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 TELEMETRY_BROADCAST_INTERVAL_SEC = 0.20  # 5 updates per second
+WS_SEND_TIMEOUT_SEC = 2.0  # a client that cannot take a frame in this time is dropped
 MAX_POLICY_GATE_RESPONSE_BYTES = 4 * 1024 * 1024
 ALLOWED_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
@@ -1204,6 +1205,38 @@ class KaiaWebBridge:
 
         return ws
 
+    async def _broadcast(self, payload_str: str) -> None:
+        """Send to every client concurrently; drop one that cannot keep up.
+
+        Sends were sequential, and send_str waits for the socket to drain, so
+        one client that stopped reading (a frozen tab, a stalled connection)
+        slowed the stream for every other client to ~0.5 updates/s (measured).
+        A client that does not accept a frame within WS_SEND_TIMEOUT_SEC is
+        closed and removed; the browser reconnects.
+        """
+        clients = list(self.ws_clients)
+
+        async def send(ws):
+            if ws.closed:
+                raise ConnectionError("closed")
+            await asyncio.wait_for(ws.send_str(payload_str), WS_SEND_TIMEOUT_SEC)
+
+        results = await asyncio.gather(*(send(ws) for ws in clients), return_exceptions=True)
+        for ws, result in zip(clients, results):
+            if isinstance(result, BaseException):
+                self.ws_clients.discard(ws)
+                if isinstance(result, asyncio.TimeoutError):
+                    logger.warning("Dropping a HUD client that stopped reading (send timed out)")
+                # Closing a stalled socket can block too; never wait on it here.
+                asyncio.ensure_future(self._close_quietly(ws))
+
+    @staticmethod
+    async def _close_quietly(ws) -> None:
+        try:
+            await asyncio.wait_for(ws.close(), WS_SEND_TIMEOUT_SEC)
+        except Exception:
+            pass
+
     async def _broadcast_loop(self) -> None:
         """Periodic broadcast loop pushing snapshots to all active WebSockets."""
         loop = asyncio.get_running_loop()
@@ -1222,19 +1255,7 @@ class KaiaWebBridge:
                     )
                     payload_str = json.dumps(data)
 
-                    # Broadcast to all clients
-                    dead_clients = set()
-                    for ws in list(self.ws_clients):
-                        try:
-                            if not ws.closed:
-                                await ws.send_str(payload_str)
-                            else:
-                                dead_clients.add(ws)
-                        except Exception:
-                            dead_clients.add(ws)
-
-                    for ws in dead_clients:
-                        self.ws_clients.discard(ws)
+                    await self._broadcast(payload_str)
                 except Exception as e:
                     logger.debug("Error during telemetry broadcast: %s", e)
 

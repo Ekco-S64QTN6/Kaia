@@ -67,6 +67,7 @@ tests=(
   tests/test_suite_isolation.py
   tests/test_hud_gate_telemetry.py
   tests/test_hud_audio_cues.py
+  tests/test_hud_slow_client.py
   tests/test_ci_covers_all_tests.py
 )
 
