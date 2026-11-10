@@ -69,7 +69,7 @@ def install_desktop_entry() -> str:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--install-desktop", action="store_true", help="add a launcher to the application menu")
-    ap.add_argument("--face", help="pin one portrait (k28, k59, k60, t1, t2, t3); default rotates")
+    ap.add_argument("--face", help="portrait: k28, k59, k60, t1, t2 (default) or t3; 'random' rotates")
     args = ap.parse_args(argv)
     if args.install_desktop:
         print("installed", install_desktop_entry())

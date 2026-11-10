@@ -54,9 +54,9 @@ def test_terminal_tui_is_the_default_entry_point():
     assert os.access(ROOT / "kaia-hud", os.X_OK)
 
 
-def test_avatar_rotates_through_the_shared_portraits():
+def test_avatar_is_t2_and_the_shared_portraits_are_present():
     codec = (ROOT / "core/web/static/js/kaia/kaia-codec.js").read_text()
     assert "KaiaCodec.randomPortrait" in codec
-    assert "|| 'random'" in (ROOT / "core/web/static/js/operative.js").read_text()
+    assert "get('face') || 't2'" in (ROOT / "core/web/static/js/operative.js").read_text()
     for p in ("k28", "k59", "k60", "t1", "t2", "t3"):
         assert (ROOT / "core/web/static/assets/kaia" / p / "kaia_codec.webp").exists()

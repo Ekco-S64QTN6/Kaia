@@ -359,6 +359,14 @@ The dashboards do not query the gate for the firewall state: the gate publishes 
 ruleset to `$STATE_DIR/firewall_state.json` every 10 s and they read it. Every request the
 gate does receive is audited; nothing is summarised or dropped.
 
+## Starting history fresh
+
+`sudo /usr/bin/python3 scripts/kaia_reset_history.py` archives the event database, the audit
+ledger and the behaviour baselines into `$STATE_DIR/archive/<UTC time>/` (root only) and starts
+Kaia on fresh, empty history: for the move from testing to real use. Nothing is deleted, the
+used-token registry is carried over, and it refuses while Kaia has active IP blocks (boot
+replay rebuilds those from the ledger). The behaviour baselines restart their 7-day learning.
+
 ## Block persistence
 
 Blocks are refused for loopback, unspecified, multicast, broadcast and link-local

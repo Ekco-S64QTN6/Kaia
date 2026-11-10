@@ -71,6 +71,7 @@ tests=(
   tests/test_dashboard_firewall_counts.py
   tests/test_hud_desktop_app.py
   tests/test_hud_network_radar.py
+  tests/test_reset_history.py
   tests/test_ci_covers_all_tests.py
 )
 
