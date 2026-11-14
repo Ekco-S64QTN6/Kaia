@@ -204,8 +204,10 @@ def main() -> int:
         import config
         from security.host_executor import HostExecutor
     except Exception as e:
-        logger.error("Could not import Kaia modules: %s", e)
-        return 0
+        # Not success: nothing was restored. Returning 0 here made a broken
+        # install look like a clean boot with no blocks to re-apply.
+        logger.error("Could not import Kaia modules; no block was restored: %s", e)
+        return 1
 
     ledger = config.AUDIT_LOG_PATH
     logger.info("Restoring blocks from %s", ledger)
