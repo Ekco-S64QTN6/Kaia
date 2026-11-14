@@ -471,7 +471,11 @@ class HoneypotCoordinator:
         while not self.stop_event.is_set():
             time.sleep(1.0)
             control_health.heartbeat("honeypot")
-            hits = ebpf_engine.get_honeypot_hits()
+            try:
+                hits = ebpf_engine.get_honeypot_hits()
+            except Exception as e:
+                logger.error(f"Could not read honeypot hits: {e}")
+                continue
             for hit in hits:
                 path = hit["filename"]
                 pid = hit["pid"]
@@ -499,9 +503,11 @@ class HoneypotCoordinator:
                 except Exception as e:
                     logger.error(f"Failed to log honeypot_file_access: {e}")
                     
-                # Mitigate source IP if remote
+                # Mitigate source IP if remote. A blocking request to the gate must
+                # not delay the next hit's record, nor end this thread if it fails.
                 if src_ip != "127.0.0.1":
-                    self._dispatch_block_ip(src_ip)
+                    threading.Thread(target=self._dispatch_block_ip, args=(src_ip,),
+                                     daemon=True, name="honeypot-auto-block").start()
 
     def _run_port_listener(self, port: int):
         # Enter network namespace inside this thread only
@@ -570,32 +576,91 @@ class HoneypotCoordinator:
         if src_ip != "127.0.0.1":
             self._dispatch_block_ip(src_ip)
 
-    def _dispatch_block_ip(self, src_ip: str):
-        logger.info(f"Auto-mitigating honeypot offender IP: {src_ip}")
-        from security.policy_gate import generate_capability_token
-        
-        token = generate_capability_token("block_ip", src_ip, duration_seconds=30)
-        
-        # Send IPC connection request to policy gate socket
-        import json
+    # Seconds to wait for the gate's verdict on an auto-block (nft takes milliseconds).
+    AUTO_BLOCK_TIMEOUT = 10.0
+    AUTO_BLOCK_MAX_RESPONSE_BYTES = 1024 * 1024
+
+    @staticmethod
+    def _auto_block_request(src_ip: str, token: str) -> dict:
+        """The IPC envelope for an automatic block.
+
+        The payload must satisfy MitigationRequest. It once had no
+        ``justification``: the gate refused every auto-block as a schema
+        failure, and since the reply was never read the journal said
+        "dispatched successfully" while nothing was ever blocked.
+        """
         import uuid
-        
-        req_id = str(uuid.uuid4())
-        payload = {
-            "request_id": req_id,
+        return {
+            "request_id": str(uuid.uuid4()),
             "action": "block_ip",
-            "payload": {"target_ip": src_ip, "protocol": "all", "session_id": "honeypot_auto_block"},
-            "capability_token": token
+            "payload": {
+                "target_ip": src_ip,
+                "protocol": "all",
+                "justification": "Automatic block: this address is the network peer of a process "
+                                 "that touched a honeypot decoy.",
+                "session_id": "honeypot_auto_block",
+            },
+            "capability_token": token,
         }
-        
+
+    def _dispatch_block_ip(self, src_ip: str) -> bool:
+        """Ask the Policy Gate to block ``src_ip`` and record what it answered."""
+        import json
+        logger.info(f"Auto-mitigating honeypot offender IP: {src_ip}")
+        outcome = "no response"
+        ok = False
+        s = None
         try:
+            from security.policy_gate import generate_capability_token
+            token = generate_capability_token("block_ip", src_ip, duration_seconds=30)
+            payload_bytes = json.dumps(self._auto_block_request(src_ip, token)).encode("utf-8")
             s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            s.settimeout(2.0)
+            s.settimeout(self.AUTO_BLOCK_TIMEOUT)
             s.connect(config.POLICY_GATE_SOCKET)
-            payload_bytes = json.dumps(payload).encode('utf-8')
-            header = len(payload_bytes).to_bytes(4, byteorder='big')
-            s.sendall(header + payload_bytes)
-            s.close()
-            logger.info(f"Auto-block IPC request dispatched successfully for {src_ip}.")
+            s.sendall(len(payload_bytes).to_bytes(4, byteorder="big") + payload_bytes)
+
+            def read_exactly(size):
+                data = bytearray()
+                while len(data) < size:
+                    chunk = s.recv(min(65536, size - len(data)))
+                    if not chunk:
+                        raise ConnectionError("the Policy Gate closed the connection without answering")
+                    data.extend(chunk)
+                return bytes(data)
+
+            length = int.from_bytes(read_exactly(4), byteorder="big")
+            if not 0 < length <= self.AUTO_BLOCK_MAX_RESPONSE_BYTES:
+                raise ValueError(f"invalid response length {length}")
+            response = json.loads(read_exactly(length).decode("utf-8"))
+            executor = response.get("executor_response") if isinstance(response, dict) else None
+            if not isinstance(executor, dict):
+                executor = {}
+            ok = response.get("approved") is True if isinstance(response, dict) else False
+            outcome = str(executor.get("message") or executor.get("stderr") or executor.get("status") or "refused")
         except Exception as e:
-            logger.error(f"Failed to dispatch auto-block IPC request for {src_ip}: {e}")
+            outcome = f"{type(e).__name__}: {e}"
+        finally:
+            if s is not None:
+                try:
+                    s.close()
+                except OSError:
+                    pass
+
+        if ok:
+            logger.critical("Honeypot auto-block applied: %s is now dropped.", src_ip)
+        else:
+            # Includes the executor refusing a protected address (this host, its
+            # gateway or resolver), which is the correct outcome for those.
+            logger.error("Honeypot auto-block of %s was NOT applied: %s", src_ip, outcome[:300])
+        try:
+            log_security_event(
+                event_type="honeypot_auto_block" if ok else "honeypot_auto_block_failed",
+                source="honeypot_coordinator",
+                actor=src_ip,
+                payload_hash="" if ok else outcome[:300],
+                disposition="blocked" if ok else "failed",
+                session_id="system_protection",
+            )
+        except Exception as e:
+            logger.error(f"Failed to log honeypot auto-block outcome: {e}")
+        return ok
