@@ -226,35 +226,79 @@ class PassiveDiscoveryEngine:
                 pass
         return assets
 
-    def _run(self):
-        # Open raw PACKET socket
+    # Seconds between attempts to (re)open the capture socket.
+    CAPTURE_RETRY_SECONDS = 5.0
+
+    def _open_capture_socket(self):
+        """Open and bind the raw PACKET socket; returns (socket, interface name)."""
+        # ETH_P_ALL is 3 (host byte order), socket requires network byte order (ntohs(3))
+        sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.ntohs(3))
         try:
-            # ETH_P_ALL is 3 (host byte order), socket requires network byte order (ntohs(3))
-            self.sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.ntohs(3))
-            self.sock.settimeout(1.0)
-            
+            sock.settimeout(1.0)
             ifname = config.DISCOVERY_INTERFACE
             if ifname == "auto":
                 ifname = get_default_interface()
-            logger.info(f"Binding raw socket to interface: {ifname}")
-            self.sock.bind((ifname, 0))
-        except Exception as e:
-            logger.error(f"Failed to open raw socket for passive discovery: {e}. Requires CAP_NET_RAW.")
-            control_health.report("discovery", "failed", f"raw socket: {e}")
-            return
+            sock.bind((ifname, 0))
+        except Exception:
+            sock.close()
+            raise
+        return sock, ifname
 
-        control_health.report("discovery", "active", f"passive capture on {ifname}",
-                              heartbeat_interval=5.0)
+    def _close_capture_socket(self):
+        sock, self.sock = self.sock, None
+        if sock is not None:
+            try:
+                sock.close()
+            except Exception:
+                pass
+
+    def _run(self):
+        # The capture is re-opened whenever it is lost. At boot the gate starts
+        # before Wi-Fi is up: recvfrom() raised ENETDOWN once, the thread ended,
+        # and discovery stayed dead until the next gate restart (four days on the
+        # host, 2026-11-10 to 11-14). The interface is re-resolved on every
+        # attempt, so a default route that moves to another interface is followed.
+        problem = None  # last reported problem, so a long outage logs once
         while not self.stop_event.is_set():
+            if self.sock is None:
+                try:
+                    self.sock, ifname = self._open_capture_socket()
+                except PermissionError as e:
+                    # Missing CAP_NET_RAW does not fix itself; do not retry.
+                    logger.error(f"Failed to open raw socket for passive discovery: {e}. Requires CAP_NET_RAW.")
+                    control_health.report("discovery", "failed", f"raw socket: {e}")
+                    return
+                except Exception as e:
+                    if str(e) != problem:
+                        problem = str(e)
+                        logger.error("Passive discovery cannot open its capture socket: %s; retrying every %g s",
+                                     e, self.CAPTURE_RETRY_SECONDS)
+                        control_health.report("discovery", "degraded",
+                                              f"no capture (retrying): {e}", heartbeat_interval=5.0)
+                    control_health.heartbeat("discovery")
+                    self.stop_event.wait(self.CAPTURE_RETRY_SECONDS)
+                    continue
+                logger.info(f"Passive discovery capturing on interface: {ifname}")
+                control_health.report("discovery", "active", f"passive capture on {ifname}",
+                                      heartbeat_interval=5.0)
+                problem = None
+
             control_health.heartbeat("discovery")
             try:
                 packet, addr = self.sock.recvfrom(65535)
             except socket.timeout:
                 continue
             except Exception as e:
-                logger.error(f"Passive discovery capture stopped: {e}")
-                control_health.report("discovery", "failed", f"capture stopped: {e}")
-                break
+                if self.stop_event.is_set():
+                    break
+                problem = str(e)
+                logger.error("Passive discovery capture interrupted: %s; reopening in %g s",
+                             e, self.CAPTURE_RETRY_SECONDS)
+                control_health.report("discovery", "degraded",
+                                      f"capture interrupted (retrying): {e}", heartbeat_interval=5.0)
+                self._close_capture_socket()
+                self.stop_event.wait(self.CAPTURE_RETRY_SECONDS)
+                continue
 
             if len(packet) < 14:
                 continue
