@@ -45,15 +45,26 @@ def same_origin(url: str, home: str) -> bool:
     return (a.scheme, a.hostname, a.port) == (b.scheme, b.hostname, b.port)
 
 
+SESSION_KEY_ENV = "KAIA_HUD_SESSION_KEY"
+
+
 def launch(url: str, title: str = "Kaia // Sentinel", wm_class: str = "KaiaSentinel",
-           size: str = "1700x1080", icon: str = "") -> Optional[subprocess.Popen]:
-    """Open ``url`` in its own window; None if this machine can't."""
+           size: str = "1700x1080", icon: str = "", session_key: str = "") -> Optional[subprocess.Popen]:
+    """Open ``url`` in its own window; None if this machine can't.
+
+    ``session_key`` authorises the page's console commands. It travels in the
+    environment, never in argv: /proc/<pid>/cmdline is readable by every user.
+    """
     if not available():
         return None
+    env = {**os.environ}
+    env.pop(SESSION_KEY_ENV, None)
+    if session_key:
+        env[SESSION_KEY_ENV] = session_key
     try:
         return subprocess.Popen([system_python(), os.path.abspath(__file__), "--url", url, "--title", title,
                                  "--class", wm_class, "--size", size, "--icon", icon],
-                                stdin=subprocess.DEVNULL, env={**os.environ})
+                                stdin=subprocess.DEVNULL, env=env)
     except OSError:
         return None
 
@@ -113,7 +124,8 @@ def _main() -> int:
         return False
 
     view.connect("decide-policy", decide)
-    view.load_uri(a.url)
+    session_key = os.environ.pop(SESSION_KEY_ENV, "")
+    view.load_uri(a.url + (f"#session={session_key}" if session_key and "#" not in a.url else ""))
     win.add(view)
     win.connect("destroy", Gtk.main_quit)
     win.show_all()

@@ -221,3 +221,26 @@ def test_internetdb_response_uses_streaming_and_closes_after_valid_json(monkeypa
     }]
     assert closed == [True]
 
+
+
+def test_cve_store_ships_no_invented_cves(tmp_path, monkeypatch):
+    """The store was seeded with two made-up CVEs that the console could show as
+    findings; they are gone, and removed from stores an older version created."""
+    import sqlite3
+    from security import threat_intel
+    for name in ("REPUTATION_DB_PATH", "INTERNETDB_PATH", "CVE_DB_PATH"):
+        monkeypatch.setattr(threat_intel, name, str(tmp_path / name / "db.sqlite"))
+    monkeypatch.setattr(threat_intel, "THREAT_INTEL_DIR", str(tmp_path))
+    (tmp_path / "REPUTATION_DB_PATH").mkdir()
+    threat_intel.initialize_intel()
+    conn = sqlite3.connect(threat_intel.CVE_DB_PATH)
+    assert conn.execute("SELECT COUNT(*) FROM vulns").fetchone()[0] == 0
+    conn.execute("INSERT INTO vulns VALUES ('CVE-2026-1234', 9.8, '3.1', "
+                 "'Critical remote code execution vulnerability in kernel process parser.')")
+    conn.execute("INSERT INTO vulns VALUES ('CVE-2024-0001', 5.0, '3.1', 'a real imported row')")
+    conn.commit(); conn.close()
+    threat_intel.initialize_intel()
+    conn = sqlite3.connect(threat_intel.CVE_DB_PATH)
+    assert [r[0] for r in conn.execute("SELECT cve_id FROM vulns")] == ["CVE-2024-0001"]
+    conn.close()
+    assert threat_intel.lookup_cve_details("CVE-2026-1234")["cvss"] == "N/A"
