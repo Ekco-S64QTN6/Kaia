@@ -20,6 +20,28 @@ try:
 except ImportError:
     logger.warning("yara-python not found. YARA scanning features will be disabled.")
 
+def validation_scratch_root() -> str:
+    """Where rule-validation files go: a directory the *host* can see too.
+
+    The gate unit has PrivateTmp=true, so its /tmp is a private mount. The
+    validation sandbox is a transient unit started by PID 1 in the host's
+    namespace: a BindReadOnlyPaths= of a file in the gate's /tmp names a path
+    that does not exist there, the unit fails to start, and every rule was
+    refused on a deployed host. The gate's runtime directory (the socket's
+    directory, root-owned, world-traversable, not private) exists at the same
+    path on both sides. Unprivileged development keeps using /tmp.
+    """
+    runtime_dir = os.path.dirname(config.POLICY_GATE_SOCKET)
+    try:
+        st = os.lstat(runtime_dir)
+        if (os.geteuid() == 0 and stat.S_ISDIR(st.st_mode) and st.st_uid == 0
+                and not st.st_mode & 0o002 and os.access(runtime_dir, os.W_OK)):
+            return runtime_dir
+    except OSError:
+        pass
+    return "/tmp"
+
+
 class RuleEngine:
     _instance = None
     _lock = threading.Lock() if 'threading' in sys.modules else None
@@ -37,8 +59,9 @@ class RuleEngine:
         # A predictable shared /tmp path lets an unprivileged user race root's
         # corpus writes through a symlink. tempfile creates a fresh directory
         # atomically under sticky /tmp; keep it alive for this engine instance.
+        self._scratch_root = validation_scratch_root()
         self._benign_corpus_tmpdir = tempfile.TemporaryDirectory(
-            prefix="kaia_benign_corpus-", dir="/tmp"
+            prefix="kaia_benign_corpus-", dir=self._scratch_root
         )
         self.benign_corpus_dir = self._benign_corpus_tmpdir.name
         os.chmod(self.benign_corpus_dir, 0o755)
@@ -147,7 +170,8 @@ class RuleEngine:
         fd = -1
         rule_path = None
         try:
-            fd, rule_path = tempfile.mkstemp(suffix=".yar", prefix="kaia-yara-")
+            fd, rule_path = tempfile.mkstemp(suffix=".yar", prefix="kaia-yara-",
+                                             dir=getattr(self, "_scratch_root", None))
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 fd = -1
                 f.write(rule_text)

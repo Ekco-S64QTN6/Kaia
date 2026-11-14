@@ -28,6 +28,7 @@ EVENT_LEVELS: Dict[str, Tuple[str, str]] = {
     "honeypot_file_access": ("critical", "a decoy file was opened"),
     "honeypot_port_trigger": ("critical", "a decoy port was contacted"),
     "honeypot_auto_block": ("high", "a decoy reader's peer was blocked"),
+    "honeypot_auto_block_failed": ("critical", "a decoy reader's peer could NOT be blocked"),
     # Privilege.
     "privilege_escalation_unexpected": ("critical", "root gained outside execve with no prior root identity"),
     "privilege_setuid_exec_unusual": ("high", "set-user-ID root exec from outside the system directories"),
@@ -52,6 +53,7 @@ EVENT_LEVELS: Dict[str, Tuple[str, str]] = {
     "pacman_package_upgraded": ("info", "a package was upgraded"),
     "pacman_monitor_baseline_established": ("info", "pacman.log monitoring started"),
     "pacman_monitor_cursor_reset": ("low", "pacman.log was rotated or truncated"),
+    "pacman_monitor_transaction_too_large": ("medium", "a package transaction was too large to record"),
     # File integrity monitoring.
     "fim_yara_match": ("critical", "a file matched a YARA rule"),
     "fim_daemon_crash": ("high", "the FIM daemon stopped"),

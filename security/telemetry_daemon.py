@@ -150,7 +150,7 @@ def get_systemd_unit_status(unit_name: str) -> dict:
     # 2. Fallback to systemctl subprocess
     try:
         result = subprocess.run(
-            ["systemctl", "show", unit_name, "--property=LoadState,ActiveState,SubState"],
+            ["/usr/bin/systemctl", "show", unit_name, "--property=LoadState,ActiveState,SubState"],
             capture_output=True,
             text=True,
             check=False,

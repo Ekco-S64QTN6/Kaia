@@ -169,3 +169,53 @@ def test_unreadable_log_is_degraded_in_control_health_not_active(tmp_path, monke
     states = [(s, d) for n, s, d in seen if n == "pacman_monitor"]
     assert states[0][0] == "degraded" and "not found" in states[0][1]
     assert states[-1][0] == "active"
+
+
+def _started_monitor(tmp_path, monkeypatch, **kwargs):
+    log = tmp_path / "pacman.log"
+    log.write_text("", encoding="utf-8")
+    events = []
+    monkeypatch.setattr("security.supply_chain_monitor.log_security_event", lambda **kw: events.append(kw))
+    monitor = PacmanLogMonitor(str(log), str(tmp_path / "state" / "cursor.json"), poll_interval=1, **kwargs)
+    assert monitor.poll_once() == 0
+    return log, monitor, events
+
+
+def test_full_system_upgrade_is_recorded(tmp_path, monkeypatch):
+    # The owner's largest real transaction had 476 package actions. The cap was
+    # 256 and a transaction over it was dropped whole.
+    log, monitor, events = _started_monitor(tmp_path, monkeypatch)
+    with log.open("a", encoding="utf-8") as f:
+        f.write(_line("2026-11-01T10:00:00+0000", "transaction started"))
+        for i in range(476):
+            f.write(_line("2026-11-01T10:00:01+0000", f"upgraded pkg{i} (1.0-1 -> 1.0-2)"))
+        f.write(_line("2026-11-01T10:05:00+0000", "transaction completed"))
+
+    assert monitor.poll_once() == 476
+    assert len([e for e in events if e["event_type"] == "pacman_package_upgraded"]) == 476
+
+
+def test_transaction_over_the_cap_leaves_a_ledger_entry(tmp_path, monkeypatch):
+    monkeypatch.setattr("security.supply_chain_monitor.MAX_PENDING_PACKAGES", 3)
+    log, monitor, events = _started_monitor(tmp_path, monkeypatch)
+    with log.open("a", encoding="utf-8") as f:
+        f.write(_line("2026-11-01T10:00:00+0000", "transaction started"))
+        for i in range(5):
+            f.write(_line("2026-11-01T10:00:01+0000", f"installed pkg{i} (1.0-1)"))
+        f.write(_line("2026-11-01T10:05:00+0000", "transaction completed"))
+
+    assert monitor.poll_once() == 0
+    assert [e["event_type"] for e in events if "too_large" in e["event_type"]] == [
+        "pacman_monitor_transaction_too_large"]
+
+
+def test_line_longer_than_one_read_does_not_stop_the_monitor(tmp_path, monkeypatch):
+    log, monitor, events = _started_monitor(tmp_path, monkeypatch, max_bytes_per_poll=4096)
+    with log.open("a", encoding="utf-8") as f:
+        f.write("x" * 5000 + "\n")
+        f.write(_line("2026-11-01T10:00:00+0000", "transaction started"))
+        f.write(_line("2026-11-01T10:00:01+0000", "installed after-junk (1.0-1)"))
+        f.write(_line("2026-11-01T10:00:02+0000", "transaction completed"))
+
+    assert sum(monitor.poll_once() for _ in range(4)) == 1
+    assert [e["actor"] for e in events if e["event_type"] == "pacman_package_installed"] == ["after-junk (1.0-1)"]

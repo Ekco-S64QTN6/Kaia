@@ -12,6 +12,7 @@ separate: ``kaia_dashboard.py`` (curses), started by scripts/activate_kaia_env.s
 
 import argparse
 import os
+import secrets
 import signal
 import socket
 import subprocess
@@ -32,8 +33,11 @@ def free_loopback_port() -> int:
         return s.getsockname()[1]
 
 
-def bridge_env() -> dict:
+def bridge_env(session_key: str = "") -> dict:
     env = dict(os.environ)
+    if session_key:
+        # Console commands need this key; only the bridge and the window get it.
+        env[app_window.SESSION_KEY_ENV] = session_key
     env["PYTHONPATH"] = f"{ROOT}:{os.path.join(ROOT, 'core')}"
     # Read the deployed gate's published state (group kaiacord) when it is there.
     if "KAIA_STATE_DIR" not in env and os.access(LIVE_STATE_DIR, os.R_OK | os.X_OK):
@@ -82,16 +86,18 @@ def main(argv=None) -> int:
 
     port = free_loopback_port()
     url = f"http://127.0.0.1:{port}"
+    session_key = secrets.token_urlsafe(32)
     python = os.path.join(ROOT, ".venv", "bin", "python")
     bridge = subprocess.Popen([python if os.path.exists(python) else sys.executable,
                                os.path.join(ROOT, "core", "web_bridge.py"), "--port", str(port)],
-                              cwd=ROOT, env=bridge_env(), stdin=subprocess.DEVNULL,
+                              cwd=ROOT, env=bridge_env(session_key), stdin=subprocess.DEVNULL,
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         if not wait_healthy(url):
             print("the HUD bridge did not start; run core/web_bridge.py by hand to see why", file=sys.stderr)
             return 1
-        window = app_window.launch(url + (f"/?face={args.face}" if args.face else "/"))
+        window = app_window.launch(url + (f"/?face={args.face}" if args.face else "/"),
+                                   session_key=session_key)
         if window is None:
             return 2
         signal.signal(signal.SIGTERM, lambda *a: window.terminate())

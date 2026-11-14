@@ -348,13 +348,22 @@ def handle_command(state: AppState, content: str) -> str:
 
     # 5. Display execution result
     status = response_dict.get("status")
-    if status == "success" or response_dict.get("stdout") or response_dict.get("stderr"):
-        stdout = response_dict.get("stdout", "")
-        stderr = response_dict.get("stderr", "")
+    stdout = response_dict.get("stdout", "")
+    stderr = response_dict.get("stderr", "")
+    if status == "success":
         response = f"Action executed successfully.\nStdout: {stdout}"
         print(f"{config.COLOR_GREEN}Action completed.{config.COLOR_RESET}")
         if stdout: print(f"Stdout:\n{stdout}")
         if stderr: print(f"{config.COLOR_YELLOW}Stderr:\n{stderr}{config.COLOR_RESET}")
+    elif status == "error":
+        # Approved by the gate but the executor failed. This used to print
+        # "Action executed successfully" whenever there was any output, so a
+        # refused block or a failed restart read as done (and the model was
+        # told so in the conversation history).
+        detail = stderr or response_dict.get("message") or stdout or "no detail"
+        response = f"Action FAILED in the executor: {detail}"
+        print(f"{config.COLOR_RED}{response}{config.COLOR_RESET}")
+        if stdout: print(f"Stdout:\n{stdout}")
     else:
         msg = response_dict.get("message", "Unknown denial reason")
         response = f"Action denied by Policy Gate: {msg}"

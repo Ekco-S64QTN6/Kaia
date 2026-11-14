@@ -188,7 +188,8 @@ class KaiaCLI:
             info['physical_cores'] = psutil.cpu_count(logical=False)
             info['logical_cores'] = psutil.cpu_count(logical=True)
             info['usage'] = psutil.cpu_percent(interval=1)
-            info['frequency'] = psutil.cpu_freq().current
+            freq = psutil.cpu_freq()   # None where the kernel exposes no cpufreq (VMs)
+            info['frequency'] = freq.current if freq else 'N/A'
             if platform.system() == "Linux":
                 with open("/proc/cpuinfo") as f:
                     for line in f:

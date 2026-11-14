@@ -107,13 +107,27 @@ logger -t kaia-lockdown "EMERGENCY LOCKDOWN ACTIVATED"
 # separately restricted to root-only mode; lockdown must not change the whole
 # state directory to 0700 and break group-readable operator tools.
 umask 077
-if [ -n "$SNAPSHOT" ]; then
+
+# A lockdown already in force has replaced the whole ruleset with the drop-all
+# table. Snapshotting again would overwrite the restore point with the lockdown
+# itself: on 2026-10-30 nine lockdowns in a row left pre-lockdown.nft holding
+# only `table inet kaia_lockdown`, so `kaia-unlock.sh --from-snapshot` (and its
+# fallback) would have "restored" the lockdown. Keep the first snapshot.
+ALREADY_LOCKED=0
+if nft list table inet kaia_lockdown >/dev/null 2>&1; then
+    ALREADY_LOCKED=1
+    logger -t kaia-lockdown "Lockdown already in force; keeping the existing pre-lockdown snapshot"
+fi
+
+if [ -n "$SNAPSHOT" ] && [ "$ALREADY_LOCKED" -eq 0 ]; then
     snapshot_tmp="$(mktemp "$STATE_DIR/.pre-lockdown.XXXXXX" 2>/dev/null || true)"
 else
     snapshot_tmp=""
 fi
 
-if [ -n "$snapshot_tmp" ] && nft list ruleset > "$snapshot_tmp" 2>/dev/null && [ -s "$snapshot_tmp" ]; then
+if [ "$ALREADY_LOCKED" -eq 1 ]; then
+    :
+elif [ -n "$snapshot_tmp" ] && nft list ruleset > "$snapshot_tmp" 2>/dev/null && [ -s "$snapshot_tmp" ]; then
     chmod 600 "$snapshot_tmp" 2>/dev/null || true
 
     # Keep a uniquely named forensic copy; an existing destination is never followed.

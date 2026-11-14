@@ -17,10 +17,13 @@ tests=(
   tests/test_kaia_cli.py
   tests/test_lockdown_failure_reporting.py
   tests/test_lockdown_script_guards.py
+  tests/test_lockdown_snapshot_not_overwritten.py
   tests/test_mitigation_idempotent.py
   tests/test_network_discovery_resource_bounds.py
   tests/test_network_discovery_asset_db_bounds.py
   tests/test_network_discovery_netbios.py
+  tests/test_network_discovery_reconnect.py
+  tests/test_honeypot_auto_block.py
   tests/test_negative_security.py
   tests/test_policy_gate_ipc.py
   tests/test_policy_gate_lockdown.py

@@ -3,6 +3,24 @@
  * Dispatches deterministic commands to /api/command with live ANSI/cyber formatting.
  */
 
+// Console commands are authorised by a per-start session key. The launcher
+// hands it over in the URL fragment (never sent to a server, never in a log);
+// it is kept for this tab only and removed from the address at once.
+const SESSION_KEY = (() => {
+  let key = '';
+  try {
+    const m = /(?:^#|&)session=([A-Za-z0-9_-]{32,128})(?:&|$)/.exec(location.hash);
+    if (m) {
+      key = m[1];
+      sessionStorage.setItem('kaia-session', key);
+      history.replaceState(null, '', location.pathname + location.search);
+    } else {
+      key = sessionStorage.getItem('kaia-session') || '';
+    }
+  } catch (e) { /* storage unavailable: commands will be refused, the HUD still reads */ }
+  return key;
+})();
+
 class SentinelTerminalConsole {
   constructor(inputSelector, outputSelector) {
     this.input = document.querySelector(inputSelector);
@@ -74,7 +92,7 @@ class SentinelTerminalConsole {
     try {
       const resp = await fetch('/api/command', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-Kaia-Session': SESSION_KEY },
         body: JSON.stringify({ command: cmdLine }),
       });
       const data = await resp.json();

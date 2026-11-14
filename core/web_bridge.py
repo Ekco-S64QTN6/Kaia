@@ -15,8 +15,10 @@ Zero-Trust Invariants:
    into Pydantic intents and validate capability tokens via Policy Gate Unix socket.
 """
 
+import hmac
 import os
 import re
+import secrets
 import sqlite3
 import sys
 import time
@@ -74,6 +76,24 @@ TELEMETRY_BROADCAST_INTERVAL_SEC = 0.20  # 5 updates per second
 WS_SEND_TIMEOUT_SEC = 2.0  # a client that cannot take a frame in this time is dropped
 MAX_POLICY_GATE_RESPONSE_BYTES = 4 * 1024 * 1024
 ALLOWED_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+MAX_WS_CLIENTS = 16  # the HUD is one window; this only bounds a local flood
+
+# /api/command mints capability tokens for whatever it is asked (block, restart,
+# lockdown). Host and Origin checks stop a web page, but not another local
+# process: any program of any user on this machine could POST to the loopback
+# port. Commands therefore need the per-start session key, which only the
+# launcher (through the environment) and the HUD page it opens ever hold.
+SESSION_KEY_ENV = "KAIA_HUD_SESSION_KEY"
+SESSION_HEADER = "X-Kaia-Session"
+SESSION_KEY_PATTERN = re.compile(r"[A-Za-z0-9_-]{32,128}")
+
+
+def resolve_session_key(environ=os.environ) -> str:
+    """The launcher's key when it is well formed, else a fresh random one."""
+    supplied = environ.get(SESSION_KEY_ENV, "")
+    if SESSION_KEY_PATTERN.fullmatch(supplied):
+        return supplied
+    return secrets.token_urlsafe(32)
 
 STATIC_DIR = os.path.join(CORE_DIR, "web", "static")
 
@@ -869,12 +889,26 @@ def dispatch_operator_command(cmd_line: str) -> Dict[str, Any]:
                 return {"success": False, "command": raw_cmd, "lines": output_lines}
 
         elif cmd == "check" and len(args) >= 2 and args[0] == "threat":
-            ip = args[1]
+            import ipaddress
+            try:
+                ip = ipaddress.ip_address(args[1]).compressed
+            except ValueError:
+                return {"success": False, "command": raw_cmd, "lines": ["Usage: check threat <ip>  (not an IP address)"]}
             from security import threat_intel
             rep = threat_intel.get_ip_reputation(ip)
             shodan = threat_intel.lookup_internetdb(ip)
             output_lines.append(f"Threat Intelligence Report for {ip}:")
-            output_lines.append(f"  • IP Reputation Score: {rep.get('score', 0)}/100 ({rep.get('threat_level', 'unknown')})")
+            # An address nobody has rated is not a clean one: the default record
+            # (score 100, "unrated") used to print as "100/100".
+            if rep.get("cached"):
+                output_lines.append(f"  • IP Reputation Score: {rep.get('score', 0)}/100 "
+                                    f"({', '.join(str(t) for t in rep.get('tags', [])) or 'no tags'})")
+            else:
+                output_lines.append("  • IP Reputation: not rated (no local reputation record)")
+            if shodan.get("source") in ("non-global", "invalid"):
+                output_lines.append("  • InternetDB: not queried (private or non-global address)")
+            elif not shodan.get("found"):
+                output_lines.append("  • InternetDB: no record")
             if shodan.get("ports"):
                 output_lines.append(f"  • Open Ports: {shodan.get('ports')}")
             if shodan.get("tags"):
@@ -933,6 +967,7 @@ class KaiaWebBridge:
         collector_mgr: Optional[CollectorManager] = None,
         telemetry_collector: Optional[TelemetryCollector] = None,
         service_collector: Optional[ServiceCollector] = None,
+        session_key: Optional[str] = None,
     ) -> None:
         # Enforce Zero-Trust Invariant 1: Loopback only
         if host not in ALLOWED_LOOPBACK_HOSTS:
@@ -943,6 +978,9 @@ class KaiaWebBridge:
 
         self.host = host
         self.port = port
+        self.session_key = session_key if session_key is not None else resolve_session_key()
+        if not SESSION_KEY_PATTERN.fullmatch(self.session_key):
+            raise ValueError("HUD session key must be 32-128 URL-safe characters")
         self.owns_collectors = False
 
         if collector_mgr is not None:
@@ -1146,6 +1184,16 @@ class KaiaWebBridge:
         if request_error:
             return web.json_response({"success": False, "error": request_error}, status=403)
 
+        # Before the body is parsed: an unauthenticated local process gets nothing.
+        supplied = request.headers.get(SESSION_HEADER, "")
+        if not hmac.compare_digest(supplied.encode("utf-8", "replace"), self.session_key.encode("utf-8")):
+            return web.json_response(
+                {"success": False, "error": "Missing or wrong HUD session key",
+                 "lines": ["[DENIED] This console is not authorised: open the HUD with ./kaia-hud, "
+                           "or use the URL the bridge printed at start."]},
+                status=403,
+            )
+
         try:
             body = await request.json()
         except Exception:
@@ -1171,6 +1219,8 @@ class KaiaWebBridge:
         request_error = self._local_request_error(request)
         if request_error:
             raise web.HTTPForbidden(text=request_error)
+        if len(self.ws_clients) >= MAX_WS_CLIENTS:
+            raise web.HTTPServiceUnavailable(text="Too many HUD clients")
         ws = web.WebSocketResponse(heartbeat=15.0)
         await ws.prepare(request)
         self.ws_clients.add(ws)
@@ -1315,7 +1365,8 @@ class KaiaWebBridge:
             loop.run_until_complete(self.start_server_async())
             print(f"\n=======================================================")
             print(f" KAIA CYBER-SENTINEL OPERATIONS CENTER ACTIVE")
-            print(f" HUD URL: http://{self.host}:{self.port}")
+            # The fragment never leaves the browser; the page needs it for commands.
+            print(f" HUD URL: http://{self.host}:{self.port}/#session={self.session_key}")
             print(f" Zero-Trust Isolation: Loopback {self.host} Enforced")
             print(f" Press Ctrl+C to terminate Sentinel Operations")
             print(f"=======================================================\n")

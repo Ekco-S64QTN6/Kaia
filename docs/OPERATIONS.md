@@ -85,7 +85,7 @@ set-user/group-ID file, PAM modules, the dynamic loader, libc, libpam, NSS, the 
 binaries and the interpreter. It also lists set-user/group-ID files under `/usr` that no
 package owns. Findings are recorded once each, as `package_file_altered` or
 `privileged_file_unowned` (CRITICAL) or `package_file_unverifiable`, and never trigger a
-response. Runs wait while pacman holds `db.lck`. A mode or owner set by a package's own
+response. Runs wait while pacman holds `db.lck`. A lock still there after 30 minutes (a killed pacman leaves it behind) turns the control `degraded`: remove the stale lock if no pacman is running. A mode or owner set by a package's own
 `/usr/lib/tmpfiles.d` rule is accepted; one from `/etc/tmpfiles.d` is reported.
 
 On demand: `sudo /opt/kaia/scripts/kaia_package_attest.py` (exit 1 on any alteration). Daily, `kaia-package-verify.timer` runs the stronger check as an unprivileged dynamic user: each cached package archive's signature is verified with `gpgv` against pacman's keyring, and the critical files are compared with the signed archive's copies, so a file and its local record rewritten together are still caught (`differs_from_signed_package`, `record_differs_from_signed_package`). Packages whose archive is no longer cached are listed, not failed. A failure fails the unit, which the health check reports. The gate runs without `CAP_DAC_OVERRIDE`, so it cannot read execute-only files such as `/usr/lib/dbus-daemon-launch-helper` (mode 4110) and reports them `unverifiable`; the on-demand run as full root verifies them.
@@ -252,11 +252,17 @@ policy and executor checks still apply, but exposure of this key is an authoriza
 root compromise.
 
 The Web Bridge binds to loopback and checks the Host authority and, when supplied, the
-Origin. These are locality and browser-origin protections, not user authentication:
-the command route does not establish a user identity, and Origin is optional. Treat local
-processes that can reach the bridge as inside this command boundary. Do not expose the
-HUD port through a LAN bind, reverse proxy or tunnel without first adding and reviewing
-an explicit authentication boundary.
+Origin. These are locality and browser-origin protections, not user authentication, and
+Origin is optional. Since 2026-11-14 the command route (`/api/command`) also requires
+the per-start session key in an `X-Kaia-Session` header: `./kaia-hud` generates it and
+passes it to the bridge and to its window through the environment
+(`KAIA_HUD_SESSION_KEY`), and the window gives it to the page in the URL fragment.
+`kaia_dashboard.py --web` prints the URL including the key; open exactly that URL. A
+process that cannot read the launcher's environment (another user, a sandboxed tool)
+can no longer issue commands. A process running as the same user still can: it can read
+the signing secret too. The read routes (snapshot, WebSocket telemetry) are not keyed.
+Do not expose the HUD port through a LAN bind, reverse proxy or tunnel: the key is not a
+substitute for transport security.
 
 Tokens are bearer values. The verifier now requires both timestamps to be
 timezone-aware ISO-8601 values, rejects an `issued_at` later than the verifier clock,

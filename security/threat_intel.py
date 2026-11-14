@@ -31,7 +31,7 @@ _last_api_call_time = 0.0  # Monotonic start time for the most recent request
 _api_rate_limit_lock = threading.Lock()
 
 def initialize_intel():
-    """Initializes local threat intelligence directories and SQLite databases with mock values for testing."""
+    """Create the local threat-intelligence directories and (empty) SQLite stores."""
     os.makedirs(THREAT_INTEL_DIR, exist_ok=True)
     os.makedirs(os.path.dirname(INTERNETDB_PATH), exist_ok=True)
     os.makedirs(os.path.dirname(CVE_DB_PATH), exist_ok=True)
@@ -77,7 +77,7 @@ def initialize_intel():
     conn.commit()
     conn.close()
 
-    # 3. CVE DB mock database
+    # 3. Local CVE store (empty until a real import populates it)
     conn = sqlite3.connect(CVE_DB_PATH)
     cursor = conn.cursor()
     cursor.execute("""
@@ -88,14 +88,15 @@ def initialize_intel():
             compressed_cve_data TEXT
         )
     """)
-    # Insert some mock values
-    cursor.executemany("""
-        INSERT OR IGNORE INTO vulns (cve_id, cvss, cvss_version, compressed_cve_data)
-        VALUES (?, ?, ?, ?)
-    """, [
-        ("CVE-2026-1234", 9.8, "3.1", "Critical remote code execution vulnerability in kernel process parser."),
-        ("CVE-2026-5555", 7.5, "3.1", "High severity denial of service via malformed packet stream.")
-    ])
+    # No seed rows: this table once shipped two invented CVEs ("CVE-2026-1234",
+    # "CVE-2026-5555") that `check threat` could present as real findings. Any
+    # left by an older version are removed; real data comes from a CVE import.
+    cursor.execute(
+        "DELETE FROM vulns WHERE cve_id IN ('CVE-2026-1234', 'CVE-2026-5555') "
+        "AND compressed_cve_data IN (?, ?)",
+        ("Critical remote code execution vulnerability in kernel process parser.",
+         "High severity denial of service via malformed packet stream."),
+    )
     conn.commit()
     conn.close()
 

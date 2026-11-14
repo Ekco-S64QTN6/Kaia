@@ -256,3 +256,32 @@ Handoffs between autonomous maintenance runs. Append a section per run; never re
 - After 2026-11-16 (learning ends): review the first baseline alerts for noise and tune.
 
 ### Baseline: suite green (695) · CI green · open issues: none
+
+## Run 2026-11-14: full code review
+
+**HEAD at start:** bdad393 · **HEAD at end:** branch `review/full-review-2026-11-14`, pushed for the owner's review (not merged, not deployed)
+
+### Fixed (all with regression tests; none deployed)
+- Honeypot auto-block never reached the executor (request lacked `justification`; reply never read).
+- Passive discovery ended on one `ENETDOWN` at boot; dead on the host since 2026-11-10.
+- Repeat lockdown overwrote `pre-lockdown.nft` with the lockdown ruleset; unlock would restore it.
+- HUD `/api/command` open to any local process; now needs a per-start session key.
+- YARA validation wrote to the gate's private `/tmp`, invisible to the validation unit.
+- Rate-capped first-seen executables were learned unreported; full baseline stayed `active`.
+- Second pass (monitors, installer, CLI, HUD JavaScript): pacman transactions over 256 package actions were dropped whole (11 of 432 on the host), a stale `db.lck` stopped package attestation silently, an over-long pacman log line stalled the monitor, `status` failed without a CPU frequency.
+- `kaia_restore_blocks.py` exit 0 on import failure; CLI "success" on executor failure; invented CVE seed rows; 8,640 poll lines a day in the journal; four tests reading the host's kernel tree.
+
+### Host observations (read-only)
+- `discovery: failed` since 2026-11-10 16:13 ("Network is down"); `ebpf: degraded`, kernel 6.18.62 installed, 6.18.60 running: **reboot before the next deploy**, or the gate restarts with no probes. Rebooted later that day into 6.18.63-2: `ebpf` and `discovery` both `active` on the old deployed code (the network was up before the gate this boot).
+- `/var/lib/kaia/pre-lockdown.nft` is the lockdown table (256 bytes). The real pre-lockdown firewall is `pre-lockdown-20261030-225528-364775073.nft` (1109 bytes).
+- Baselines finish learning about 2026-11-16.
+
+### Not verified
+- (Verified after the reboot, same day.) The session key in real WebKitGTK 4.1: an offscreen view of the HUD loaded with the fragment ran `help` from the page's own console (16 lines back, fragment stripped from the address, key in sessionStorage); a view loaded without it got `[DENIED] This console is not authorised`. The launcher's own window was not driven, only the same `load_uri` construction.
+- YARA validation under the deployed unit; the first live auto-block.
+
+### Baseline for next run
+- `scripts/run_ci_tests.sh`: green on the branch (count in the PR).
+
+### Recommended first action next run
+- If the owner merged and deployed: ROADMAP "First" steps 5 to 7. Then the first two rows of "Found by the 2026-11-14 review": alerts that reach the owner, and response drills.

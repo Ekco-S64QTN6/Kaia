@@ -113,7 +113,7 @@ async def test_web_bridge_http_and_security_headers():
     bridge = KaiaWebBridge(host="127.0.0.1", port=8765)
     app = bridge.create_app()
 
-    client = TestClient(TestServer(app))
+    client = TestClient(TestServer(app), headers={"X-Kaia-Session": bridge.session_key})
     await client.start_server()
 
     try:
@@ -174,7 +174,7 @@ async def test_web_bridge_http_and_security_headers():
 async def test_websocket_rejects_cross_origin_browser_connection():
     """A foreign site must not be able to read local host telemetry over WS."""
     bridge = KaiaWebBridge(host="127.0.0.1", port=8765)
-    client = TestClient(TestServer(bridge.create_app()))
+    client = TestClient(TestServer(bridge.create_app()), headers={"X-Kaia-Session": bridge.session_key})
     await client.start_server()
     try:
         with pytest.raises(WSServerHandshakeError):
@@ -283,7 +283,7 @@ class TestHonestTelemetry:
 async def test_static_ui_has_no_inline_css_or_javascript():
     """The CSP must protect both the primary dashboard and the avatar preview."""
     bridge = KaiaWebBridge(host="127.0.0.1", port=8765)
-    client = TestClient(TestServer(bridge.create_app()))
+    client = TestClient(TestServer(bridge.create_app()), headers={"X-Kaia-Session": bridge.session_key})
     await client.start_server()
     try:
         for path in ("/", "/static/kaia-preview.html"):
@@ -388,7 +388,7 @@ def test_dashboard_dynamic_status_colours_use_css_classes_under_strict_csp():
 @pytest.mark.asyncio
 async def test_csp_allows_only_supported_loopback_websocket_hosts():
     bridge = KaiaWebBridge(host="127.0.0.1", port=8765)
-    client = TestClient(TestServer(bridge.create_app()))
+    client = TestClient(TestServer(bridge.create_app()), headers={"X-Kaia-Session": bridge.session_key})
     await client.start_server()
     try:
         resp = await client.get("/")

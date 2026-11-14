@@ -148,6 +148,14 @@ elif [ -e "$SNAPSHOT" ]; then
         exit 1
     fi
     SNAPSHOT_READY=1
+    # A snapshot taken while a lockdown was already in force *is* the lockdown.
+    # It passes nftables validation, and restoring it would drop all traffic
+    # again while reporting "Firewall restored".
+    if grep -Eq '^[[:space:]]*table[[:space:]]+inet[[:space:]]+kaia_lockdown([[:space:]]|$)' "$SNAPSHOT"; then
+        echo -e "  ${COLOR_YELLOW}Ignoring $SNAPSHOT: it contains the lockdown table itself, not the firewall before it.${COLOR_RESET}"
+        echo -e "  ${COLOR_YELLOW}Older copies: ls ${STATE_DIR}/pre-lockdown-*.nft${COLOR_RESET}"
+        SNAPSHOT_READY=0
+    fi
 fi
 
 if [ "$FROM_SNAPSHOT" -eq 1 ] && [ "$SNAPSHOT_READY" -ne 1 ]; then

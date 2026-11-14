@@ -9,7 +9,7 @@ from core.web_bridge import KaiaWebBridge
 async def test_command_endpoint_rejects_non_object_json(monkeypatch):
     """Malformed JSON shapes must fail closed rather than raising in the handler."""
     bridge = KaiaWebBridge(host="127.0.0.1", port=8765)
-    client = TestClient(TestServer(bridge.create_app()))
+    client = TestClient(TestServer(bridge.create_app()), headers={"X-Kaia-Session": bridge.session_key})
     await client.start_server()
     try:
         resp = await client.post("/api/command", json=["status"])
@@ -23,7 +23,7 @@ async def test_command_endpoint_rejects_non_object_json(monkeypatch):
 async def test_command_endpoint_rejects_untrusted_host(monkeypatch):
     """A loopback-bound service must reject Host headers used for DNS rebinding."""
     bridge = KaiaWebBridge(host="127.0.0.1", port=8765)
-    client = TestClient(TestServer(bridge.create_app()))
+    client = TestClient(TestServer(bridge.create_app()), headers={"X-Kaia-Session": bridge.session_key})
     await client.start_server()
     try:
         resp = await client.post(
@@ -40,7 +40,7 @@ async def test_command_endpoint_rejects_untrusted_host(monkeypatch):
 async def test_command_endpoint_rejects_cross_origin(monkeypatch):
     """Browser-originated commands must be restricted to the local dashboard origin."""
     bridge = KaiaWebBridge(host="127.0.0.1", port=8765)
-    client = TestClient(TestServer(bridge.create_app()))
+    client = TestClient(TestServer(bridge.create_app()), headers={"X-Kaia-Session": bridge.session_key})
     await client.start_server()
     try:
         resp = await client.post(
@@ -57,7 +57,7 @@ async def test_command_endpoint_rejects_cross_origin(monkeypatch):
 async def test_command_endpoint_rejects_oversized_command(monkeypatch):
     """Reject oversized input before it reaches the command dispatcher."""
     bridge = KaiaWebBridge(host="127.0.0.1", port=8765)
-    client = TestClient(TestServer(bridge.create_app()))
+    client = TestClient(TestServer(bridge.create_app()), headers={"X-Kaia-Session": bridge.session_key})
     await client.start_server()
     try:
         resp = await client.post("/api/command", json={"command": "x" * 2049})
@@ -70,7 +70,7 @@ async def test_command_endpoint_rejects_oversized_command(monkeypatch):
 async def test_command_endpoint_rejects_origin_with_implicit_default_port(monkeypatch):
     """An origin with no port means 80/443, not the HUD's non-default port."""
     bridge = KaiaWebBridge(host="127.0.0.1", port=8765)
-    client = TestClient(TestServer(bridge.create_app()))
+    client = TestClient(TestServer(bridge.create_app()), headers={"X-Kaia-Session": bridge.session_key})
     await client.start_server()
     try:
         local_url = client.make_url("/")
@@ -98,7 +98,7 @@ async def test_command_endpoint_accepts_exact_same_origin(monkeypatch):
         lambda command: {"success": True, "command": command, "lines": []},
     )
     bridge = KaiaWebBridge(host="127.0.0.1", port=8765)
-    client = TestClient(TestServer(bridge.create_app()))
+    client = TestClient(TestServer(bridge.create_app()), headers={"X-Kaia-Session": bridge.session_key})
     await client.start_server()
     try:
         local_url = client.make_url("/")
@@ -118,7 +118,7 @@ async def test_command_endpoint_accepts_exact_same_origin(monkeypatch):
 async def test_command_endpoint_rejects_host_authority_with_path_query_or_fragment():
     """Host is an authority, not a URL; suffix components must not be accepted."""
     bridge = KaiaWebBridge(host="127.0.0.1", port=8765)
-    client = TestClient(TestServer(bridge.create_app()))
+    client = TestClient(TestServer(bridge.create_app()), headers={"X-Kaia-Session": bridge.session_key})
     await client.start_server()
     try:
         local_url = client.make_url("/")
@@ -139,7 +139,7 @@ async def test_command_endpoint_rejects_host_authority_with_path_query_or_fragme
 async def test_command_endpoint_rejects_host_port_not_matching_listener():
     """A matching loopback name is insufficient if Host names another port."""
     bridge = KaiaWebBridge(host="127.0.0.1", port=8765)
-    client = TestClient(TestServer(bridge.create_app()))
+    client = TestClient(TestServer(bridge.create_app()), headers={"X-Kaia-Session": bridge.session_key})
     await client.start_server()
     try:
         local_url = client.make_url("/")
@@ -158,7 +158,7 @@ async def test_command_endpoint_rejects_host_port_not_matching_listener():
 @pytest.mark.asyncio
 async def test_command_endpoint_rejects_origin_scheme_mismatch():
     bridge = KaiaWebBridge(host="127.0.0.1", port=8765)
-    client = TestClient(TestServer(bridge.create_app()))
+    client = TestClient(TestServer(bridge.create_app()), headers={"X-Kaia-Session": bridge.session_key})
     await client.start_server()
     try:
         local_url = client.make_url("/")
@@ -179,7 +179,7 @@ async def test_command_endpoint_rejects_origin_scheme_mismatch():
 async def test_command_endpoint_checks_origin_before_parsing_malformed_body():
     """Reject cross-origin requests before their body is parsed."""
     bridge = KaiaWebBridge(host="127.0.0.1", port=8765)
-    client = TestClient(TestServer(bridge.create_app()))
+    client = TestClient(TestServer(bridge.create_app()), headers={"X-Kaia-Session": bridge.session_key})
     await client.start_server()
     try:
         resp = await client.post(
@@ -197,7 +197,7 @@ async def test_command_endpoint_checks_origin_before_parsing_malformed_body():
 async def test_read_only_routes_reject_untrusted_host_for_dns_rebinding(path):
     """Telemetry endpoints must not trust arbitrary Host values just because they are GETs."""
     bridge = KaiaWebBridge(host="127.0.0.1", port=8765)
-    client = TestClient(TestServer(bridge.create_app()))
+    client = TestClient(TestServer(bridge.create_app()), headers={"X-Kaia-Session": bridge.session_key})
     await client.start_server()
     try:
         resp = await client.get(path, headers={"Host": "attacker.example"})
@@ -212,7 +212,7 @@ async def test_read_only_routes_reject_untrusted_host_for_dns_rebinding(path):
 async def test_read_only_routes_reject_cross_origin_requests(path):
     """All HTTP routes should use the same browser-origin guard."""
     bridge = KaiaWebBridge(host="127.0.0.1", port=8765)
-    client = TestClient(TestServer(bridge.create_app()))
+    client = TestClient(TestServer(bridge.create_app()), headers={"X-Kaia-Session": bridge.session_key})
     await client.start_server()
     try:
         resp = await client.get(path, headers={"Origin": "https://attacker.example"})
@@ -319,3 +319,46 @@ def test_policy_gate_client_rejects_non_object_response_and_closes_socket(monkey
     assert approved is False
     assert "must be a JSON object" in response["message"]
     assert fake_socket.closed is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("headers", [{}, {"X-Kaia-Session": "A" * 43}, {"X-Kaia-Session": ""}])
+async def test_command_endpoint_requires_the_session_key(monkeypatch, headers):
+    """Host and Origin checks stop a web page, not another local process: any
+    program on the machine could POST `lockdown` to the loopback port and the
+    bridge would mint the token for it. Commands need the per-start key."""
+    import core.web_bridge as wb
+    called = []
+    monkeypatch.setattr(wb, "dispatch_operator_command", lambda cmd: called.append(cmd) or {"success": True})
+    bridge = KaiaWebBridge(host="127.0.0.1", port=8765)
+    client = TestClient(TestServer(bridge.create_app()))
+    await client.start_server()
+    try:
+        resp = await client.post("/api/command", json={"command": "lockdown"}, headers=headers)
+        assert resp.status == 403
+        assert "session" in (await resp.json())["error"].lower()
+        assert called == []
+        ok = await client.post("/api/command", json={"command": "help"},
+                               headers={"X-Kaia-Session": bridge.session_key})
+        assert ok.status == 200 and called == ["help"]
+    finally:
+        await client.close()
+
+
+def test_session_key_comes_from_the_launcher_or_is_random():
+    import core.web_bridge as wb
+    assert wb.resolve_session_key({wb.SESSION_KEY_ENV: "k" * 40}) == "k" * 40
+    a, b = wb.resolve_session_key({}), wb.resolve_session_key({wb.SESSION_KEY_ENV: "short"})
+    assert a != b and wb.SESSION_KEY_PATTERN.fullmatch(a) and wb.SESSION_KEY_PATTERN.fullmatch(b)
+
+
+def test_session_key_never_travels_in_argv():
+    """/proc/<pid>/cmdline is world-readable; the key goes through the environment."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    window = (root / "core/web/app_window.py").read_text()
+    assert "env[SESSION_KEY_ENV] = session_key" in window
+    assert '"--session' not in window and '"--key' not in window
+    hud = (root / "kaia_hud.py").read_text()
+    assert "bridge_env(session_key)" in hud and "session_key=session_key" in hud
+    assert "'X-Kaia-Session': SESSION_KEY" in (root / "core/web/static/js/terminal.js").read_text()

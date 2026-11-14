@@ -85,6 +85,7 @@ class ExecBaseline:
         self._window = (0.0, 0)
         self.suppressed = 0
         self.reported_today = 0
+        self.full = False
         self._load()
 
     # --- persistence ---
@@ -134,10 +135,11 @@ class ExecBaseline:
             if key in self.known:
                 return None
             if len(self.known) >= MAX_KNOWN:
+                self.full = True
                 return None
-            self.known.add(key)
-            self._dirty = True
             if self._clock() - self.started_at < self.learning_seconds:
+                self.known.add(key)
+                self._dirty = True
                 return None
             event_type = self.judge(path)
             now = self._clock()
@@ -145,9 +147,14 @@ class ExecBaseline:
             if now - start >= 60:
                 start, count = now, 0
             if count >= MAX_REPORTS_PER_MINUTE:
+                # Not learned: a suppressed first-seen must still be reported the
+                # next time it appears. Learning it here let a burst of 30 novel
+                # paths a minute hide whatever ran after them, for good.
                 self.suppressed += 1
                 self._window = (start, count)
                 return None
+            self.known.add(key)
+            self._dirty = True
             self._window = (start, count + 1)
             self.reported_today += 1
         if event_type in (EVENT_UNUSUAL, EVENT_NET_SHELL):
@@ -165,6 +172,10 @@ class ExecBaseline:
     NOUN = "executables"
 
     def health(self) -> tuple:
+        if self.full or len(self.known) >= MAX_KNOWN:
+            # Nothing new can be learned or reported: say so instead of "active".
+            return "degraded", (f"baseline full ({MAX_KNOWN} {self.NOUN}): first-seen detection is off; "
+                                "archive it with scripts/kaia_reset_history.py")
         if self.learning:
             left = self.learning_seconds - (self._clock() - self.started_at)
             return "active", f"learning: {len(self.known)} {self.NOUN}, {int(left // 3600)} h left"
