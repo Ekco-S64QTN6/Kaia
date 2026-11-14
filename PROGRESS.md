@@ -272,12 +272,12 @@ Handoffs between autonomous maintenance runs. Append a section per run; never re
 - `kaia_restore_blocks.py` exit 0 on import failure; CLI "success" on executor failure; invented CVE seed rows; 8,640 poll lines a day in the journal; four tests reading the host's kernel tree.
 
 ### Host observations (read-only)
-- `discovery: failed` since 2026-11-10 16:13 ("Network is down"); `ebpf: degraded`, kernel 6.18.62 installed, 6.18.60 running: **reboot before the next deploy**, or the gate restarts with no probes.
+- `discovery: failed` since 2026-11-10 16:13 ("Network is down"); `ebpf: degraded`, kernel 6.18.62 installed, 6.18.60 running: **reboot before the next deploy**, or the gate restarts with no probes. Rebooted later that day into 6.18.63-2: `ebpf` and `discovery` both `active` on the old deployed code (the network was up before the gate this boot).
 - `/var/lib/kaia/pre-lockdown.nft` is the lockdown table (256 bytes). The real pre-lockdown firewall is `pre-lockdown-20261030-225528-364775073.nft` (1109 bytes).
 - Baselines finish learning about 2026-11-16.
 
 ### Not verified
-- The session key in the real WebKitGTK window (checked with curl against a live bridge: 403 without, 200 with; the fragment hand-off was not exercised in a window).
+- (Verified after the reboot, same day.) The session key in real WebKitGTK 4.1: an offscreen view of the HUD loaded with the fragment ran `help` from the page's own console (16 lines back, fragment stripped from the address, key in sessionStorage); a view loaded without it got `[DENIED] This console is not authorised`. The launcher's own window was not driven, only the same `load_uri` construction.
 - YARA validation under the deployed unit; the first live auto-block.
 
 ### Baseline for next run
