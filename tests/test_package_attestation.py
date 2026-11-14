@@ -263,3 +263,18 @@ def test_gate_runs_the_monitor_and_it_reports_health():
     assert "PackageAttestationMonitor()" in gate and "package_attestation.stop()" in gate
     assert "package_attestation" in control_health.GATE_CONTROLS
     assert "import config" not in Path(pa.__file__).read_text()
+
+
+def test_stale_pacman_lock_is_reported_not_waited_on_silently(health):
+    # pacman killed mid-transaction leaves db.lck behind. The monitor postponed
+    # every run while its heartbeat kept the control "active".
+    now = [1000.0]
+    monitor = pa.PackageAttestationMonitor(clock=lambda: now[0], log_event=lambda **kw: None)
+    since = monitor._postponed(None)
+    now[0] += 120
+    assert monitor._postponed(since) == since
+    assert "package_attestation" not in health          # a real transaction: say nothing
+    now[0] += pa.STALE_LOCK_SECONDS
+    monitor._postponed(since)
+    state, detail = health["package_attestation"][:2]
+    assert state == "degraded" and "db.lck" in detail and "postponed for 32 min" in detail

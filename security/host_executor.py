@@ -760,7 +760,12 @@ class HostExecutor:
                 return False, "", (
                     f"HostExecutor executable is not in the registered allowlist; rejected: {cmd[0]!r}"
                 )
-            logger.info(f"HostExecutor running: {' '.join(cmd)}")
+            # The gate reads the ruleset itself every 10 s to publish it: 8,640
+            # identical INFO lines a day in the journal and in kaia.log, which
+            # rotated real events out. Requested reads are in the audit ledger.
+            routine_read = cmd[-3:] == [SYSTEM_BINARIES["nft"], "list", "ruleset"]
+            logger.log(logging.DEBUG if routine_read else logging.INFO,
+                       "HostExecutor running: %s", " ".join(cmd))
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,

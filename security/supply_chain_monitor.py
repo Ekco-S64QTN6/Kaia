@@ -26,7 +26,10 @@ logger = logging.getLogger(__name__)
 DEFAULT_LOG_PATH = "/var/log/pacman.log"
 MAX_BYTES_PER_POLL = 1024 * 1024
 MAX_LINE_BYTES = 16 * 1024
-MAX_PENDING_PACKAGES = 256
+# Above any real transaction: a full system upgrade on the owner's host has
+# reached 476 package actions, and 11 of 432 transactions exceeded the old cap
+# of 256, each of which was dropped from the ledger whole (found 2026-11-14).
+MAX_PENDING_PACKAGES = 4096
 
 _ALPM_PREFIX = re.compile(r"^\[([^\]]+)\]\s+\[ALPM\]\s+(.*)$")
 _PACKAGE_ACTION = re.compile(
@@ -210,6 +213,13 @@ class PacmanLogMonitor:
                 "Pacman transaction exceeds %d package actions; discarding pending audit batch",
                 MAX_PENDING_PACKAGES,
             )
+            # The gap itself goes in the ledger: a dropped batch must not be silent.
+            self._emit(
+                "pacman_monitor_transaction_too_large",
+                f"more than {MAX_PENDING_PACKAGES} package actions; none recorded",
+                "",
+                f'pacman:{self._cursor["transaction_start"]}',
+            )
             self._cursor["transaction_start"] = None
             self._cursor["pending"] = []
             return 0
@@ -308,7 +318,13 @@ class PacmanLogMonitor:
                     return 0
                 final_newline = data.rfind(b"\n")
                 if final_newline < 0:
-                    # Keep the offset stable until a complete log record arrives.
+                    if len(data) >= self.max_bytes_per_poll:
+                        # A "line" longer than a whole read can never complete;
+                        # waiting for its newline would stop the monitor for good.
+                        logger.warning("Skipping %d bytes of pacman log with no line end", len(data))
+                        self._cursor["offset"] = fd_offset + len(data)
+                        self._save_cursor()
+                    # Otherwise keep the offset until a complete log record arrives.
                     return 0
                 complete = data[:final_newline + 1]
                 lines = complete.splitlines(keepends=True)

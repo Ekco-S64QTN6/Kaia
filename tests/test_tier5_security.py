@@ -491,3 +491,33 @@ def test_benign_corpus_refuses_preexisting_symlink_sample(tmp_path):
         engine._setup_benign_corpus()
     assert external.read_text(encoding="utf-8") == "must remain untouched"
 
+
+
+def test_rule_validation_files_are_visible_to_the_host_namespace(tmp_path, monkeypatch):
+    """Under PrivateTmp=true the gate's /tmp does not exist for the transient
+    validation unit (started by PID 1): files to bind into it must live in the
+    gate's runtime directory when the gate runs as root."""
+    import config
+    from security import rule_engine
+
+    runtime = tmp_path / "run"
+    runtime.mkdir(mode=0o755)
+    monkeypatch.setattr(config, "POLICY_GATE_SOCKET", str(runtime / "policy_gate.sock"))
+    real_lstat = os.lstat
+
+    class RootOwned:
+        def __init__(self, st):
+            self.st_mode, self.st_uid = st.st_mode, 0
+
+    monkeypatch.setattr(rule_engine.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(rule_engine.os, "lstat", lambda p: RootOwned(real_lstat(p)) if str(p) == str(runtime) else real_lstat(p))
+    assert rule_engine.validation_scratch_root() == str(runtime)
+
+    # World-writable, missing, or not root: never used.
+    runtime.chmod(0o777)
+    assert rule_engine.validation_scratch_root() == "/tmp"
+    runtime.chmod(0o755)
+    monkeypatch.setattr(rule_engine.os, "geteuid", lambda: 1000)
+    assert rule_engine.validation_scratch_root() == "/tmp"
+    monkeypatch.setattr(config, "POLICY_GATE_SOCKET", str(tmp_path / "absent" / "s.sock"))
+    assert rule_engine.validation_scratch_root() == "/tmp"

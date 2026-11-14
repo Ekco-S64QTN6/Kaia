@@ -95,3 +95,31 @@ def test_random_build_directories_collapse_so_builds_are_learned_once(tmp_path):
     b.observe("/tmp/pip-build-env-aaaa1111/overlay/bin/cmake")
     b.observe("/tmp/pip-build-env-bbbb2222/overlay/bin/cmake")
     assert len(events) == 1 and events[0]["event_type"] == bb.EVENT_UNUSUAL
+
+
+def test_a_rate_capped_first_seen_is_reported_later_not_learned_silently():
+    """A burst of novel paths must not hide what runs after it: a suppressed
+    path used to join the baseline unreported, for good."""
+    from security import behaviour_baseline as bb
+    now = [1_000_000.0]
+    events = []
+    b = bb.ExecBaseline(None, log_event=lambda **kw: events.append(kw["payload_hash"]),
+                        clock=lambda: now[0], learning_seconds=0)
+    for i in range(bb.MAX_REPORTS_PER_MINUTE):
+        assert b.observe(f"/usr/bin/filler{i}", "sh", 1) is not None
+    assert b.observe("/usr/bin/payload", "sh", 2) is None      # capped this minute
+    assert b.suppressed == 1
+    now[0] += 61
+    assert b.observe("/usr/bin/payload", "sh", 2) == bb.EVENT_FIRST_SEEN
+    assert "/usr/bin/payload" in events
+    assert b.observe("/usr/bin/payload", "sh", 2) is None      # reported once
+
+
+def test_a_full_baseline_is_degraded_not_active(monkeypatch):
+    from security import behaviour_baseline as bb
+    monkeypatch.setattr(bb, "MAX_KNOWN", 2)
+    b = bb.ExecBaseline(None, log_event=lambda **kw: None, learning_seconds=0)
+    for name in ("a", "b", "c"):
+        b.observe(f"/usr/bin/{name}", "sh", 1)
+    state, detail = b.health()
+    assert state == "degraded" and "full" in detail

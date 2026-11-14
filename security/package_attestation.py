@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 
 PACMAN_LOCAL_DB = "/var/lib/pacman/local"
 PACMAN_LOCK = "/var/lib/pacman/db.lck"
+STALE_LOCK_SECONDS = 30 * 60            # no real transaction holds the lock this long
 
 MAX_MTREE_BYTES = 64 * 1024 * 1024      # decompressed, per package
 MAX_MTREE_LINE = 64 * 1024
@@ -458,16 +459,39 @@ class PackageAttestationMonitor:
         control_health.report("package_attestation", state, detail, heartbeat_interval=60.0)
         return report
 
+    def _postponed(self, busy_since: Optional[float]) -> float:
+        """Note one postponed run; say so in control health once the lock looks stale.
+
+        pacman leaves db.lck behind when it is killed. Without this the monitor
+        waited on that file for ever while its heartbeat kept it "active".
+        """
+        from security import control_health
+        now = self._clock()
+        if busy_since is None:
+            return now
+        waited = now - busy_since
+        if waited >= STALE_LOCK_SECONDS:
+            control_health.report(
+                "package_attestation", "degraded",
+                f"postponed for {int(waited // 60)} min: {PACMAN_LOCK} exists "
+                "(a pacman transaction, or a stale lock left by a killed pacman; "
+                "no attestation runs until it is gone)",
+                heartbeat_interval=60.0)
+        return busy_since
+
     def _run(self) -> None:
         from security import control_health
         next_run = self._clock() + self.first_delay
+        busy_since = None
         while not self._stop.wait(min(60.0, max(0.0, next_run - self._clock()))):
             control_health.heartbeat("package_attestation")
             if self._clock() < next_run:
                 continue
             if pacman_busy(self.fs_root + PACMAN_LOCK):
                 next_run = self._clock() + 60
+                busy_since = self._postponed(busy_since)
                 continue
+            busy_since = None
             self.run_once()
             next_run = self._clock() + self.interval
 
