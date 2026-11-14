@@ -115,6 +115,37 @@ Committed together, after reviewing ChatGPT's PRs #85–#89.
   PR (#95) without ever running its new test file. `tests/test_ci_covers_all_tests.py`
   now fails on an unlisted file; legacy host-dependent scripts are excluded by name.
 
+## Fixes that must not be reverted (2026-11-14)
+
+From a full review against the live host. Tests named below guard each.
+
+- **The honeypot's auto-block request carries `justification` and its reply is read**
+  (`security/honeypot.py:_auto_block_request`, `_dispatch_block_ip`). Without the field
+  the gate refused every auto-block as a schema failure while the journal said
+  "dispatched successfully": the response path had never worked.
+  `tests/test_honeypot_auto_block.py` sends the request through the real gate handler.
+  → **A response path needs a test that reads the gate's answer, not one that checks a
+  request was sent.** Automatic blocking is therefore live from the first deploy after
+  this date, which makes the warning above real: never self-test a canary from an AI
+  agent session.
+- **Discovery reopens its capture socket** (`network_discovery.py:_run`). The gate
+  starts before Wi-Fi; one `ENETDOWN` ended the thread for four days. Do not turn the
+  retry back into a `break`. `tests/test_network_discovery_reconnect.py`.
+- **`kaia-lockdown.sh` does not snapshot while `inet kaia_lockdown` exists, and
+  `kaia-unlock.sh` ignores a snapshot containing that table.** Otherwise a second
+  lockdown replaces the restore point with the lockdown itself.
+  `tests/test_lockdown_snapshot_not_overwritten.py` runs the script's own block.
+- **`/api/command` requires `X-Kaia-Session`.** The key travels by environment and URL
+  fragment only: never argv (`/proc/<pid>/cmdline` is world-readable), never a query
+  string, never a file. Tests that post commands pass `bridge.session_key`.
+- **YARA validation files live in `/run/kaiacord`, not `/tmp`, when the gate is root**
+  (`rule_engine.validation_scratch_root`): the unit's `/tmp` is private and the
+  transient validation unit cannot see it.
+- **A rate-capped first-seen executable is not learned** (`behaviour_baseline.py`).
+  Learning it silently let a burst hide what ran next.
+- **`tests/conftest.py` pins `kernel_build_tree_present`.** Tests must not read
+  `/lib/modules` of the machine they run on.
+
 ## Reviewed and correct — do not "fix"
 
 - **Single-use capability tokens** (#86). Every production caller
