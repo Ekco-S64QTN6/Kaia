@@ -285,3 +285,9 @@ Handoffs between autonomous maintenance runs. Append a section per run; never re
 
 ### Recommended first action next run
 - If the owner merged and deployed: ROADMAP "First" steps 5 to 7. Then the first two rows of "Found by the 2026-11-14 review": alerts that reach the owner, and response drills.
+
+## Follow-up 2026-11-17: 2026-11-14 review PR merged
+
+- PR [#150](https://github.com/Ekco-S64QTN6/Kaia/pull/150) merged on 2026-11-14 at 17:22:49 UTC as `2f774599f6f82e63f6666a09043b79e880637fbe` (the current `main` head). The earlier 2026-11-14 section above is a point-in-time handoff from before that merge; it is no longer waiting for review or merge.
+- The post-merge `Security regression tests` run on `main` ([run 43620791899](https://github.com/Ekco-S64QTN6/Kaia/actions/runs/43620791899)) completed successfully.
+- This GitHub check does not establish that the changes are deployed to the live host. Keep the deployment and host-verification steps in `docs/ROADMAP.md` open until the deployed version and the listed checks are confirmed on the machine.
